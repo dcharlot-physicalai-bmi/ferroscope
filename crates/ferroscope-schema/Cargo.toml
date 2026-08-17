@@ -1,7 +1,11 @@
 [package]
 name = "ferroscope-schema"
 description = "The Ferroscope recording model: three-clock timestamps, entity paths, well-known JSON schemas any MCAP viewer can already render, and a recorder that seals each run with its own receipt."
-version.workspace = true
+# 0.1.1 adds Value::to_json / brief / path, which ferroscope-run needs in order to store and
+# query a run record. Additive, so every 0.1.0 dependant resolves to it unchanged. (This is the
+# third time an unanchored `version` replace has bitten in this repo: `version.workspace` is a
+# substring of `rust-version.workspace`.)
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
