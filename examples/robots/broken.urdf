@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<!-- A description with one of each defect `ferroscope urdf --check` looks for. It exists to be
+     refused, and CI asserts that it is. Every one of these is a real bug that has shipped in real
+     robot descriptions, and every one of them produces a policy that works in simulation and not
+     on hardware. -->
+<robot name="broken">
+  <!-- Sound: a visual, a collision, and a physically realisable inertia. -->
+  <link name="base">
+    <visual><geometry><box size="0.2 0.2 0.05"/></geometry></visual>
+    <collision><geometry><box size="0.2 0.2 0.05"/></geometry></collision>
+    <inertial><mass value="4"/>
+      <inertia ixx="0.0141" ixy="0" ixz="0" iyy="0.0141" iyz="0" izz="0.0267"/></inertial>
+  </link>
+
+  <!-- Defect: the renderer can draw it, the physics engine cannot touch it. -->
+  <link name="no_collision">
+    <visual><geometry><box size="0.1 0.1 0.2"/></geometry></visual>
+    <inertial><mass value="1"/>
+      <inertia ixx="0.0042" ixy="0" ixz="0" iyy="0.0042" iyz="0" izz="0.0017"/></inertial>
+  </link>
+
+  <!-- Defect: a movable link with no <inertial> at all. -->
+  <link name="no_inertial">
+    <visual><geometry><box size="0.1 0.1 0.2"/></geometry></visual>
+    <collision><geometry><box size="0.1 0.1 0.2"/></geometry></collision>
+  </link>
+
+  <!-- Defect: mass declared, inertia left at zero. Most engines accept this silently. -->
+  <link name="zero_inertia">
+    <visual><geometry><box size="0.1 0.1 0.2"/></geometry></visual>
+    <collision><geometry><box size="0.1 0.1 0.2"/></geometry></collision>
+    <inertial><mass value="2"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/></inertial>
+  </link>
+
+  <!-- Defect: I3 exceeds I1 + I2, which no mass distribution can produce. -->
+  <link name="impossible_inertia">
+    <visual><geometry><box size="0.1 0.1 0.2"/></geometry></visual>
+    <collision><geometry><box size="0.1 0.1 0.2"/></geometry></collision>
+    <inertial><mass value="1"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.5"/></inertial>
+  </link>
+
+  <!-- Defect: an off-diagonal so large the tensor is not positive definite. -->
+  <link name="indefinite_inertia">
+    <visual><geometry><box size="0.1 0.1 0.2"/></geometry></visual>
+    <collision><geometry><box size="0.1 0.1 0.2"/></geometry></collision>
+    <inertial><mass value="1"/>
+      <inertia ixx="0.004" ixy="0.05" ixz="0" iyy="0.004" iyz="0" izz="0.002"/></inertial>
+  </link>
+
+  <!-- Defect: a negative mass. -->
+  <link name="negative_mass">
+    <visual><geometry><sphere radius="0.05"/></geometry></visual>
+    <collision><geometry><sphere radius="0.05"/></geometry></collision>
+    <inertial><mass value="-1"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+  </link>
+
+  <joint name="j1" type="revolute"><parent link="base"/><child link="no_collision"/>
+    <origin xyz="0 0 0.05"/><axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+  <joint name="j2" type="revolute"><parent link="no_collision"/><child link="no_inertial"/>
+    <origin xyz="0 0 0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+  <joint name="j3" type="revolute"><parent link="no_inertial"/><child link="zero_inertia"/>
+    <origin xyz="0 0 0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+  <joint name="j4" type="revolute"><parent link="zero_inertia"/><child link="impossible_inertia"/>
+    <origin xyz="0 0 0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+  <joint name="j5" type="revolute"><parent link="impossible_inertia"/><child link="indefinite_inertia"/>
+    <origin xyz="0 0 0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+  <joint name="j6" type="revolute"><parent link="indefinite_inertia"/><child link="negative_mass"/>
+    <origin xyz="0 0 0.2"/><axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="5" velocity="1"/></joint>
+</robot>

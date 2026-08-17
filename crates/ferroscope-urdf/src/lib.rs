@@ -149,10 +149,75 @@ pub struct Visual {
     pub mesh: String,
 }
 
+/// A link's mass and inertia, as URDF writes them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Inertial {
+    /// The centre-of-mass frame, relative to the link.
+    pub pose: Pose,
+    pub mass: f64,
+    /// `[ixx, ixy, ixz, iyy, iyz, izz]`, about the centre of mass, in the `pose` frame.
+    pub inertia: [f64; 6],
+}
+
+impl Inertial {
+    /// The inertia tensor as a full symmetric matrix, row-major.
+    pub fn tensor(&self) -> [[f64; 3]; 3] {
+        let [ixx, ixy, ixz, iyy, iyz, izz] = self.inertia;
+        [[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz, izz]]
+    }
+
+    /// The principal moments, ascending.
+    ///
+    /// Closed-form eigenvalues of a symmetric 3×3, which is exact enough to judge physical
+    /// realisability and needs no iteration to explain.
+    pub fn principal_moments(&self) -> [f64; 3] {
+        let a = self.tensor();
+        let p1 = a[0][1] * a[0][1] + a[0][2] * a[0][2] + a[1][2] * a[1][2];
+        let q = (a[0][0] + a[1][1] + a[2][2]) / 3.0;
+        if p1 <= 1e-30 {
+            let mut d = [a[0][0], a[1][1], a[2][2]];
+            d.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+            return d;
+        }
+        let p2 = (a[0][0] - q).powi(2) + (a[1][1] - q).powi(2) + (a[2][2] - q).powi(2) + 2.0 * p1;
+        let p = (p2 / 6.0).sqrt();
+        let b = [
+            [(a[0][0] - q) / p, a[0][1] / p, a[0][2] / p],
+            [a[0][1] / p, (a[1][1] - q) / p, a[1][2] / p],
+            [a[0][2] / p, a[1][2] / p, (a[2][2] - q) / p],
+        ];
+        let det = b[0][0] * (b[1][1] * b[2][2] - b[1][2] * b[2][1])
+            - b[0][1] * (b[1][0] * b[2][2] - b[1][2] * b[2][0])
+            + b[0][2] * (b[1][0] * b[2][1] - b[1][1] * b[2][0]);
+        let phi = (det / 2.0).clamp(-1.0, 1.0).acos() / 3.0;
+        let e1 = q + 2.0 * p * phi.cos();
+        let e3 = q + 2.0 * p * (phi + 2.0 * std::f64::consts::PI / 3.0).cos();
+        let e2 = 3.0 * q - e1 - e3;
+        let mut d = [e1, e2, e3];
+        d.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        d
+    }
+}
+
+/// One thing wrong, or worth knowing, about a description.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Finding {
+    /// A stable slug, so a gate can allow one class without allowing all of them.
+    pub kind: &'static str,
+    pub link: String,
+    /// What was measured, not a restatement of the kind.
+    pub detail: String,
+    /// `true` when this should fail a gate. `false` is a note.
+    pub fails: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {
     pub name: String,
     pub visuals: Vec<Visual>,
+    /// What the physics engine sees, which is not always what the renderer does.
+    pub collisions: Vec<Visual>,
+    pub inertial: Option<Inertial>,
 }
 
 /// What a joint does to the transform between its parent and child.
@@ -270,7 +335,33 @@ impl Robot {
                     Err(why) => r.notes.push(format!("link {name}: {why}")),
                 }
             }
-            r.links.push(Link { name, visuals });
+            let mut collisions = Vec::new();
+            for c in l.children_named("collision") {
+                match parse_visual(c, [0.85, 0.35, 0.35, 0.30]) {
+                    Ok(g) => collisions.push(g),
+                    Err(why) => r.notes.push(format!("link {name}: collision: {why}")),
+                }
+            }
+            let inertial = l.child("inertial").map(|e| Inertial {
+                pose: origin_of(e.child("origin")),
+                mass: e
+                    .child("mass")
+                    .and_then(|m| m.attr_f64("value"))
+                    .unwrap_or(0.0),
+                inertia: e
+                    .child("inertia")
+                    .map(|i| {
+                        let g = |k: &str| i.attr_f64(k).unwrap_or(0.0);
+                        [g("ixx"), g("ixy"), g("ixz"), g("iyy"), g("iyz"), g("izz")]
+                    })
+                    .unwrap_or([0.0; 6]),
+            });
+            r.links.push(Link {
+                name,
+                visuals,
+                collisions,
+                inertial,
+            });
         }
 
         for j in root.children_named("joint") {
@@ -322,6 +413,221 @@ impl Robot {
 
         r.check_tree()?;
         Ok(r)
+    }
+
+    /// Check the description for the errors that break sim-to-real.
+    ///
+    /// Every CAD pipeline in the field writes URDF; this review found none that reads one back and
+    /// asks whether it is physically usable. These are the cheap, common causes of a policy that
+    /// works in simulation and not on hardware, and they are all checkable from the file:
+    ///
+    /// - a link the renderer can draw that the physics engine cannot collide with;
+    /// - a moving link with no mass, or a negative one;
+    /// - an inertia tensor that is not positive definite, so no rigid body has it;
+    /// - principal moments that violate the triangle inequality, likewise;
+    /// - inertia left at zero while mass is not, which most engines silently accept.
+    ///
+    /// Returns findings in link order. `fails` separates a defect from a note.
+    pub fn check(&self) -> Vec<Finding> {
+        let mut out = Vec::new();
+        let moving: Vec<&str> = self.movable_joints().map(|j| j.child.as_str()).collect();
+
+        for link in &self.links {
+            let name = link.name.clone();
+
+            if !link.visuals.is_empty() && link.collisions.is_empty() {
+                out.push(Finding {
+                    kind: "no-collision",
+                    link: name.clone(),
+                    detail: format!(
+                        "{} visual(s), 0 collision(s): the renderer can draw this link and the \
+                         physics engine cannot touch it",
+                        link.visuals.len()
+                    ),
+                    fails: true,
+                });
+            }
+            if link.visuals.is_empty() && !link.collisions.is_empty() {
+                out.push(Finding {
+                    kind: "no-visual",
+                    link: name.clone(),
+                    detail: "collision geometry with no visual: it will collide invisibly".into(),
+                    fails: false,
+                });
+            }
+
+            let is_moving = moving.contains(&name.as_str());
+            match &link.inertial {
+                None => {
+                    if is_moving {
+                        out.push(Finding {
+                            kind: "no-inertial",
+                            link: name.clone(),
+                            detail: "a movable link with no <inertial>: engines substitute a \
+                                     default, and the default is not your robot"
+                                .into(),
+                            fails: true,
+                        });
+                    }
+                }
+                Some(i) => {
+                    if i.mass <= 0.0 {
+                        out.push(Finding {
+                            kind: "bad-mass",
+                            link: name.clone(),
+                            detail: format!("mass = {} kg, which is not positive", i.mass),
+                            fails: is_moving,
+                        });
+                    }
+                    let m = i.principal_moments();
+                    let all_zero = i.inertia.iter().all(|v| v.abs() < 1e-15);
+                    if all_zero && i.mass > 0.0 {
+                        out.push(Finding {
+                            kind: "zero-inertia",
+                            link: name.clone(),
+                            detail: format!("mass = {} kg with an all-zero inertia tensor", i.mass),
+                            fails: is_moving,
+                        });
+                    } else if !all_zero {
+                        if m[0] <= 0.0 {
+                            out.push(Finding {
+                                kind: "not-positive-definite",
+                                link: name.clone(),
+                                detail: format!(
+                                    "smallest principal moment {:.6e} <= 0; principal moments \
+                                     [{:.6e}, {:.6e}, {:.6e}]. No rigid body has this inertia.",
+                                    m[0], m[0], m[1], m[2]
+                                ),
+                                fails: true,
+                            });
+                        } else {
+                            // Physical realisability: each principal moment must be no greater
+                            // than the sum of the other two.
+                            let tol = 1e-9 * m[2].max(1.0);
+                            if m[0] + m[1] < m[2] - tol {
+                                out.push(Finding {
+                                    kind: "triangle-inequality",
+                                    link: name.clone(),
+                                    detail: format!(
+                                        "I1 + I2 = {:.6e} < I3 = {:.6e}: no mass distribution \
+                                         produces these principal moments",
+                                        m[0] + m[1],
+                                        m[2]
+                                    ),
+                                    fails: true,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            for v in link.visuals.iter().chain(link.collisions.iter()) {
+                if !v.mesh.is_empty() {
+                    out.push(Finding {
+                        kind: "mesh-unverified",
+                        link: name.clone(),
+                        detail: format!(
+                            "references mesh {:?}: geometry outside this file was not checked",
+                            v.mesh
+                        ),
+                        fails: false,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Declare collision geometry, translucent and on its own topic namespace, so a reader can
+    /// see the difference between what the renderer draws and what the engine collides with.
+    pub fn declare_collision<W: Write>(
+        &self,
+        rec: &mut Recorder<W>,
+        t: Stamp,
+        topic_prefix: &str,
+    ) -> ferroscope_mcap::Result<()> {
+        for link in &self.links {
+            for (i, c) in link.collisions.iter().enumerate() {
+                let id = if link.collisions.len() == 1 {
+                    format!("{}:collision", link.name)
+                } else {
+                    format!("{}:collision#{i}", link.name)
+                };
+                let g = Geometry {
+                    frame: link.name.clone(),
+                    id,
+                    shape: c.shape,
+                    size: c.size,
+                    translation: c.pose.translation,
+                    rotation: c.pose.rotation,
+                    color: c.color,
+                    points: Vec::new(),
+                    mesh: c.mesh.clone(),
+                };
+                rec.geometry(&format!("{topic_prefix}/collision/{}", link.name), t, &g)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Declare a centre-of-mass marker per link, sized by mass, plus the inertia ellipsoid.
+    ///
+    /// The ellipsoid's semi-axes come from the principal moments of a uniform solid ellipsoid of
+    /// the same mass, so its shape is the mass distribution the tensor actually describes rather
+    /// than a decorative sphere.
+    pub fn declare_inertial<W: Write>(
+        &self,
+        rec: &mut Recorder<W>,
+        t: Stamp,
+        topic_prefix: &str,
+    ) -> ferroscope_mcap::Result<()> {
+        for link in &self.links {
+            let Some(inr) = &link.inertial else { continue };
+            let topic = format!("{topic_prefix}/inertial/{}", link.name);
+            let r = (inr.mass.max(1e-6) * 0.0006).cbrt().clamp(0.008, 0.06);
+            rec.geometry(
+                &topic,
+                t,
+                &Geometry {
+                    frame: link.name.clone(),
+                    id: format!("{}:com", link.name),
+                    shape: Shape::Sphere,
+                    size: [r, r, r],
+                    translation: inr.pose.translation,
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 0.42, 0.42, 0.95],
+                    points: Vec::new(),
+                    mesh: String::new(),
+                },
+            )?;
+
+            let m = inr.principal_moments();
+            if inr.mass > 0.0 && m[0] > 0.0 {
+                // For a uniform ellipsoid, I1 = m(b²+c²)/5 and so on, which inverts to
+                // a² = (5/2m)(-I1 + I2 + I3) and cyclically.
+                let k = 2.5 / inr.mass;
+                let ax = (k * (-m[0] + m[1] + m[2])).max(0.0).sqrt();
+                let ay = (k * (m[0] - m[1] + m[2])).max(0.0).sqrt();
+                let az = (k * (m[0] + m[1] - m[2])).max(0.0).sqrt();
+                rec.geometry(
+                    &topic,
+                    t,
+                    &Geometry {
+                        frame: link.name.clone(),
+                        id: format!("{}:inertia", link.name),
+                        shape: Shape::Sphere,
+                        size: [ax.max(1e-4), ay.max(1e-4), az.max(1e-4)],
+                        translation: inr.pose.translation,
+                        rotation: inr.pose.rotation,
+                        color: [0.62, 0.55, 1.0, 0.22],
+                        points: Vec::new(),
+                        mesh: String::new(),
+                    },
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// The single link with no parent joint.
@@ -694,5 +1000,165 @@ mod tests {
         let p = Pose::from_rpy([0.0; 3], [std::f64::consts::FRAC_PI_2, 0.0, 0.0]);
         let v = qrot(p.rotation, [0.0, 1.0, 0.0]);
         assert!((v[2] - 1.0).abs() < 1e-12, "{v:?}");
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    fn one_link(inertial: &str, collision: &str) -> Robot {
+        Robot::parse(&format!(
+            r#"<robot name="t">
+                 <link name="a">
+                   <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+                   {collision}
+                   {inertial}
+                 </link>
+                 <link name="b">
+                   <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+                   <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>
+                   <inertial><mass value="1"/>
+                     <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+                 </link>
+                 <joint name="j" type="revolute">
+                   <parent link="a"/><child link="b"/><axis xyz="0 0 1"/>
+                   <limit lower="-1" upper="1" effort="1" velocity="1"/>
+                 </joint>
+               </robot>"#
+        ))
+        .unwrap()
+    }
+    const GOOD_I: &str = r#"<inertial><mass value="2"/>
+        <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.02" iyz="0" izz="0.02"/></inertial>"#;
+    const BOX_C: &str = r#"<collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>"#;
+
+    fn kinds(r: &Robot) -> Vec<&'static str> {
+        r.check()
+            .iter()
+            .filter(|f| f.fails)
+            .map(|f| f.kind)
+            .collect()
+    }
+
+    #[test]
+    fn a_sound_description_produces_no_failures() {
+        let r = one_link(GOOD_I, BOX_C);
+        assert!(kinds(&r).is_empty(), "{:?}", r.check());
+    }
+
+    #[test]
+    fn a_visual_with_no_collision_is_a_failure() {
+        let r = one_link(GOOD_I, "");
+        assert_eq!(kinds(&r), ["no-collision"]);
+        let f = r
+            .check()
+            .into_iter()
+            .find(|f| f.kind == "no-collision")
+            .unwrap();
+        assert!(f.detail.contains("cannot touch"), "{}", f.detail);
+    }
+
+    #[test]
+    fn a_movable_link_with_no_inertial_is_a_failure() {
+        // The joint's child is `b`, so strip b's inertial by rebuilding without it.
+        let r = Robot::parse(
+            r#"<robot name="t">
+                 <link name="a"><visual><geometry><sphere radius="0.1"/></geometry></visual>
+                   <collision><geometry><sphere radius="0.1"/></geometry></collision></link>
+                 <link name="b"><visual><geometry><sphere radius="0.1"/></geometry></visual>
+                   <collision><geometry><sphere radius="0.1"/></geometry></collision></link>
+                 <joint name="j" type="revolute"><parent link="a"/><child link="b"/>
+                   <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint>
+               </robot>"#,
+        )
+        .unwrap();
+        let f: Vec<_> = r.check().into_iter().filter(|f| f.fails).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].kind, "no-inertial");
+        assert_eq!(f[0].link, "b", "only the MOVING link needs one");
+    }
+
+    #[test]
+    fn a_non_positive_definite_inertia_is_caught() {
+        let bad = r#"<inertial><mass value="1"/>
+            <inertia ixx="0.01" ixy="0.05" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>"#;
+        let r = one_link(bad, BOX_C);
+        let f = r
+            .check()
+            .into_iter()
+            .find(|f| f.kind == "not-positive-definite");
+        let f = f.expect("a large off-diagonal makes the tensor indefinite");
+        assert!(f.detail.contains("No rigid body"), "{}", f.detail);
+    }
+
+    #[test]
+    fn a_triangle_inequality_violation_is_caught() {
+        // I3 = 1.0 exceeds I1 + I2 = 0.02, which no mass distribution can produce.
+        let bad = r#"<inertial><mass value="1"/>
+            <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="1.0"/></inertial>"#;
+        let r = one_link(bad, BOX_C);
+        let f = r
+            .check()
+            .into_iter()
+            .find(|f| f.kind == "triangle-inequality")
+            .expect("I1+I2 < I3 must be caught");
+        assert!(f.detail.contains("no mass distribution"), "{}", f.detail);
+    }
+
+    #[test]
+    fn zero_inertia_with_mass_is_caught_and_a_massless_fixed_link_is_only_a_note() {
+        let zero = r#"<inertial><mass value="3"/>
+            <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/></inertial>"#;
+        // Link `a` is the root and not movable, so this is a note rather than a failure.
+        let r = one_link(zero, BOX_C);
+        let all = r.check();
+        let f = all
+            .iter()
+            .find(|f| f.kind == "zero-inertia")
+            .expect("caught");
+        assert!(!f.fails, "the root link is not moving, so it is a note");
+        assert!(f.detail.contains("3"), "{}", f.detail);
+    }
+
+    #[test]
+    fn a_mesh_is_reported_as_unverified_rather_than_silently_trusted() {
+        let r = one_link(
+            GOOD_I,
+            r#"<collision><geometry><mesh filename="hull.glb"/></geometry></collision>"#,
+        );
+        let f = r
+            .check()
+            .into_iter()
+            .find(|f| f.kind == "mesh-unverified")
+            .unwrap();
+        assert!(!f.fails, "an unchecked mesh is a note, not a defect");
+        assert!(f.detail.contains("hull.glb"));
+    }
+
+    #[test]
+    fn principal_moments_are_the_eigenvalues() {
+        // A diagonal tensor's principal moments are its diagonal, sorted.
+        let i = Inertial {
+            pose: Pose::default(),
+            mass: 1.0,
+            inertia: [3.0, 0.0, 0.0, 1.0, 0.0, 2.0],
+        };
+        let m = i.principal_moments();
+        assert!(
+            (m[0] - 1.0).abs() < 1e-12 && (m[1] - 2.0).abs() < 1e-12 && (m[2] - 3.0).abs() < 1e-12,
+            "{m:?}"
+        );
+
+        // A known symmetric case: [[2,1,0],[1,2,0],[0,0,5]] has eigenvalues 1, 3, 5.
+        let i = Inertial {
+            pose: Pose::default(),
+            mass: 1.0,
+            inertia: [2.0, 1.0, 0.0, 2.0, 0.0, 5.0],
+        };
+        let m = i.principal_moments();
+        for (got, want) in m.iter().zip([1.0, 3.0, 5.0]) {
+            assert!((got - want).abs() < 1e-9, "got {m:?}");
+        }
     }
 }

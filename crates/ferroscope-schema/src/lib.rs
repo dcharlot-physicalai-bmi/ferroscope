@@ -149,7 +149,8 @@ pub struct Contact {
 pub enum Shape {
     /// `size` is the full extent in x, y, z.
     Box,
-    /// `size[0]` is the radius.
+    /// `size` is the three semi-axes. Equal values are a sphere; unequal ones an ellipsoid,
+    /// which is what an inertia tensor's principal moments describe.
     Sphere,
     /// `size[0]` is the radius, `size[2]` the length along local z.
     Cylinder,

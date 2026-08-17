@@ -75,8 +75,9 @@ USAGE
   ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
-  ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot sweeping its joints
-                     [--steps <n>] [--rate <hz>]
+  ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description
+                     [--check] [--steps <n>] [--rate <hz>]
+                     [--no-collision] [--no-inertial]
 
 EXIT CODES
   0  the answer is yes

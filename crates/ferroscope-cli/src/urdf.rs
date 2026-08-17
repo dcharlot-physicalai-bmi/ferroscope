@@ -13,6 +13,9 @@ use ferroscope_urdf::Robot;
 pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut steps = 400u64;
     let mut dt_ns = 1_000_000u64;
+    let mut check_only = false;
+    let mut want_collision = true;
+    let mut want_inertial = true;
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -33,6 +36,18 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
                 }
                 dt_ns = (1e9 / hz).round() as u64;
                 i += 2;
+            }
+            "--check" => {
+                check_only = true;
+                i += 1;
+            }
+            "--no-collision" => {
+                want_collision = false;
+                i += 1;
+            }
+            "--no-inertial" => {
+                want_inertial = false;
+                i += 1;
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -82,6 +97,29 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         println!("               attach the glTF bytes under those names to draw them");
     }
 
+    // The validator runs before anything else, because a description that is not physically
+    // usable is worth saying so about whether or not you asked for a recording.
+    let findings = robot.check();
+    let failures = findings.iter().filter(|f| f.fails).count();
+    if findings.is_empty() {
+        println!("\n  CHECKS       all clear");
+    } else {
+        println!("\n  CHECKS");
+        for f in &findings {
+            println!(
+                "    {} {:<22} {:<26} {}",
+                if f.fails { "FAIL" } else { "note" },
+                f.kind,
+                f.link,
+                f.detail
+            );
+        }
+        println!("    {} finding(s), {failures} that fail", findings.len());
+    }
+    if check_only {
+        return Ok(failures == 0);
+    }
+
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
     let t0 = Stamp::sim(0, 0);
     rec.geometry(
@@ -93,6 +131,26 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     robot
         .declare(&mut rec, t0, "/scene")
         .map_err(|e| e.to_string())?;
+    if want_collision {
+        robot
+            .declare_collision(&mut rec, t0, "/scene")
+            .map_err(|e| e.to_string())?;
+    }
+    if want_inertial {
+        robot
+            .declare_inertial(&mut rec, t0, "/scene")
+            .map_err(|e| e.to_string())?;
+    }
+    // The findings ride in the recording too, so a reader who only has the file still sees them.
+    for f in &findings {
+        rec.event(
+            "/log",
+            t0,
+            if f.fails { "error" } else { "warn" },
+            &format!("{}: {}: {}", f.kind, f.link, f.detail),
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     // Every movable joint sweeps its own range on a phase offset, so the whole tree moves and
     // nothing is left sitting at zero pretending to be rigid.
@@ -161,5 +219,6 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         quote.compute_fraction() * 100.0
     );
     println!("  open it      https://ferroscope.physicalai-bmi.org/viewer");
-    Ok(true)
+    // Exit 1 when the description has defects, so this is a gate and not just a report.
+    Ok(failures == 0)
 }

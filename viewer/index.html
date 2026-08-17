@@ -52,11 +52,13 @@
     grid-template-rows:1fr 6px 34%}
   .pane{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:6px;
     display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
-  .pane>h2{margin:0;padding:7px 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+  .pane>h2{margin:0;padding:6px 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
     text-transform:uppercase;color:var(--gold);font-weight:600;border-bottom:1px solid var(--line2);
-    display:flex;justify-content:space-between;align-items:center;gap:8px;flex:none}
-  .pane>h2 .tools{display:flex;gap:5px;flex-wrap:wrap}
-  .pane>h2 button{padding:2px 7px;font-size:10px}
+    display:flex;justify-content:space-between;align-items:center;gap:8px;flex:none;flex-wrap:wrap}
+  .pane>h2 .tools{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+  /* WCAG 2.2 target size holds in the toolbar too, so these keep 24px rather than
+     shrinking to fit a narrow header. */
+  .pane>h2 button{padding:3px 8px;font-size:10px;min-height:26px;min-width:26px;flex:none}
   .body{flex:1;min-height:0;overflow:auto}
   .body.flush{overflow:hidden;position:relative}
   .vsplit{cursor:col-resize} .hsplit{cursor:row-resize;grid-column:1/-1}
@@ -71,7 +73,9 @@
   #panePlots{grid-column:1/-1;grid-row:3}
 
   @media (max-width:1000px){
-    #app{grid-template-rows:var(--hdr) auto auto 1fr var(--bar)}
+    .pane>h2{flex-direction:column;align-items:stretch;gap:7px}
+    .pane>h2 .tools{justify-content:flex-start;row-gap:7px}
+    #app{grid-template-rows:auto auto auto 1fr var(--bar)}
     #dock{grid-template-columns:1fr !important;
       grid-template-rows:minmax(260px,44vh) auto auto auto !important;overflow-y:auto}
     #paneScene{grid-column:1;grid-row:1}
@@ -180,6 +184,8 @@
   <section class="pane" id="paneScene">
     <h2>3D
       <span class="tools">
+        <button id="btnCol" type="button" aria-pressed="false" title="Collision geometry: what the physics engine sees">collision</button>
+        <button id="btnInr" type="button" aria-pressed="false" title="Centre of mass and inertia ellipsoid">inertia</button>
         <button id="btnGhost" type="button" aria-pressed="false" title="Ghost copies of the machine at earlier times">ghosts</button>
         <button id="btnPath" type="button" aria-pressed="true" title="The path travelled so far">path</button>
         <button id="btnGrid" type="button" aria-pressed="true">grid</button>
@@ -251,6 +257,9 @@ const S = {
   A:null, B:null, bundle:null, div:null, verdict:null,
   t:0, span:[0,1], playing:false, raf:0, last:0, speed:1,
   lanes:[], hidden:new Set(), ghosts:false, path:true, grid:true,
+  // Layers are hidden until asked for: a scene that opens with collision hulls and inertia
+  // ellipsoids over every link opens unreadable.
+  layers:{collision:false, inertia:false},
   measuring:false, marks:[],
 };
 
@@ -298,7 +307,8 @@ function shapeGeometry(shape){
   }
 }
 function shapeScale(shape, sz){
-  if(shape==='sphere')   return [sz[0]*2, sz[0]*2, sz[0]*2];
+  // Three semi-axes, so the same primitive draws a sphere and an inertia ellipsoid.
+  if(shape==='sphere')   return [sz[0]*2, sz[1]*2, sz[2]*2];
   if(shape==='cylinder') return [sz[0]*2, sz[1]*2, sz[2]];
   if(shape==='plane')    return [sz[0], sz[1], 1];
   if(shape==='mesh')     return sz;   // a plain scale factor; the glTF carries its own size
@@ -434,7 +444,9 @@ function syncScene(){
 
   for(const g of S.bundle.geometry||[]){
     const key = g.frame+'/'+g.id;
-    const hidden = S.hidden.has('geo:'+key);
+    const layer = layerOf(g.id);
+    const hidden = S.hidden.has('geo:'+key)
+      || (layer !== 'visual' && !S.layers[layer]);
     let rec = G.parts.get(key);
     if(!rec){
       if(g.shape === 'mesh'){
@@ -720,6 +732,9 @@ function paintTree(){
   const b=S.bundle; if(!b) return;
   let h = '<div class="row head">Geometry</div>';
   for(const g of b.geometry||[]){
+    // A hidden layer is not listed: the tree is for picking parts, not for reading state.
+    const lay = layerOf(g.id);
+    if(lay !== 'visual' && !S.layers[lay]) continue;
     const key='geo:'+g.frame+'/'+g.id, r=g.track[0];
     const sw=`rgb(${Math.round(r[11]*255)},${Math.round(r[12]*255)},${Math.round(r[13]*255)})`;
     h += `<div class="row"><input type="checkbox" ${S.hidden.has(key)?'':'checked'} data-k="${esc(key)}"
@@ -915,6 +930,20 @@ for(const [id,key] of [['btnGhost','ghosts'],['btnPath','path'],['btnGrid','grid
   });
 }
 el('btnFit').addEventListener('click', () => { fitView(); drawScene(); });
+
+// A layer is a suffix on the geometry id, which the URDF importer sets.
+function layerOf(id){
+  if(id.endsWith(':collision') || id.includes(':collision#')) return 'collision';
+  if(id.endsWith(':com') || id.endsWith(':inertia')) return 'inertia';
+  return 'visual';
+}
+for(const [btn, layer] of [['btnCol','collision'],['btnInr','inertia']]){
+  el(btn).addEventListener('click', () => {
+    S.layers[layer] = !S.layers[layer];
+    el(btn).setAttribute('aria-pressed', String(S.layers[layer]));
+    paintTree(); drawScene();
+  });
+}
 
 /* ---------------- splitters ---------------- */
 const dockW=[230,300], dockH=[34];

@@ -63,6 +63,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
+      - name: the checker passes a sound description and refuses a broken one
+        # This is the gate the survey said nobody ships: a robot description checked for the
+        # errors that break sim-to-real, before anything is simulated.
+        run: |
+          B=target/release/ferroscope
+          $B urdf examples/robots/arm.urdf /tmp/ok.mcap --check
+          ! $B urdf examples/robots/broken.urdf /tmp/bad.mcap --check
+          $B urdf examples/robots/broken.urdf /tmp/bad.mcap --check 2>&1 | tee /tmp/bad.txt || true
+          for kind in no-collision no-inertial zero-inertia triangle-inequality \
+                      not-positive-definite bad-mass; do
+            grep -q "$kind" /tmp/bad.txt || { echo "the checker missed $kind"; exit 1; }
+          done
+          echo "every defect class is caught"
       - name: a URDF becomes a verified recording
         run: |
           B=target/release/ferroscope
@@ -70,13 +83,18 @@ jobs:
           $B verify arm.mcap
           $B inspect arm.mcap | tee /tmp/arm.txt
           for link in base shoulder_link upper_arm forearm gripper; do
-            grep -q "/scene/visual/$link" /tmp/arm.txt || { echo "no visual for $link"; exit 1; }
+            for layer in visual collision inertial; do
+              grep -q "/scene/$layer/$link" /tmp/arm.txt \
+                || { echo "no $layer geometry for $link"; exit 1; }
+            done
             grep -q "/scene/tf/$link" /tmp/arm.txt || { echo "no transform for $link"; exit 1; }
           done
           # Every geometry channel must carry the Geometry schema and every tf channel Transform.
           # This is the bug that shipped once: transforms written onto geometry channels.
-          grep '/scene/visual/' /tmp/arm.txt | grep -qv 'ferroscope.Geometry' && exit 1
-          grep '/scene/tf/'     /tmp/arm.txt | grep -qv 'ferroscope.Transform' && exit 1
+          for layer in visual collision inertial; do
+            grep "/scene/$layer/" /tmp/arm.txt | grep -qv 'ferroscope.Geometry' && exit 1
+          done
+          grep '/scene/tf/' /tmp/arm.txt | grep -qv 'ferroscope.Transform' && exit 1
           echo "every channel carries the schema its name implies"
 
   viewer:

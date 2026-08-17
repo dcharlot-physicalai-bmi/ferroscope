@@ -33,13 +33,15 @@ each other, the two runs are the same picture. That is the whole reason the dige
 
 ## Why this exists
 
-Robotics tooling in 2026 is good and getting better. Four things are shipping:
+Robotics tooling in 2026 is good and getting better. A full survey of the field, across languages
+and regions, is in [docs/LANDSCAPE.md](docs/LANDSCAPE.md). The short version, five tools:
 
 | | what it does well | where it stops |
 |---|---|---|
 | **[Foxglove](https://foxglove.dev)** | The best panel-and-layout viewer in the field. MCAP is theirs and it is genuinely open (Apache-2.0). The SDK core is Rust, MIT. Live WebSocket streaming, teleop, a real data platform. | The app itself is proprietary: Studio 1.x (MPL-2.0) was frozen in February 2024 and the current product is closed. Cloud storage, seats, and device counts are metered. Visualization only: no physics, no scenario execution, no notion of whether a run reproduced. |
 | **[Rerun](https://rerun.io)** | Open-source core, Rust viewer that runs native *and* in a browser, an entity-component data model with real timelines, and a good embedding story. | Its own MCAP support is marked experimental; the viewer is bounded by RAM. It is a logging and visualization layer, by design, not a place where a run is *executed*, gated, or certified. |
 | **[NVIDIA Isaac Sim / Isaac Lab](https://developer.nvidia.com/isaac/sim)** | The strongest physics-and-rendering primitives available, GPU-parallel environments, OpenUSD throughout, an enormous asset ecosystem. | Apache-2.0 source that needs the Omniverse Kit SDK under NVIDIA's own license; redistributing it or offering it as a service to third parties pulls in NVIDIA AI Enterprise. Needs an RTX-class GPU. And Isaac Lab's own docs state the limitation plainly: GPU work scheduling reorders floating-point reductions, so *"experiments from the IsaacGym simulator are not perfectly reproducible on a different system."* |
+| **[Lichtblick](https://github.com/lichtblick-suite/lichtblick)** | An actively maintained community fork of Foxglove Studio, browser and desktop, preserving the open-core model. **The honest correction to the row above:** licence is not the differentiator here. | Like Foxglove, it is a viewer. No physics, no scenario execution, no determinism receipt, no energy ledger. |
 | **[Antioch](https://www.antioch.com/)** | The best-designed scenario model in the field, and the reason this repository has one. A scenario is a parameterized 3-D integration test; cases and grids turn it into many comparable runs; a verdict is named checks with measured details; suites are unions of selector clauses; history is queryable with `key:op:value` predicates; telemetry lands in Rerun. Every one of those ideas is worth porting, and this repository ports them. | The delivery, not the design. Its own documentation is the source: a run needs an ephemeral GPU VM, *"allocation is the slow step"*, and when none is warm the CLI *"polls up to 600 s"*. Simulator imports are banned at module scope because discovery must happen *"before requesting a machine"*. Cost is assignment-scoped, *"idle time included … there is no per-run or per-scenario cost figure to report"*. Reproduction means re-queueing saved images, and *"multi-machine interactive runs are not currently rerunnable"*: there is no digest and no divergence step. And *"the CLI has no `compare` command"*. |
 
 Put the columns side by side and the gap has a shape:
@@ -271,6 +273,41 @@ wrote arm.mcap (854445 bytes)
   spec digest  f9ecf5286aabbd…
   energy       14.48 J estimated (21.5 % compute)
 ```
+
+### It checks the description before it draws it
+
+```sh
+ferroscope urdf my_robot.urdf out.mcap --check
+```
+
+Every CAD pipeline in the field writes URDF. This survey found none that reads one back and asks
+whether it is *physically usable*. So this does, and exits 1 when it is not:
+
+```text
+  CHECKS
+    FAIL no-collision           no_collision   1 visual(s), 0 collision(s): the renderer can draw
+                                               this link and the physics engine cannot touch it
+    FAIL no-inertial            no_inertial    a movable link with no <inertial>: engines
+                                               substitute a default, and the default is not your robot
+    FAIL zero-inertia           zero_inertia   mass = 2 kg with an all-zero inertia tensor
+    FAIL triangle-inequality    impossible     I1 + I2 = 2.000000e-3 < I3 = 5.000000e-1: no mass
+                                               distribution produces these principal moments
+    FAIL not-positive-definite  indefinite     smallest principal moment -4.600000e-2 <= 0
+    FAIL bad-mass               negative_mass  mass = -1 kg, which is not positive
+```
+
+Each of those is a real bug that has shipped in real robot descriptions, each produces a policy
+that works in simulation and not on hardware, and each is checkable from the file in milliseconds.
+The inertia checks are eigenvalues of the tensor: positive definiteness, and the triangle
+inequality on the principal moments that every physically realisable rigid body satisfies.
+
+It found nine defects in this repository's own example URDF the first time it ran.
+`examples/robots/broken.urdf` carries one of each class and CI asserts every one is caught.
+
+The recording also carries **collision geometry** and **inertial properties** as their own layers,
+translucent over the visuals, with a centre-of-mass marker and an inertia ellipsoid whose semi-axes
+come from the principal moments. Toggle them in the viewer: seeing what the physics engine sees
+next to what the renderer draws is where sim-to-real gaps hide.
 
 `ferroscope-urdf` is its own crate and has **no dependencies beyond Ferroscope**, including no XML
 library: the dialect URDF uses is elements, attributes and comments, and a robot description is not
