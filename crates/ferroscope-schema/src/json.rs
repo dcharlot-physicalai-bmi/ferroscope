@@ -188,6 +188,70 @@ impl Value {
     }
 }
 
+impl Value {
+    /// Serialize back to JSON text. Round-trips through [`parse`].
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
+    pub fn write(&self, out: &mut String) {
+        match self {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Num(n) => write_number(out, *n),
+            Value::Str(s) => write_string(out, s),
+            Value::Arr(a) => {
+                out.push('[');
+                for (i, v) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    v.write(out);
+                }
+                out.push(']');
+            }
+            Value::Obj(kv) => {
+                out.push('{');
+                for (i, (k, v)) in kv.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_string(out, k);
+                    out.push(':');
+                    v.write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+
+    /// Follow a dotted path, for the `@` predicate operator.
+    pub fn path(&self, dotted: &str) -> Option<&Value> {
+        let mut cur = self;
+        for seg in dotted.split('.') {
+            cur = cur.get(seg)?;
+        }
+        Some(cur)
+    }
+
+    /// A short human rendering for a table cell.
+    pub fn brief(&self) -> String {
+        match self {
+            Value::Str(s) => s.clone(),
+            Value::Num(n) => {
+                let mut o = String::new();
+                write_number(&mut o, *n);
+                o
+            }
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".into(),
+            other => other.to_json(),
+        }
+    }
+}
+
 /// Parse a JSON document. Returns `None` on anything malformed — a recording with a broken
 /// payload should be reported, not half-read.
 pub fn parse(s: &str) -> Option<Value> {

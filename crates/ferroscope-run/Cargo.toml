@@ -1,0 +1,25 @@
+[package]
+name = "ferroscope-run"
+description = "Scenarios, cases, suites and verdicts for physical AI, as a local Rust harness: no manifest, no container, no machine to wait for. Every run is one MCAP file with its own receipt and its own joule cost."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "testing", "simulation", "scenarios", "reproducibility"]
+categories = ["science::robotics", "development-tools::testing", "simulation"]
+
+[dependencies]
+ferroscope-mcap = { workspace = true }
+ferroscope-schema = { workspace = true }
+ferroscope-ledger = { workspace = true }
+ferroscope-receipt = { workspace = true }
+
+[dev-dependencies]
+ferroscope-schema = { workspace = true }
+
+[[example]]
+name = "hopper"
+path = "../../examples/hopper.rs"

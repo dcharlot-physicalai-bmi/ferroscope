@@ -30,6 +30,31 @@ jobs:
           -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
           -p ferroscope-wasm
 
+  harness:
+    # The scenario harness end to end: discover, run a suite, query history, and compare two
+    # runs of the same case. `run` exits 1 when a case fails, which the acceptance suite does
+    # on purpose, so the smoke suite is the gate here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --example hopper -p ferroscope-run
+      - name: declare, run, query, compare
+        run: |
+          H=target/release/examples/hopper
+          $H collect --json > /dev/null
+          $H suites
+          ! $H run --suite acceptance            # 5 of 13 cases fail by design: exit 1
+          $H run --scenario budget               # this one must pass: exit 0
+          $H list --limit 5
+          $H list --result 'worst_penetration_m:>:0.08' --json > /dev/null
+          $H run --scenario hop --case stiffness=8000 > /dev/null
+          A=$($H list --scenario hop --case stiffness=8000 --limit 2 --json \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"])')
+          B=$($H list --scenario hop --case stiffness=8000 --limit 2 --json \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[1]["id"])')
+          $H compare "$A" "$B"                   # same spec, same body: must reproduce
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.

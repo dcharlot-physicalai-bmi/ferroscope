@@ -40,7 +40,7 @@ Robotics tooling in 2026 is good and getting better. Four things are shipping:
 | **[Foxglove](https://foxglove.dev)** | The best panel-and-layout viewer in the field. MCAP is theirs and it is genuinely open (Apache-2.0). The SDK core is Rust, MIT. Live WebSocket streaming, teleop, a real data platform. | The app itself is proprietary: Studio 1.x (MPL-2.0) was frozen in February 2024 and the current product is closed. Cloud storage, seats, and device counts are metered. Visualization only: no physics, no scenario execution, no notion of whether a run reproduced. |
 | **[Rerun](https://rerun.io)** | Open-source core, Rust viewer that runs native *and* in a browser, an entity-component data model with real timelines, and a good embedding story. | Its own MCAP support is marked experimental; the viewer is bounded by RAM. It is a logging and visualization layer, by design, not a place where a run is *executed*, gated, or certified. |
 | **[NVIDIA Isaac Sim / Isaac Lab](https://developer.nvidia.com/isaac/sim)** | The strongest physics-and-rendering primitives available, GPU-parallel environments, OpenUSD throughout, an enormous asset ecosystem. | Apache-2.0 source that needs the Omniverse Kit SDK under NVIDIA's own license; redistributing it or offering it as a service to third parties pulls in NVIDIA AI Enterprise. Needs an RTX-class GPU. And Isaac Lab's own docs state the limitation plainly: GPU work scheduling reorders floating-point reductions, so *"experiments from the IsaacGym simulator are not perfectly reproducible on a different system."* |
-| **[Antioch](https://www.antioch.com/)** | The newest and sharpest framing of the problem: define the whole robot stack as software, containerize it as one version-controlled artifact (Ark), spin up thousands of twins in the cloud, wire it into CI/CD, and lean on Omniverse/Cosmos for physics and Foxglove for observability. | A commercial cloud product on a subscription. This review did not locate public documentation of its wire format, its determinism guarantees, or a self-hostable path, so a team cannot verify a claim about a run without being a customer at the moment the claim is made. |
+| **[Antioch](https://www.antioch.com/)** | The best-designed scenario model in the field, and the reason this repository has one. A scenario is a parameterized 3-D integration test; cases and grids turn it into many comparable runs; a verdict is named checks with measured details; suites are unions of selector clauses; history is queryable with `key:op:value` predicates; telemetry lands in Rerun. Every one of those ideas is worth porting, and this repository ports them. | The delivery, not the design. Its own documentation is the source: a run needs an ephemeral GPU VM, *"allocation is the slow step"*, and when none is warm the CLI *"polls up to 600 s"*. Simulator imports are banned at module scope because discovery must happen *"before requesting a machine"*. Cost is assignment-scoped, *"idle time included … there is no per-run or per-scenario cost figure to report"*. Reproduction means re-queueing saved images, and *"multi-machine interactive runs are not currently rerunnable"*: there is no digest and no divergence step. And *"the CLI has no `compare` command"*. |
 
 Put the columns side by side and the gap has a shape:
 
@@ -50,7 +50,9 @@ a robot ships.**
 1. *Did this run reproduce*, and if not, **where**?
 2. *What did the task cost in joules*, compute **and** actuation, in one ledger?
 
-Ferroscope answers both, offline, from the recording, with no account and no daemon.
+Ferroscope answers both, offline, from the recording, with no account and no daemon. The second one
+is not a guess about a competitor: Antioch's documentation says in as many words that the platform
+has no per-run cost figure to report.
 
 ---
 
@@ -140,6 +142,113 @@ match.
 
 ---
 
+## Scenarios, cases, suites, verdicts
+
+`ferroscope-run` is the harness. It keeps Antioch's model and throws away everything between the
+engineer and the answer: no manifest, no `services` map, no engine image, no container, no machine
+to wait for. A scenario is a function in your binary.
+
+```rust
+use ferroscope_run::prelude::*;
+use ferroscope_run::Case;
+
+fn main() -> std::process::ExitCode {
+    Harness::new()
+        .scenario(
+            Scenario::new("hop")
+                .describe("One leg, one hop. Did it leave the ground and land on its feet?")
+                .tags(["locomotion", "smoke"])
+                .param("stiffness", 8000.0)
+                .param("restitution", 0.4)
+                .steps(1_000)
+                .dt(1.0 / 1000.0)
+                .cases(Case::sweep("stiffness", [4000.0, 8000.0, 16000.0]))
+                .body(hop),
+        )
+        .suite(Suite::new("smoke").tags(["smoke"]))
+        .main()
+}
+
+fn hop(run: &mut Run) -> Result<(), Halt> {
+    let k = run.param("stiffness");
+    let (mut z, mut vz) = (0.32, 1.5);
+    let mut peak = z;
+    while run.running() {
+        let t = run.tick();                       // <- the only bookkeeping call in the loop
+        let f = (k * (0.32 - z).max(0.0)).max(0.0);
+        vz += (-9.80665 + f / 12.0) * run.dt();
+        z += vz * run.dt();
+        peak = peak.max(z);
+        run.position("/robot/base", t, [0.0, 0.0, z]);
+        run.energy("/energy/leg", t, Rail::Actuation, "leg", (f * vz).abs() * 0.45);
+        run.energy("/energy/soc", t, Rail::Compute, "soc", 7.8);
+    }
+    run.result("peak_height_m", peak);
+    run.result("gate_peak_m", 0.36);              // record what "passed" meant
+    run.check("left the ground", peak > 0.36, format!("peak {peak:.4} m > 0.360 m"));
+    Ok(())
+}
+```
+
+`run.tick()` is the whole trick. It advances simulated time by the declared `dt`, reads the wall
+clock, and carries the control-step index, so the **three clocks**, the **energy ledger**, the
+**trace digest** and the **verdict** all advance together. You write the physics; the plumbing is
+not yours to write.
+
+Your binary now has the surface:
+
+```text
+collect  [--scenario S] [--tag T] [--exclude-tag T] [--case C] [--json]
+run      [--suite NAME] [--scenario S] [--tag T] [--case C] [--set k=v] [--json]
+suites   [--json]
+list     [--outcome O] [-q TEXT] [--param k:op:v] [--result k:op:v] [--limit N] [--json]
+show     RUN_ID [--json]
+compare  RUN_A RUN_B [--abs F] [--rel F]
+```
+
+```text
+$ cargo run --release --example hopper -- run --suite acceptance
+  hop[stiffness=4000]                      failed   3 check(s), 1 failed     5.0 ms    28.70 J
+      x leg did not bottom out: worst penetration 0.0886 m <= 0.0600 m
+  hop[stiffness=8000]                      passed   3 check(s)               4.6 ms    26.28 J
+  hop[stiffness=16000]                     passed   3 check(s)               4.7 ms    24.29 J
+  …
+13 run(s), 8 passed, 5 not, 338.32 J total, in 197 ms
+```
+
+A softer leg bottoms out; a bouncier one costs more joules. That is a design trade-off the harness
+surfaced in a fifth of a second, with a receipt per run.
+
+### Measured
+
+On an M-series laptop, release build, one process, no GPU, no container, no network:
+
+| | median |
+|---|---|
+| process start, discover 13 cases, print (`collect`) | **1.7 ms** |
+| `run --suite smoke`: 4 runs, 4,000 physics steps, 4 sealed and re-verified recordings | **39 ms** |
+| `run --suite acceptance`: 13 runs, 13,000 steps, 13 recordings | **132 ms** |
+| `list` over a 105-run history | **3.7 ms** |
+
+That is about 10 ms per run, and each run writes a ~740 KB MCAP file, seals a SHA-256 receipt into
+it, and then **recomputes that receipt from the bytes it just wrote** before recording the verdict.
+
+The honest framing: this is a local harness with no GPU and no Isaac, so it is not doing the same
+work as a cloud platform booting Kit on an RTX machine, and these numbers are not a benchmark
+against one. What they are is the overhead *around* the physics (declaration, dispatch, recording, sealing,
+verification, history) and that overhead is milliseconds rather than a machine allocation. Antioch's documented allocation ceiling alone, before any build or boot, is 600
+seconds.
+
+### What is deliberately not here
+
+No GPU orchestration, no queue, no fan-out across machines, no Isaac, no renderer, no asset
+catalog, no organization. If the job needs a photorealistic RTX sensor sim on twenty machines,
+Antioch and Isaac are the right tools and this is not trying to be them. What this is: the layer
+that says what a run *was*, what it *decided*, what it *cost*, and whether it *reproduced*, in one
+file, on your machine, in milliseconds.
+
+---
+
 ## The viewer runs in your tab
 
 ```sh
@@ -191,6 +300,7 @@ ferroscope-schema = "0.1"         # recorder + well-known schemas (pulls the thr
 ferroscope-mcap    = "0.1"        # MCAP reader/writer, zero dependencies
 ferroscope-ledger  = "0.1"        # the joules arithmetic
 ferroscope-receipt = "0.1"        # digests and the comparator
+ferroscope-run     = "0.1"        # scenarios, cases, suites, verdicts, local history
 ```
 
 ## Record a run
@@ -257,14 +367,17 @@ A CI gate is one line:
 
 ## Architecture
 
-Five crates. **The four libraries have zero runtime dependencies**, `std` and nothing else, and all four
-build for `wasm32-unknown-unknown` unchanged.
+Five crates. **The four core libraries have zero runtime dependencies**, `std` and nothing else, and all four
+build for `wasm32-unknown-unknown` unchanged. `ferroscope-run` depends only on those four and is
+native by design: a harness that writes run history to a directory is not a browser component.
 
 ```
 ferroscope-mcap      MCAP v0 reader + writer.       0 deps.  wasm-clean.
 ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-schema    Recorder, schemas, verify().   depends only on the three above.
+ferroscope-run       Scenarios, cases, suites,      native only: it reads clocks and
+                     verdicts, local history.       writes files, and says so.
 ferroscope-cli       The CLI (binary: `ferroscope`).
 ferroscope-wasm      Browser bindings.              + wasm-bindgen, the project's one dep.
 ```
@@ -321,7 +434,7 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-the five CLI verbs, and the in-browser viewer.
+the five CLI verbs, the in-browser viewer, and the scenario harness with its six verbs.
 
 **Next, in the open, on the same repository:** live streaming over WebTransport, a scenario runner
 that executes a spec rather than only describing one, and coupling to
