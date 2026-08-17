@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{op, Channel, Cur, Error, Message, Result, Schema, MAGIC};
+use crate::{op, Attachment, Channel, Cur, Error, Message, Result, Schema, MAGIC};
 
 /// The `Statistics` record from the summary section, when the writer produced one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -32,6 +32,7 @@ pub struct Log {
     pub channels: Vec<Channel>,
     pub messages: Vec<Message>,
     pub metadata: Vec<(String, Vec<(String, String)>)>,
+    pub attachments: Vec<Attachment>,
     pub statistics: Option<Statistics>,
     /// The `DataEnd` checksum as stored. `0` means the writer declined to compute one.
     pub data_section_crc: Option<u32>,
@@ -54,6 +55,11 @@ impl Log {
             .iter()
             .filter(move |m| Some(m.channel_id) == id)
     }
+    /// One attachment by name.
+    pub fn attachment(&self, name: &str) -> Option<&Attachment> {
+        self.attachments.iter().find(|a| a.name == name)
+    }
+
     /// Named metadata block, if present.
     pub fn metadata_block(&self, name: &str) -> Option<&[(String, String)]> {
         self.metadata
@@ -116,6 +122,7 @@ pub fn read(bytes: &[u8]) -> Result<Log> {
                 let kv = b.map_ss()?;
                 log.metadata.push((name, kv));
             }
+            op::ATTACHMENT => log.attachments.push(parse_attachment(body)?),
             op::STATISTICS => log.statistics = Some(parse_statistics(body)?),
             op::DATA_END => {
                 let mut b = Cur::new(body);
@@ -173,6 +180,43 @@ fn parse_message(body: &[u8]) -> Result<Message> {
         log_time: b.u64()?,
         publish_time: b.u64()?,
         data: b.rest().to_vec(),
+    })
+}
+
+fn parse_attachment(body: &[u8]) -> Result<Attachment> {
+    let mut b = Cur::new(body);
+    let log_time = b.u64()?;
+    let create_time = b.u64()?;
+    let name = b.string()?;
+    let media_type = b.string()?;
+    let n = b.u64()? as usize;
+    if b.remaining() < n + 4 {
+        return Err(Error::Truncated {
+            offset: b.pos,
+            want: n + 4,
+            have: b.remaining(),
+        });
+    }
+    let data = b.buf[b.pos..b.pos + n].to_vec();
+    b.skip(n)?;
+    let stored = b.u32()?;
+    if stored != 0 {
+        // The CRC covers the record's own fields from log_time through data.
+        let actual = crate::crc32(&body[..body.len() - 4]);
+        if actual != stored {
+            return Err(Error::AttachmentCrcMismatch {
+                name,
+                expected: stored,
+                actual,
+            });
+        }
+    }
+    Ok(Attachment {
+        log_time,
+        create_time,
+        name,
+        media_type,
+        data,
     })
 }
 

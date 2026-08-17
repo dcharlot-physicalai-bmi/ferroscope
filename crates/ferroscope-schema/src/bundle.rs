@@ -122,6 +122,10 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
                                 "shape",
                                 val.get("shape").and_then(|x| x.as_str()).unwrap_or("box"),
                             )
+                            .str(
+                                "mesh",
+                                val.get("mesh").and_then(|x| x.as_str()).unwrap_or(""),
+                            )
                             .raw(
                                 "points",
                                 &val.get("points")
@@ -201,6 +205,21 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
         out.push_str(",\"track\":");
         write_series(&mut out, &stride(track));
         out.push('}');
+    }
+    out.push(']');
+
+    out.push_str(",\"attachments\":[");
+    for (i, a) in log.attachments.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(
+            &Obj::new()
+                .str("name", &a.name)
+                .str("media_type", &a.media_type)
+                .uint("bytes", a.data.len() as u64)
+                .finish(),
+        );
     }
     out.push(']');
 

@@ -5,7 +5,8 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # query a run record. Additive, so every 0.1.0 dependant resolves to it unchanged. (This is the
 # third time an unanchored `version` replace has bitten in this repo: `version.workspace` is a
 # substring of `rust-version.workspace`.)
-version = "0.1.2"
+# 0.1.3 adds Shape::Mesh, Recorder::attach, and attachments in the viewer bundle.
+version = "0.1.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

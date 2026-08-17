@@ -225,6 +225,23 @@ pub fn divergence_curve(a: &[u8], b: &[u8], channel: &str) -> Result<String, JsV
     Ok(out)
 }
 
+/// The raw bytes of one attachment, by name.
+///
+/// A glTF has no business being base64'd into a JSON document, so the viewer asks for the blob
+/// directly and hands it to a loader.
+#[wasm_bindgen]
+pub fn attachment(bytes: &[u8], name: &str) -> Result<Vec<u8>, JsValue> {
+    let log = ferroscope_schema::mcap::read(bytes)
+        .map_err(|e| JsValue::from_str(&format!("not a readable MCAP file: {e}")))?;
+    log.attachment(name).map(|a| a.data.clone()).ok_or_else(|| {
+        let have: Vec<&str> = log.attachments.iter().map(|a| a.name.as_str()).collect();
+        JsValue::from_str(&format!(
+            "no attachment named {name:?}; this recording carries [{}]",
+            have.join(", ")
+        ))
+    })
+}
+
 /// Every channel name in a recording, for a viewer that wants to offer a choice.
 #[wasm_bindgen]
 pub fn channels(bytes: &[u8]) -> Result<String, JsValue> {

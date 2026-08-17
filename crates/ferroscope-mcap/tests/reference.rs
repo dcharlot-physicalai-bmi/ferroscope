@@ -51,6 +51,14 @@ fn sample() -> Vec<u8> {
             w.write_message(c_joule, i / 4, t, t, j.as_bytes()).unwrap();
         }
     }
+    w.write_attachment(
+        "robot.glb",
+        "model/gltf-binary",
+        b"glTF\x02\x00\x00\x00 not really a mesh, but the bytes round-trip",
+        1_500_000_000,
+        1_400_000_000,
+    )
+    .unwrap();
     w.write_metadata(
         "ferroscope.receipt",
         &[
@@ -196,5 +204,53 @@ fn a_flipped_byte_inside_a_chunk_is_caught() {
         Err(ferroscope_mcap::Error::ChunkCrcMismatch { .. }) => {}
         Err(e) => panic!("expected a CRC mismatch, got {e}"),
         Ok(_) => panic!("corruption inside a chunk went unreported"),
+    }
+}
+
+#[test]
+fn attachments_round_trip_and_the_reference_reader_sees_them() {
+    let bytes = sample();
+
+    // Ours.
+    let log = read(&bytes).unwrap();
+    assert_eq!(log.attachments.len(), 1);
+    let a = log.attachment("robot.glb").expect("by name");
+    assert_eq!(a.media_type, "model/gltf-binary");
+    assert_eq!(a.log_time, 1_500_000_000);
+    assert_eq!(a.create_time, 1_400_000_000);
+    assert!(a.data.starts_with(b"glTF"));
+    assert_eq!(log.statistics.as_ref().unwrap().attachment_count, 1);
+
+    // Foxglove's, which validates the attachment CRC as it reads.
+    let summary = mcap::Summary::read(&bytes).unwrap().unwrap();
+    assert_eq!(
+        summary.attachment_indexes.len(),
+        1,
+        "indexed in the summary"
+    );
+    let idx = &summary.attachment_indexes[0];
+    assert_eq!(idx.name, "robot.glb");
+    assert_eq!(idx.media_type, "model/gltf-binary");
+    let got = mcap::read::attachment(&bytes, idx)
+        .expect("reference reader could not read the attachment");
+    assert_eq!(got.name, "robot.glb");
+    assert!(got.data.starts_with(b"glTF"));
+}
+
+#[test]
+fn a_corrupted_attachment_is_caught_by_its_own_crc() {
+    let mut bytes = sample();
+    let needle = b"not really a mesh";
+    let at = bytes
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("attachment payload not found");
+    bytes[at + 3] ^= 0xFF;
+    match read(&bytes) {
+        Err(ferroscope_mcap::Error::AttachmentCrcMismatch { name, .. }) => {
+            assert_eq!(name, "robot.glb")
+        }
+        Err(e) => panic!("expected an attachment CRC mismatch, got {e}"),
+        Ok(_) => panic!("a corrupted attachment went unreported"),
     }
 }

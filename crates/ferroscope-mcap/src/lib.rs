@@ -95,6 +95,21 @@ pub struct Message {
     pub data: Vec<u8>,
 }
 
+/// A blob carried inside the recording: a mesh, a URDF, a calibration, a policy.
+///
+/// Attachments are the reason a recording can stay one file. A viewer that has to fetch a
+/// robot's meshes from somewhere else is a viewer that stops working the moment somewhere else
+/// moves, and a recording whose geometry lives in a sibling directory is not evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub log_time: u64,
+    pub create_time: u64,
+    pub name: String,
+    /// An IANA media type, e.g. `model/gltf-binary` or `application/xml`.
+    pub media_type: String,
+    pub data: Vec<u8>,
+}
+
 /// Everything that can go wrong reading or writing MCAP, named precisely enough to fix.
 #[derive(Debug)]
 pub enum Error {
@@ -114,6 +129,12 @@ pub enum Error {
     UnsupportedCompression(String),
     /// A chunk's stored CRC32 does not match its contents.
     ChunkCrcMismatch {
+        expected: u32,
+        actual: u32,
+    },
+    /// An attachment's stored CRC32 does not match its contents.
+    AttachmentCrcMismatch {
+        name: String,
         expected: u32,
         actual: u32,
     },
@@ -147,6 +168,14 @@ impl fmt::Display for Error {
             Error::ChunkCrcMismatch { expected, actual } => write!(
                 f,
                 "chunk CRC32 mismatch: stored {expected:#010x}, computed {actual:#010x}"
+            ),
+            Error::AttachmentCrcMismatch {
+                name,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "attachment {name:?} CRC32 mismatch: stored {expected:#010x}, computed {actual:#010x}"
             ),
             Error::BadUtf8 { offset } => write!(f, "invalid UTF-8 in string at byte {offset}"),
             Error::IdSpaceExhausted => write!(f, "more than 65535 schemas or channels"),

@@ -17,7 +17,10 @@
   html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
     font-family:var(--sans);-webkit-font-smoothing:antialiased}
   button{font-family:var(--mono);font-size:11.5px;color:var(--ink);background:transparent;
-    border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+    border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;
+    /* WCAG 2.2 target size. In a narrow header flex row these were squeezed below the
+       24px minimum, which a phone is exactly where you notice. */
+    min-height:26px;min-width:26px;flex:none}
   button:hover{border-color:var(--gold);color:var(--gold)}
   button[aria-pressed=true]{border-color:var(--gold);color:var(--gold);background:rgba(207,170,91,.14)}
   button:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible{
@@ -25,22 +28,24 @@
   a{color:var(--gold)}
   code{font-family:var(--mono)}
 
-  #app{display:grid;height:100%;grid-template-rows:var(--hdr) auto auto 1fr var(--bar)}
-  header{display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--line);
-    background:var(--panel);min-width:0}
+  #app{display:grid;height:100%;grid-template-rows:auto auto auto 1fr var(--bar)}
+  header{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--line);
+    background:var(--panel);min-width:0;flex-wrap:wrap;min-height:var(--hdr)}
   .brand{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
     color:var(--dim);white-space:nowrap}
   .brand b{color:var(--gold)}
   header .grow{flex:1;min-width:0}
   .files{display:flex;gap:8px;align-items:center;min-width:0}
   .slot{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--dim);
-    border:1px dashed var(--line);border-radius:6px;padding:4px 8px;max-width:30vw;min-width:0}
+    border:1px dashed var(--line);border-radius:6px;padding:4px 8px;max-width:44vw;min-width:0}
   .slot.loaded{border-style:solid}
   .slot.over{border-color:var(--gold);background:rgba(207,170,91,.1)}
-  .slot .nm{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .slot .nm{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;
+    display:inline-flex;align-items:center;min-height:24px;padding:0 4px}
   .slot b{color:var(--gold)}
   input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
-  header nav a{font-family:var(--mono);font-size:11px;color:var(--dim);text-decoration:none;margin-left:12px}
+  header nav a{font-family:var(--mono);font-size:11px;color:var(--dim);text-decoration:none;margin-left:12px;
+    display:inline-flex;align-items:center;min-height:24px}
   header nav a:hover{color:var(--gold)}
 
   #dock{display:grid;min-height:0;grid-template-columns:230px 6px 1fr 6px 300px;
@@ -87,12 +92,15 @@
   .nogl{padding:18px;font-size:13px;color:var(--dim);line-height:1.6}
 
   .tree{font-family:var(--mono);font-size:11px;padding-bottom:8px}
-  .tree .row{display:flex;align-items:center;gap:6px;padding:3px 10px;color:var(--dim)}
+  .tree .row{display:flex;align-items:center;gap:6px;padding:1px 10px;color:var(--dim);min-height:26px}
   .tree .row:hover{background:rgba(36,49,87,.4)}
   .tree .row.head{color:var(--gold);letter-spacing:.1em;text-transform:uppercase;font-size:10px;padding-top:10px}
   .tree .row .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
   .tree .row .c{color:var(--dim);font-size:10px;white-space:nowrap}
-  .tree input{accent-color:#cfaa5b;margin:0}
+  /* WCAG 2.2 target size: a 14px checkbox is a 14px target, so the box is 24px and the
+     row grows to match. A dense tree can afford 24px rows; a reader with a tremor cannot
+     afford 14px ones. */
+  .tree input{accent-color:#cfaa5b;margin:0;width:24px;height:24px;flex:none}
   .sw{width:9px;height:9px;border-radius:2px;flex:none;border:1px solid rgba(0,0,0,.4)}
 
   .kv{font-family:var(--mono);font-size:11px;line-height:1.6;padding:2px 10px 12px}
@@ -164,9 +172,9 @@
 <div id="dock">
   <section class="pane" id="paneTopics">
     <h2>Scene tree</h2>
-    <div class="body"><div class="tree" id="tree"></div></div>
+    <div class="body" tabindex="0"><div class="tree" id="tree"></div></div>
   </section>
-  <div class="vsplit" id="vs1" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the scene tree"></div>
+  <div class="vsplit" id="vs1" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the scene tree" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
 
   <section class="pane" id="paneScene">
     <h2>3D
@@ -174,6 +182,7 @@
         <button id="btnGhost" type="button" aria-pressed="true" title="Ghost copies of the machine at earlier times">ghosts</button>
         <button id="btnPath" type="button" aria-pressed="true" title="The path travelled so far">path</button>
         <button id="btnGrid" type="button" aria-pressed="true">grid</button>
+        <button id="btnMeasure" type="button" aria-pressed="false" title="Click two points on the machine to measure between them (m)">measure</button>
         <button id="btnFit" type="button" title="Frame the whole scene (f)">fit</button>
       </span>
     </h2>
@@ -192,18 +201,18 @@
       </div>
     </div>
   </section>
-  <div class="vsplit" id="vs2" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the inspector"></div>
+  <div class="vsplit" id="vs2" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the inspector" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
 
   <section class="pane" id="paneInspect">
     <h2>Inspector</h2>
-    <div class="body"><div class="kv" id="inspect"></div></div>
+    <div class="body" tabindex="0"><div class="kv" id="inspect"></div></div>
   </section>
 
-  <div class="hsplit" id="hs1" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the plots panel"></div>
+  <div class="hsplit" id="hs1" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the plots panel" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
 
   <section class="pane" id="panePlots">
     <h2>Plots <span class="tools"><span class="lab" id="lanecount" style="font-family:var(--mono);font-size:10px;color:var(--dim)"></span></span></h2>
-    <div class="body"><div id="plots"></div></div>
+    <div class="body" tabindex="0"><div id="plots"></div></div>
   </section>
 </div>
 
@@ -226,7 +235,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/webgpu/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import init, { open as fsOpen, diff as fsDiff, divergence_curve, version }
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import init, { open as fsOpen, diff as fsDiff, divergence_curve, attachment, version }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -238,6 +249,7 @@ const S = {
   A:null, B:null, bundle:null, div:null, verdict:null,
   t:0, span:[0,1], playing:false, raf:0, last:0, speed:1,
   lanes:[], hidden:new Set(), ghosts:true, path:true, grid:true,
+  measuring:false, marks:[],
 };
 
 await init();
@@ -253,9 +265,13 @@ el('ver').textContent = 'v' + version();
 // panning and the grid all agree with the data instead of fighting it.
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
-let renderer=null, scene=null, camera=null, controls=null, backend='—';
+let renderer=null, scene=null, camera=null, controls=null, backend='—', envFailed=false;
 const G = { parts:new Map(), ghosts:[], path:null, contacts:null, grid:null };
 const GHOST_LAYERS = 5;
+const GLTF = new GLTFLoader();
+// Meshes are cached by attachment name: a recording that reuses one mesh across ten links
+// parses it once.
+const MESHES = new Map();
 const CONTACT_POOL = 96;
 
 const MATS = {
@@ -283,7 +299,30 @@ function shapeScale(shape, sz){
   if(shape==='sphere')   return [sz[0]*2, sz[0]*2, sz[0]*2];
   if(shape==='cylinder') return [sz[0]*2, sz[1]*2, sz[2]];
   if(shape==='plane')    return [sz[0], sz[1], 1];
+  if(shape==='mesh')     return sz;   // a plain scale factor; the glTF carries its own size
   return sz;
+}
+
+/// Parse one glTF out of the recording's attachments. The bytes never touch the network:
+/// they come from the file the reader already opened.
+async function meshFromAttachment(name){
+  if(MESHES.has(name)) return MESHES.get(name);
+  const promise = (async () => {
+    const bytes = attachment(S.A.bytes, name);          // throws with the available names
+    const gltf = await GLTF.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
+    const group = gltf.scene;
+    group.traverse(o => {
+      if(!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for(const m of mats){
+        if(m && envFailed && m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.05);
+      }
+    });
+    return group;
+  })();
+  MESHES.set(name, promise);
+  return promise;
 }
 
 async function initGL(){
@@ -308,6 +347,15 @@ async function initGL(){
 
   scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x070c1a, 6, 26);
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.55;
+  } catch(e){
+    // Without an environment, metallic glTF materials read as black, so they are flattened
+    // on load instead. Stated rather than silently wrong.
+    envFailed = true;
+  }
 
   camera = new THREE.PerspectiveCamera(50, 1, 0.01, 200);
   camera.position.set(1.1, -1.1, 0.9);
@@ -387,6 +435,22 @@ function syncScene(){
     const hidden = S.hidden.has('geo:'+key);
     let rec = G.parts.get(key);
     if(!rec){
+      if(g.shape === 'mesh'){
+        // A placeholder box holds the slot while the glTF parses, so one slow mesh never
+        // stalls the rest of the scene.
+        const mat = MATS.make([0.8,0.7,0.4], 1);
+        const holder = new THREE.Group();
+        scene.add(holder);
+        rec = {mesh: holder, mat, shape:'mesh', ghosts: [], pending: true};
+        G.parts.set(key, rec);
+        meshFromAttachment(g.mesh).then(src => {
+          const inst = src.clone(true);
+          holder.add(inst);
+          rec.pending = false;
+          requestDraw();
+        }).catch(e => fail('mesh "'+g.mesh+'": '+(e.message||e)));
+      }
+      if(rec){ /* the mesh branch already registered it */ } else {
       const geo = shapeGeometry(g.shape);
       if(g.shape === 'lines'){
         const pts = (g.points||[]).map(p => new THREE.Vector3(p[0],p[1],p[2]));
@@ -413,6 +477,7 @@ function syncScene(){
         }
       }
       G.parts.set(key, rec);
+      }
     }
 
     const pl = placed(g, S.t);
@@ -422,8 +487,8 @@ function syncScene(){
       rec.mesh.quaternion.set(pl.q[0], pl.q[1], pl.q[2], pl.q[3]);
       const sc = shapeScale(g.shape, pl.s);
       rec.mesh.scale.set(sc[0]||1e-4, sc[1]||1e-4, sc[2]||1e-4);
-      rec.mat.color.setRGB(pl.c[0], pl.c[1], pl.c[2]);
-      if(rec.mat.opacity !== undefined && rec.shape !== 'lines'){
+      if(rec.shape !== 'mesh') rec.mat.color.setRGB(pl.c[0], pl.c[1], pl.c[2]);
+      if(rec.mat.opacity !== undefined && rec.shape !== 'lines' && rec.shape !== 'mesh'){
         rec.mat.opacity = pl.c[3];
         rec.mat.transparent = pl.c[3] < 1;
       }
@@ -546,6 +611,107 @@ function fitView(){
   controls.update();
   requestDraw();
 }
+
+/* ---------------- measure ----------------
+   Click two points on the machine and get the distance between them. It raycasts against the
+   drawn geometry rather than a mathematical model, so it measures what you can see, including
+   a glTF mesh the viewer has never been told anything about.                                */
+const RAY = new THREE.Raycaster();
+let MEASURE = null;   // {a, b, dots:[], line}
+
+function measurables(){
+  const out = [];
+  scene.traverse(o => {
+    if(!o.isMesh || !o.visible) return;
+    if(o === G.contacts) return;
+    if(o.userData.isMeasureMark) return;
+    // Ghosts are past instants; measuring against one would be measuring against a memory.
+    const m = Array.isArray(o.material) ? o.material[0] : o.material;
+    if(m && m.transparent && m.opacity < 0.95) return;
+    out.push(o);
+  });
+  return out;
+}
+
+function clearMeasure(){
+  if(!MEASURE) return;
+  for(const d of MEASURE.dots) scene.remove(d);
+  if(MEASURE.line) scene.remove(MEASURE.line);
+  MEASURE = null;
+  paintHud();
+  requestDraw();
+}
+
+function addMark(p){
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 14, 10),
+    new THREE.MeshBasicMaterial({color:0x46c6b0}));
+  dot.position.copy(p);
+  dot.userData.isMeasureMark = true;
+  scene.add(dot);
+  return dot;
+}
+
+function measureAt(clientX, clientY){
+  const c = el('gl'), r = c.getBoundingClientRect();
+  RAY.setFromCamera(new THREE.Vector2(
+    ((clientX-r.left)/r.width)*2-1, -((clientY-r.top)/r.height)*2+1), camera);
+  const hit = RAY.intersectObjects(measurables(), true)[0];
+  if(!hit){ return; }
+
+  if(!MEASURE || MEASURE.b){ clearMeasure(); MEASURE = {a: hit.point.clone(), b: null, dots: []}; }
+  else { MEASURE.b = hit.point.clone(); }
+  MEASURE.dots.push(addMark(hit.point));
+
+  if(MEASURE.b){
+    const g = new LineGeometry();
+    g.setPositions([MEASURE.a.x, MEASURE.a.y, MEASURE.a.z, MEASURE.b.x, MEASURE.b.y, MEASURE.b.z]);
+    MEASURE.line = new Line2(g, new THREE.Line2NodeMaterial({color:0x46c6b0, linewidth:2.5}));
+    MEASURE.line.userData.isMeasureMark = true;
+    MEASURE.line.frustumCulled = false;
+    scene.add(MEASURE.line);
+  }
+  paintHud();
+  requestDraw();
+}
+
+function measureText(){
+  if(!MEASURE) return '';
+  if(!MEASURE.b) return `<span style="color:${TEAL}">measure: pick a second point</span>`;
+  const d = MEASURE.a.distanceTo(MEASURE.b);
+  const v = MEASURE.b.clone().sub(MEASURE.a);
+  return `<span style="color:${TEAL}">measure <b>${d.toFixed(4)} m</b> `
+       + `(dx ${v.x.toFixed(4)} dy ${v.y.toFixed(4)} dz ${v.z.toFixed(4)})</span>`;
+}
+
+function setMeasuring(on){
+  S.measuring = on;
+  el('btnMeasure').setAttribute('aria-pressed', String(on));
+  el('gl').style.cursor = on ? 'crosshair' : '';
+  if(!on) clearMeasure();
+}
+el('btnMeasure').addEventListener('click', () => setMeasuring(!S.measuring));
+
+// The click plumbing lives on the canvas beside OrbitControls rather than inside it: a
+// measure point must land on a click that did not travel, so orbiting never drops one.
+(function measureClicks(){
+  const c = el('gl'); if(!c) return;
+  let downAt = null;
+  c.addEventListener('pointerdown', e => { downAt = {x:e.clientX, y:e.clientY}; c.focus(); });
+  const up = e => {
+    if(S.measuring && downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) < 4){
+      measureAt(e.clientX, e.clientY);
+    }
+    downAt = null;
+  };
+  c.addEventListener('pointerup', up);
+  c.addEventListener('pointercancel', () => { downAt = null; });
+  c.addEventListener('keydown', e => {
+    if(e.key==='m'||e.key==='M'){ e.preventDefault(); setMeasuring(!S.measuring); }
+    else if(e.key==='Escape'){ clearMeasure(); }
+    else if(e.key==='f'||e.key==='F'){ e.preventDefault(); fitView(); }
+  });
+})();
 
 /* ---------------- panels ---------------- */
 function paintTree(){
@@ -709,6 +875,8 @@ function paintHud(){
   h += `t <b>${S.t.toFixed(3)}</b> / ${S.span[1].toFixed(3)} s`;
   const nc=(b.contacts||[]).filter(q=>Math.abs(q[0]-S.t)<0.02).length;
   if(nc) h += `<br><span style="color:${RED}">${nc} contact${nc>1?'s':''}</span>`;
+  const mt = measureText();
+  if(mt) h += `<br>${mt}`;
   el('hud').innerHTML=h;
 }
 
@@ -753,6 +921,12 @@ function applyDock(){
   const d = el('dock');
   d.style.gridTemplateColumns = `${dockW[0]}px 6px 1fr 6px ${dockW[1]}px`;
   d.style.gridTemplateRows = `1fr 6px ${dockH[0]}%`;
+  // A separator reports where it sits, so a screen reader hears the split rather than a
+  // control with no value.
+  const pct = (v, lo, hi) => String(Math.round((v-lo)/(hi-lo)*100));
+  el('vs1').setAttribute('aria-valuenow', pct(dockW[0], 150, 460));
+  el('vs2').setAttribute('aria-valuenow', pct(dockW[1], 190, 520));
+  el('hs1').setAttribute('aria-valuenow', pct(dockH[0], 12, 70));
 }
 function splitter(id, axis, apply){
   const s = el(id); if(!s) return;

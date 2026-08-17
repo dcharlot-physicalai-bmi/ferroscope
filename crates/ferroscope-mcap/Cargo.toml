@@ -1,7 +1,8 @@
 [package]
 name = "ferroscope-mcap"
 description = "MCAP v0 reader and writer with zero runtime dependencies — pure std, no C, builds for wasm32 unchanged."
-version.workspace = true
+# 0.1.1 adds Attachment records: write, read, index and CRC-check.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

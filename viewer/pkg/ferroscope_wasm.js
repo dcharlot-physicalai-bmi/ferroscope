@@ -1,4 +1,27 @@
 /**
+ * The raw bytes of one attachment, by name.
+ *
+ * A glTF has no business being base64'd into a JSON document, so the viewer asks for the blob
+ * directly and hands it to a loader.
+ * @param {Uint8Array} bytes
+ * @param {string} name
+ * @returns {Uint8Array}
+ */
+export function attachment(bytes, name) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.attachment(ptr0, len0, ptr1, len1);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
  * Every channel name in a recording, for a viewer that wants to offer a choice.
  * @param {Uint8Array} bytes
  * @returns {string}
@@ -190,6 +213,11 @@ function __wbg_get_imports() {
         __proto__: null,
         "./ferroscope_wasm_bg.js": import0,
     };
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 function getStringFromWasm0(ptr, len) {

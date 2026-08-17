@@ -263,10 +263,12 @@ A dockable workspace with a **three.js WebGPU** viewport, and it says which back
 than leaving you to guess (WebGPU where the browser has it, WebGL2 where it does not):
 
 - **3D**: orbit, pan and zoom with OrbitControls; a z-up ground grid and world axes, because
-  robotics is z-up and a viewer that disagrees with the data fights you; PBR materials and one
-  shadow-casting sun, so depth and contact read at a glance; **ghosts**, the same machine at
-  earlier instants, drawn rather than scrubbed for; the **path travelled** as a Line2 ribbon;
-  and contact markers sized by force, instanced so a thousand of them cost one draw call.
+  robotics is z-up and a viewer that disagrees with the data fights you; PBR materials, one
+  shadow-casting sun and an environment map, because metalness with nothing to reflect renders
+  black and real robot glTFs are frequently metallic; **ghosts**, the same machine at earlier
+  instants, drawn rather than scrubbed for; the **path travelled** as a Line2 ribbon; contact
+  markers sized by force, instanced so a thousand of them cost one draw call; and a **measure
+  tool**.
 - **Scene tree**: every declared part with its shape, whether it moves, its colour swatch, and a
   checkbox. Every channel with its schema and message count.
 - **Inspector**: the comparison verdict, the receipt with the trace digest **recomputed from the
@@ -276,10 +278,27 @@ than leaving you to guess (WebGPU where the browser has it, WebGL2 where it does
 - **Timeline**: scrub, play, and a speed selector.
 
 The 3-D panel draws **what the recording declares**, through the `ferroscope.Geometry` schema:
-boxes, spheres, cylinders, planes and polylines attached to frames, with size and colour on the
-per-step track. So a leg whose length *is* its compression, and a part that turns red on contact,
-are things the file says rather than things the viewer guesses. A recording with no geometry still
-opens; it just has nothing to draw.
+boxes, spheres, cylinders, planes, polylines and **glTF meshes**, attached to frames, with size and
+colour on the per-step track. So a leg whose length *is* its compression, and a part that turns red
+on contact, are things the file says rather than things the viewer guesses. A recording with no
+geometry still opens; it just has nothing to draw.
+
+**Meshes travel inside the recording.** `Shape::Mesh` names an MCAP **attachment**, and the viewer
+pulls the glTF straight out of the file it already opened:
+
+```rust
+rec.attach("arm.glb", "model/gltf-binary", &glb_bytes, t)?;
+rec.geometry("/scene/arm", t, &Geometry::mesh("/robot/link3", "arm", "arm.glb", [1.0; 3]))?;
+```
+
+Nothing outside the file is referenced, which is the point: a viewer that fetches a robot's meshes
+from somewhere else stops working the moment somewhere else moves, and a recording whose geometry
+lives in a sibling directory is not evidence. Attachments are checked against their own CRC on
+read, and Foxglove's reference reader finds them through the summary index like any other MCAP.
+
+**Measure** (`m`, or the toolbar button) raycasts against the drawn geometry: click two points and
+get the distance and the per-axis deltas. It measures what you can see, including a glTF the viewer
+has never been told anything about.
 
 Drop a file on **A** to read it, a second on **B** to compare. No bundler, no worker, no upload,
 no account. **Turn your network off and it still works**: three.js is vendored into the repository rather

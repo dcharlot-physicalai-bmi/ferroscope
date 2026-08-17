@@ -92,10 +92,15 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
         &Geometry::plane("world", "ground", 3.0, 3.0),
     )
     .map_err(|e| e.to_string())?;
+    // A real mesh, carried inside the recording rather than referenced outside it. The viewer
+    // pulls the glTF straight out of the attachment.
+    let body_mesh = crate::glb::body_glb([0.11, 0.08, 0.06], [0.81, 0.67, 0.36, 1.0]);
+    rec.attach("body.glb", "model/gltf-binary", &body_mesh, t0)
+        .map_err(|e| e.to_string())?;
     rec.geometry(
         "/scene/body",
         t0,
-        &Geometry::boxed("base", "body", [0.22, 0.16, 0.12]).colored([0.81, 0.67, 0.36, 1.0]),
+        &Geometry::mesh("base", "body", "body.glb", [1.0, 1.0, 1.0]),
     )
     .map_err(|e| e.to_string())?;
 

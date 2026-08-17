@@ -66,6 +66,7 @@ pub struct Writer<W: Write> {
     chunk_indexes: Vec<ChunkIndexRec>,
 
     metadata_index: Vec<(String, u64, u64)>,
+    attachment_index: Vec<(String, String, u64, u64, u64, u64, u64)>,
 
     msg_count: u64,
     per_channel: BTreeMap<u16, u64>,
@@ -92,6 +93,7 @@ impl<W: Write> Writer<W> {
             chunk_index: BTreeMap::new(),
             chunk_indexes: Vec::new(),
             metadata_index: Vec::new(),
+            attachment_index: Vec::new(),
             msg_count: 0,
             per_channel: BTreeMap::new(),
             t_min: u64::MAX,
@@ -239,6 +241,48 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Attach a blob. Attachments live in the data section outside any chunk, so a reader can
+    /// seek straight to one from the summary without decompressing anything.
+    ///
+    /// `log_time` and `create_time` are nanoseconds; pass the same value for both when the
+    /// distinction does not apply.
+    pub fn write_attachment(
+        &mut self,
+        name: &str,
+        media_type: &str,
+        data: &[u8],
+        log_time: u64,
+        create_time: u64,
+    ) -> Result<()> {
+        self.ensure_started()?;
+        self.flush_chunk()?;
+
+        // The record's CRC covers its own fields from log_time through data, so the body is
+        // built first and checksummed before the length prefix is known.
+        let mut b = Vec::new();
+        put_u64(&mut b, log_time);
+        put_u64(&mut b, create_time);
+        put_str(&mut b, name);
+        put_str(&mut b, media_type);
+        put_u64(&mut b, data.len() as u64);
+        b.extend_from_slice(data);
+        let crc = crate::crc32(&b);
+        put_u32(&mut b, crc);
+
+        let at = self.pos;
+        self.record(op::ATTACHMENT, &b)?;
+        self.attachment_index.push((
+            name.to_string(),
+            media_type.to_string(),
+            at,
+            self.pos - at,
+            log_time,
+            create_time,
+            data.len() as u64,
+        ));
+        Ok(())
+    }
+
     fn flush_chunk(&mut self) -> Result<()> {
         if self.chunk.is_empty() {
             return Ok(());
@@ -360,13 +404,28 @@ impl<W: Write> Writer<W> {
         }
         let mi_len = self.pos - mi_start;
 
+        let ai_start = self.pos;
+        for a in std::mem::take(&mut self.attachment_index) {
+            let mut b = Vec::new();
+            put_u64(&mut b, a.2); // offset
+            put_u64(&mut b, a.3); // length
+            put_u64(&mut b, a.4); // log_time
+            put_u64(&mut b, a.5); // create_time
+            put_u64(&mut b, a.6); // data_size
+            put_str(&mut b, &a.0);
+            put_str(&mut b, &a.1);
+            self.record(op::ATTACHMENT_INDEX, &b)?;
+            self.attachment_index.push(a);
+        }
+        let ai_len = self.pos - ai_start;
+
         let stats_start = self.pos;
         {
             let mut b = Vec::new();
             put_u64(&mut b, self.msg_count);
             put_u16(&mut b, self.schemas.len() as u16);
             put_u32(&mut b, self.channels.len() as u32);
-            put_u32(&mut b, 0); // attachments
+            put_u32(&mut b, self.attachment_index.len() as u32);
             put_u32(&mut b, self.metadata_index.len() as u32);
             put_u32(&mut b, self.chunk_indexes.len() as u32);
             put_u64(&mut b, if self.msg_count == 0 { 0 } else { self.t_min });
@@ -386,6 +445,7 @@ impl<W: Write> Writer<W> {
             (op::CHANNEL, channel_start, channel_len),
             (op::CHUNK_INDEX, ci_start, ci_len),
             (op::METADATA_INDEX, mi_start, mi_len),
+            (op::ATTACHMENT_INDEX, ai_start, ai_len),
             (op::STATISTICS, stats_start, stats_len),
         ] {
             if len == 0 {

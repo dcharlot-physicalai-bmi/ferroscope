@@ -157,6 +157,10 @@ pub enum Shape {
     Plane,
     /// A polyline through `points`, in the parent frame.
     Lines,
+    /// A mesh carried in the recording as an attachment, named by [`Geometry::mesh`].
+    /// `size` is a scale factor per axis. Nothing outside the file is referenced, which is
+    /// the point: a recording whose meshes live in a sibling directory is not evidence.
+    Mesh,
 }
 
 impl Shape {
@@ -167,6 +171,7 @@ impl Shape {
             Shape::Cylinder => "cylinder",
             Shape::Plane => "plane",
             Shape::Lines => "lines",
+            Shape::Mesh => "mesh",
         }
     }
 }
@@ -192,6 +197,8 @@ pub struct Geometry {
     pub color: [f64; 4],
     /// Only for [`Shape::Lines`].
     pub points: Vec<[f64; 3]>,
+    /// Only for [`Shape::Mesh`]: the attachment name holding the glTF binary.
+    pub mesh: String,
 }
 
 impl Geometry {
@@ -206,6 +213,17 @@ impl Geometry {
             rotation: [0.0, 0.0, 0.0, 1.0],
             color: [0.81, 0.67, 0.36, 1.0],
             points: Vec::new(),
+            mesh: String::new(),
+        }
+    }
+
+    /// A mesh from an attachment, scaled by `scale` on each axis.
+    pub fn mesh(frame: &str, id: &str, attachment: &str, scale: [f64; 3]) -> Geometry {
+        Geometry {
+            shape: Shape::Mesh,
+            size: scale,
+            mesh: attachment.to_string(),
+            ..Geometry::boxed(frame, id, scale)
         }
     }
     pub fn sphere(frame: &str, id: &str, radius: f64) -> Geometry {
@@ -274,7 +292,7 @@ pub mod schemas {
 
     pub const ENERGY_SAMPLE: &str = r#"{"type":"object","title":"ferroscope.EnergySample","description":"Instantaneous power on one named source. rail is one of compute|actuation|overhead so a viewer can total E_task = E_compute + E_actuation without being told which topic means what.","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"rail":{"type":"string","enum":["compute","actuation","overhead"]},"source":{"type":"string"},"watts":{"type":"number"}},"required":["rail","source","watts"]}"#;
 
-    pub const GEOMETRY: &str = r#"{"type":"object","title":"ferroscope.Geometry","description":"One drawable primitive attached to a frame. Log once for static scenery; log again on the same (frame,id) to move it. color is excluded from the run's trace digest because a rendering choice must not change a determinism verdict.","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"frame":{"type":"string"},"id":{"type":"string"},"shape":{"type":"string","enum":["box","sphere","cylinder","plane","lines"]},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"color":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["frame","id","shape"]}"#;
+    pub const GEOMETRY: &str = r#"{"type":"object","title":"ferroscope.Geometry","description":"One drawable primitive attached to a frame. Log once for static scenery; log again on the same (frame,id) to move it. color is excluded from the run's trace digest because a rendering choice must not change a determinism verdict.","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"frame":{"type":"string"},"id":{"type":"string"},"shape":{"type":"string","enum":["box","sphere","cylinder","plane","lines","mesh"]},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"color":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}},"mesh":{"type":"string","description":"For shape=mesh: the name of the attachment holding the glTF binary."}},"required":["frame","id","shape"]}"#;
 
     pub const SCALAR: &str = r#"{"type":"object","title":"ferroscope.Scalar","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"value":{"type":"number"},"unit":{"type":"string"}},"required":["value"]}"#;
 
@@ -474,6 +492,7 @@ impl<W: Write> Recorder<W> {
             .nums("rotation", &g.rotation)
             .nums("color", &g.color)
             .raw("points", &pts)
+            .str("mesh", &g.mesh)
             .finish();
         // The digest sees the geometry that could change a physical conclusion, and not the
         // colour it was drawn in.
@@ -545,6 +564,19 @@ impl<W: Write> Recorder<W> {
     /// The energy ledger so far.
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
+    }
+
+    /// Carry a blob inside the recording: a mesh, a URDF, a calibration. Reference a mesh
+    /// attachment from a [`Geometry`] with [`Geometry::mesh`].
+    pub fn attach(
+        &mut self,
+        name: &str,
+        media_type: &str,
+        data: &[u8],
+        t: Stamp,
+    ) -> ferroscope_mcap::Result<()> {
+        self.w
+            .write_attachment(name, media_type, data, t.wall_ns, t.sim_ns)
     }
 
     /// Close the recording: write the receipt into the file's metadata, finish the MCAP,

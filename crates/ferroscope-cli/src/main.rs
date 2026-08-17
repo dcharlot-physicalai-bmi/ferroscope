@@ -14,6 +14,7 @@
 use std::process::ExitCode;
 
 mod demo;
+mod glb;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{compare, digests_agree, Tolerance, Verdict};
