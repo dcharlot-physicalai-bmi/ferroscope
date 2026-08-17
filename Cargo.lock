@@ -145,7 +145,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferroscope"
+name = "ferroscope-cli"
 version = "0.1.0"
 dependencies = [
  "ferroscope-ledger",

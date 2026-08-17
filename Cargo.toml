@@ -5,7 +5,7 @@ members = [
     "crates/ferroscope-schema",
     "crates/ferroscope-ledger",
     "crates/ferroscope-receipt",
-    "crates/ferroscope",
+    "crates/ferroscope-cli",
     "crates/ferroscope-wasm",
 ]
 

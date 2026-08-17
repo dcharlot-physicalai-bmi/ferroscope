@@ -7,7 +7,7 @@ and **a determinism receipt**.
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 ```
-cargo install ferroscope
+cargo install ferroscope-cli
 
 ferroscope demo   a.mcap
 ferroscope demo   b.mcap --platform "x86_64-linux / vulkan" --drift 320
@@ -177,8 +177,12 @@ const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
 ## Install
 
 ```sh
-cargo install ferroscope          # the CLI
+cargo install ferroscope-cli      # installs the `ferroscope` binary
 ```
+
+> The bare name `ferroscope` on crates.io belongs to an unrelated Rust debugger, published in
+> July 2025. The libraries keep the namespace; the CLI crate carries the `-cli` suffix and the
+> binary it installs is still called `ferroscope`.
 
 ```toml
 # or the libraries
@@ -261,7 +265,7 @@ ferroscope-mcap      MCAP v0 reader + writer.       0 deps.  wasm-clean.
 ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-schema    Recorder, schemas, verify().   depends only on the three above.
-ferroscope           The CLI.
+ferroscope-cli       The CLI (binary: `ferroscope`).
 ferroscope-wasm      Browser bindings.              + wasm-bindgen, the project's one dep.
 ```
 

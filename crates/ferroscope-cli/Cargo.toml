@@ -1,6 +1,6 @@
 [package]
-name = "ferroscope"
-description = "The open interface layer for physical AI: inspect, verify, and compare robot recordings — determinism receipts and a joules axis, in one dependency-free Rust CLI."
+name = "ferroscope-cli"
+description = "The Ferroscope CLI: inspect, verify and compare robot recordings. Determinism receipts and a joules axis, installed as the `ferroscope` binary."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,5 +18,5 @@ ferroscope-ledger = { workspace = true }
 ferroscope-receipt = { workspace = true }
 
 [[bin]]
-name = "ferroscope"
+name = "ferroscope-cli"
 path = "src/main.rs"
