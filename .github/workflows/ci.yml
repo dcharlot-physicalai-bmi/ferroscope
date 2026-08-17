@@ -72,8 +72,31 @@ jobs:
           test ! -d crates/ferroscope-wasm/viewer
           test -s viewer/pkg/ferroscope_wasm_bg.wasm
           find viewer/pkg -newermt '-10 minutes' -name '*.wasm' | grep -q wasm
-      - name: the committed bundle matches the source
-        run: git diff --stat --exit-code -- viewer/pkg
+      - name: the committed bundle exports everything the crate does
+        # A byte-diff was the wrong invariant: an optimized wasm is not reproducible across
+        # wasm-opt and rustc versions, so that check failed on a clean rebuild for a reason
+        # nobody could act on. The invariant that DOES hold, and that catches the real failure
+        # (a bundle committed before a new export was added), is the export surface.
+        run: |
+          # A while-read loop rather than `for f in $var`: unquoted word splitting differs
+          # between shells, and a check whose iteration count depends on the shell is a check
+          # that can pass by accident.
+          grep -B1 '^pub fn' crates/ferroscope-wasm/src/lib.rs \
+            | grep -A1 wasm_bindgen | grep '^pub fn' \
+            | sed 's/pub fn \([a-z_0-9]*\).*/\1/' | sort -u > /tmp/exports.txt
+          test -s /tmp/exports.txt
+          while read -r f; do
+            grep -q "^export function $f" viewer/pkg/ferroscope_wasm.js \
+              || { echo "the committed viewer bundle is missing export: $f"; exit 1; }
+            echo "ok $f"
+          done < /tmp/exports.txt
+          # The viewer also loads three.js from the repository rather than a CDN. If that is
+          # ever removed the page fails at import time, so it is checked here.
+          test -s viewer/vendor/three/three.webgpu.min.js
+          test -s viewer/vendor/three/three.core.min.js
+          test -s viewer/vendor/three/addons/controls/OrbitControls.js
+          test -s viewer/vendor/three/addons/lines/webgpu/Line2.js
+          ! grep -q 'https://unpkg\|https://cdn' viewer/index.html
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and
