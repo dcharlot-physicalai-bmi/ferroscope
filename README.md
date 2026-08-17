@@ -140,6 +140,40 @@ match.
 
 ---
 
+## The viewer runs in your tab
+
+```sh
+./viewer/build.sh                              # rebuild the wasm (already committed)
+python3 -m http.server 8080 --directory viewer  # a module import of .wasm needs http, not file
+open http://localhost:8080
+```
+
+Live: **[ferroscope.physicalai-bmi.org/viewer](https://ferroscope.physicalai-bmi.org/viewer)**
+
+Drop a recording into slot A to read it: topics with schemas and counts, an isometric pose trail
+with contacts, a stacked power lane by rail, every scalar as its own lane, the wall-minus-sim drift,
+and the receipt **with the trace digest recomputed from the bytes you just dropped**. Drop a second
+recording into slot B and it tells you whether the replay reproduced the first, and if not, at which
+step it stopped, plus the log-scale divergence lane.
+
+183 KB of WebAssembly, one HTML file, no bundler, no worker, no upload, no account. **Turn your
+network off and it still works.** That is the difference between an open interface layer and a
+client for somebody's cloud, and it is only possible because the four libraries underneath are
+`std`-only.
+
+The same functions are callable from any page:
+
+```js
+import init, { open, diff, divergence_curve, verify_receipt, version }
+  from './pkg/ferroscope_wasm.js';
+await init();
+const bundle  = JSON.parse(open(bytesA));            // lanes, energy, receipt, verify
+const verdict = JSON.parse(diff(bytesA, bytesB, 0, 0));  // 0 = default 1e-9 tolerance
+const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
+```
+
+---
+
 ## Install
 
 ```sh
@@ -198,7 +232,7 @@ ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
                    [--abs <f>] [--rel <f>]
 ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
 ferroscope demo    <out.mcap>            write a synthetic run
-                   [--seed <n>] [--drift <step>] [--platform <s>]
+                   [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
 ```
 
 Exit codes are the point of the CLI existing:
@@ -228,6 +262,7 @@ ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-schema    Recorder, schemas, verify().   depends only on the three above.
 ferroscope           The CLI.
+ferroscope-wasm      Browser bindings.              + wasm-bindgen, the project's one dep.
 ```
 
 ### Why reimplement MCAP?
@@ -282,11 +317,10 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-and the five CLI verbs.
+the five CLI verbs, and the in-browser viewer.
 
-**Next, in the open, on the same repository:** the browser viewer (the libraries already compile to
-`wasm32`; the shell does not exist yet), live streaming over WebTransport, a scenario runner that
-executes a spec rather than only describing one, and coupling to
+**Next, in the open, on the same repository:** live streaming over WebTransport, a scenario runner
+that executes a spec rather than only describing one, and coupling to
 [Ferromotion](https://crates.io/crates/ferromotion) so a run can be produced and certified by the
 same stack that renders it.
 

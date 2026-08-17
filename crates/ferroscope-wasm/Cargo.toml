@@ -1,0 +1,25 @@
+[package]
+name = "ferroscope-wasm"
+description = "Ferroscope in the browser: open a recording, verify its receipt, and diff two runs, entirely client-side. No server, no upload, no account."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["wasm", "robotics", "mcap", "viewer", "determinism"]
+categories = ["wasm", "science::robotics", "visualization"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The one dependency in the project, and it is the binding layer rather than the work:
+# everything below `wasm_bindgen` is the same zero-dependency code the CLI runs.
+[dependencies]
+wasm-bindgen = "0.2"
+ferroscope-schema = { workspace = true }
+ferroscope-receipt = { workspace = true }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]

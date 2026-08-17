@@ -28,6 +28,20 @@ jobs:
       - run: >
           cargo build --target wasm32-unknown-unknown
           -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
+          -p ferroscope-wasm
+
+  viewer:
+    # The committed wasm bundle must still be the one this source produces, so a visitor never
+    # loads a stale build of a since-changed comparator.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - run: ./viewer/build.sh
+      - name: the committed bundle matches the source
+        run: git diff --stat --exit-code -- viewer/pkg/ferroscope_wasm.js
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

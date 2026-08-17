@@ -14,11 +14,10 @@
 use std::process::ExitCode;
 
 mod demo;
-mod export;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{compare, digests_agree, Tolerance, Verdict};
-use ferroscope_schema::{mcap, trace_from, verify};
+use ferroscope_schema::{bundle, mcap, trace_from, verify};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,13 +71,15 @@ USAGE
                      [--abs <f>] [--rel <f>]
   ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
   ferroscope demo    <out.mcap>            write a synthetic run
+                     [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
 
 EXIT CODES
   0  the answer is yes
   1  the answer is no (verify failed, runs diverged)
   2  the tool could not answer (bad file, bad arguments)
 
-Recordings are plain MCAP. Anything here also opens in any other MCAP viewer.
+Recordings are plain MCAP. They also open in any other MCAP viewer, and in the browser
+viewer at https://ferroscope.physicalai-bmi.org/viewer (no upload, no account).
 {home}",
         v = env!("CARGO_PKG_VERSION"),
         home = env!("CARGO_PKG_HOMEPAGE"),
@@ -339,7 +340,7 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
 
 fn cmd_export(path: &str, out: &str) -> Result<bool, String> {
     let bytes = slurp(path)?;
-    let bundle = export::bundle(&bytes).ok_or_else(|| format!("cannot read {path}"))?;
+    let bundle = bundle(&bytes).ok_or_else(|| format!("cannot read {path}"))?;
     std::fs::write(out, &bundle).map_err(|e| format!("cannot write {out}: {e}"))?;
     println!("wrote {out} ({} bytes)", bundle.len());
     Ok(true)

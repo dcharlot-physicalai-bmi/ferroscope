@@ -37,6 +37,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut seed = 42u64;
     let mut drift_at: Option<u64> = None;
     let mut platform = default_platform();
+    let mut steps = 1_000u64;
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -56,6 +57,13 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
                 );
                 i += 2;
             }
+            "--steps" => {
+                steps = flags
+                    .get(i + 1)
+                    .and_then(|s| s.parse().ok())
+                    .ok_or("--steps needs a number")?;
+                i += 2;
+            }
             "--platform" => {
                 platform = flags
                     .get(i + 1)
@@ -67,7 +75,6 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
         }
     }
 
-    const STEPS: u64 = 1_000;
     const DT_NS: u64 = 1_000_000; // 1 kHz control
 
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
@@ -84,7 +91,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
     let g = -9.80665;
     let rest = 0.32; // uncompressed leg length
 
-    for step in 0..STEPS {
+    for step in 0..steps {
         let sim_ns = step * DT_NS;
         // Wall time runs a little behind sim and jitters, the way a real loop does. This is
         // the drift the third clock exists to expose.
@@ -192,7 +199,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
 
     let spec = RunSpec::new("hopper-1leg", seed)
         .dt_ns(DT_NS)
-        .steps(STEPS)
+        .steps(steps)
         .integrator("semi-implicit-euler")
         .solver("penalty-contact")
         .asset("hopper.urdf", "demo-fixture")

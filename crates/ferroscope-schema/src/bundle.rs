@@ -1,18 +1,21 @@
-//! `ferroscope export` — turn a recording into the bundle the browser viewer reads.
+//! **The viewer bundle** — a recording flattened into the lanes a viewer draws.
 //!
-//! The viewer could parse MCAP directly (`ferroscope-mcap` compiles to `wasm32` for exactly
-//! that reason), and for a live session it does. This path exists for the other case: a
-//! *page* that has to show a real run to somebody who has not installed anything, over a CDN,
-//! with no worker and no wasm fetch. Same numbers, one file, cacheable.
+//! One function, two callers. `ferroscope export` writes it to a file for a page that has to
+//! show a real run over a CDN with no wasm fetch at all; `ferroscope-wasm` calls the same
+//! function inside the browser on bytes the reader just dropped onto the page. Both paths
+//! produce identical numbers because there is only one implementation of them.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use ferroscope_schema::{json::Obj, mcap, verify, RECEIPT_BLOCK};
+use crate::json::Obj;
+use crate::{mcap, verify, RECEIPT_BLOCK};
 
 /// Series longer than this are strided down. A 1080 px lane cannot show more.
 const MAX_POINTS: usize = 4_000;
 
+/// Flatten a recording into the viewer bundle. `None` when the bytes are not a readable
+/// MCAP file or a payload will not parse.
 pub fn bundle(bytes: &[u8]) -> Option<String> {
     let log = mcap::read(bytes).ok()?;
     let v = verify(bytes);
@@ -32,7 +35,7 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
             .unwrap_or("");
         *counts.entry(ch.topic.clone()).or_default() += 1;
 
-        let val = ferroscope_schema::json::parse(std::str::from_utf8(&m.data).ok()?)?;
+        let val = crate::json::parse(std::str::from_utf8(&m.data).ok()?)?;
         let t = m.log_time as f64 * 1e-9;
         let num = |k: &str| val.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
         let arr = |k: &str| -> Vec<f64> {
@@ -205,7 +208,7 @@ fn write_series<const N: usize>(out: &mut String, rows: &[[f64; N]]) {
             if j > 0 {
                 out.push(',');
             }
-            ferroscope_schema::json::write_number(out, round6(*x));
+            crate::json::write_number(out, round6(*x));
         }
         out.push(']');
     }
@@ -218,7 +221,7 @@ fn write_map<const N: usize>(out: &mut String, m: &BTreeMap<String, Vec<[f64; N]
         if i > 0 {
             out.push(',');
         }
-        ferroscope_schema::json::write_string(out, k);
+        crate::json::write_string(out, k);
         out.push(':');
         write_series(out, &stride(v));
     }

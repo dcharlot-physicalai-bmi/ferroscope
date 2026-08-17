@@ -6,6 +6,7 @@ members = [
     "crates/ferroscope-ledger",
     "crates/ferroscope-receipt",
     "crates/ferroscope",
+    "crates/ferroscope-wasm",
 ]
 
 [workspace.package]
