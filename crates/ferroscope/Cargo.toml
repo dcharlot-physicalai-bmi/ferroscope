@@ -1,0 +1,22 @@
+[package]
+name = "ferroscope"
+description = "The open interface layer for physical AI: inspect, verify, and compare robot recordings — determinism receipts and a joules axis, in one dependency-free Rust CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "mcap", "observability", "determinism", "energy"]
+categories = ["science::robotics", "command-line-utilities", "visualization"]
+
+[dependencies]
+ferroscope-mcap = { workspace = true }
+ferroscope-schema = { workspace = true }
+ferroscope-ledger = { workspace = true }
+ferroscope-receipt = { workspace = true }
+
+[[bin]]
+name = "ferroscope"
+path = "src/main.rs"

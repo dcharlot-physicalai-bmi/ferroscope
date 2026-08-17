@@ -1,0 +1,17 @@
+[package]
+name = "ferroscope-schema"
+description = "The Ferroscope recording model: three-clock timestamps, entity paths, well-known JSON schemas any MCAP viewer can already render, and a recorder that seals each run with its own receipt."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "mcap", "schema", "telemetry", "observability"]
+categories = ["science::robotics", "encoding", "simulation"]
+
+[dependencies]
+ferroscope-mcap = { workspace = true }
+ferroscope-ledger = { workspace = true }
+ferroscope-receipt = { workspace = true }

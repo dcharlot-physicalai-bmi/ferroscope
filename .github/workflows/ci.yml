@@ -1,0 +1,62 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  wasm:
+    # The claim on the tin: the four libraries build for the browser unchanged. A claim that
+    # is not in CI is a claim that has already stopped being true somewhere.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - run: >
+          cargo build --target wasm32-unknown-unknown
+          -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
+
+  no-deps:
+    # The other claim on the tin. `cargo tree` for each core crate must list the crate and
+    # nothing else; a transitive dependency that arrives by accident fails the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: core crates have no runtime dependencies
+        run: |
+          for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt; do
+            n=$(cargo tree -p $c --edges normal --prefix none | grep -v '^$' | sort -u | wc -l)
+            echo "$c: $n crate(s) in the runtime graph"
+            [ "$n" -eq 1 ] || { cargo tree -p $c --edges normal; exit 1; }
+          done
+
+  end-to-end:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: a run verifies, a drifted replay is located
+        run: |
+          B=target/release/ferroscope
+          $B demo a.mcap
+          $B demo b.mcap --platform "ci-linux"
+          $B demo c.mcap --platform "ci-linux" --drift 320
+          $B verify a.mcap
+          $B energy a.mcap
+          $B diff a.mcap b.mcap                 # exit 0: same spec, two platforms, one answer
+          ! $B diff a.mcap c.mcap               # exit 1: located divergence

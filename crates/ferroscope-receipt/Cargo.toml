@@ -1,0 +1,15 @@
+[package]
+name = "ferroscope-receipt"
+description = "Determinism receipts for physics runs: a canonical run digest, a tunable-precision trace digest, and a comparator that names the step a replay diverged at."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["determinism", "reproducibility", "robotics", "simulation", "sha256"]
+categories = ["science::robotics", "cryptography", "simulation"]
+
+# std only. A receipt whose verification needs a dependency tree is a receipt nobody checks.
+[dependencies]

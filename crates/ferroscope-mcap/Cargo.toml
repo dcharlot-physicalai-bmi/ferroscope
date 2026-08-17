@@ -1,0 +1,23 @@
+[package]
+name = "ferroscope-mcap"
+description = "MCAP v0 reader and writer with zero runtime dependencies — pure std, no C, builds for wasm32 unchanged."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["mcap", "robotics", "logging", "wasm", "no-deps"]
+categories = ["science::robotics", "encoding", "wasm"]
+
+# No runtime dependencies, on purpose. The reference `mcap` crate pulls zstd and lz4
+# (C libraries) for compression it always links even when a file is uncompressed, which
+# is what keeps robotics log tooling off wasm32. Uncompressed chunks are a conforming
+# MCAP profile and every reader must handle them, so this crate writes those and stays
+# std-only. The reference implementation appears below as a *dev*-dependency, where it
+# belongs: it is the oracle the round-trip tests check this writer against.
+[dependencies]
+
+[dev-dependencies]
+mcap = "0.25"

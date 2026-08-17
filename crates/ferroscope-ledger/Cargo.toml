@@ -1,0 +1,15 @@
+[package]
+name = "ferroscope-ledger"
+description = "Energy accounting for embodied runs: E_task = E_compute + E_actuation, integrated from measured power with an explicit refusal when the sampling cannot support the number."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["energy", "joules", "robotics", "measurement", "telemetry"]
+categories = ["science::robotics", "science", "simulation"]
+
+# std only.
+[dependencies]
