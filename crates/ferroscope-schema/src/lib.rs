@@ -316,6 +316,7 @@ pub struct Recorder<W: Write> {
     w: Writer<W>,
     schema_ids: BTreeMap<&'static str, u16>,
     channel_ids: BTreeMap<String, u16>,
+    channel_schema: BTreeMap<String, &'static str>,
     seq: BTreeMap<u16, u32>,
     ledger: Ledger,
     digest: TraceDigest,
@@ -336,6 +337,7 @@ impl<W: Write> Recorder<W> {
             ),
             schema_ids: BTreeMap::new(),
             channel_ids: BTreeMap::new(),
+            channel_schema: BTreeMap::new(),
             seq: BTreeMap::new(),
             ledger: Ledger::new(),
             digest: TraceDigest::new(precision),
@@ -372,11 +374,23 @@ impl<W: Write> Recorder<W> {
         schema_text: &str,
     ) -> ferroscope_mcap::Result<u16> {
         if let Some(id) = self.channel_ids.get(topic) {
+            // One channel is one schema. Reusing a topic for a second type would write payloads
+            // a reader decodes with the wrong shape, and it would do so silently, which is how
+            // a URDF recording ended up with transforms on geometry channels.
+            let existing = self.channel_schema.get(topic).copied().unwrap_or("");
+            if existing != schema_name {
+                return Err(ferroscope_mcap::Error::SchemaConflict {
+                    topic: topic.to_string(),
+                    existing: existing.to_string(),
+                    requested: schema_name.to_string(),
+                });
+            }
             return Ok(*id);
         }
         let sid = self.schema(schema_name, schema_text)?;
         let id = self.w.add_channel(topic, sid, "json", &[])?;
         self.channel_ids.insert(topic.to_string(), id);
+        self.channel_schema.insert(topic.to_string(), schema_name);
         Ok(id)
     }
 

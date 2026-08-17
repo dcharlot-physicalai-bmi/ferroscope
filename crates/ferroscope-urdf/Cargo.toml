@@ -1,0 +1,18 @@
+[package]
+name = "ferroscope-urdf"
+description = "Read a URDF and turn it into a Ferroscope scene: one drawable per visual, one transform per link from forward kinematics. Zero dependencies beyond Ferroscope."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["urdf", "robotics", "kinematics", "xml", "visualization"]
+categories = ["science::robotics", "parser-implementations", "visualization"]
+
+# The XML dialect URDF uses is small enough to read directly, and a robot description is not
+# worth an XML stack.
+[dependencies]
+ferroscope-mcap = { workspace = true }
+ferroscope-schema = { workspace = true }

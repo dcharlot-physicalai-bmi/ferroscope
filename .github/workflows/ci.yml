@@ -55,6 +55,30 @@ jobs:
               | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[1]["id"])')
           $H compare "$A" "$B"                   # same spec, same body: must reproduce
 
+  urdf:
+    # Point the verb at the shipped description and check that what comes out is a scene: one
+    # visual channel per link, one transform channel per link, and a receipt that verifies.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: a URDF becomes a verified recording
+        run: |
+          B=target/release/ferroscope
+          $B urdf examples/robots/arm.urdf arm.mcap --steps 120
+          $B verify arm.mcap
+          $B inspect arm.mcap | tee /tmp/arm.txt
+          for link in base shoulder_link upper_arm forearm gripper; do
+            grep -q "/scene/visual/$link" /tmp/arm.txt || { echo "no visual for $link"; exit 1; }
+            grep -q "/scene/tf/$link" /tmp/arm.txt || { echo "no transform for $link"; exit 1; }
+          done
+          # Every geometry channel must carry the Geometry schema and every tf channel Transform.
+          # This is the bug that shipped once: transforms written onto geometry channels.
+          grep '/scene/visual/' /tmp/arm.txt | grep -qv 'ferroscope.Geometry' && exit 1
+          grep '/scene/tf/'     /tmp/arm.txt | grep -qv 'ferroscope.Transform' && exit 1
+          echo "every channel carries the schema its name implies"
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.

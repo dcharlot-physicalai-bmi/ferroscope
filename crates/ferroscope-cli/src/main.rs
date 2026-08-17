@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 mod demo;
 mod glb;
+mod urdf;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{compare, digests_agree, Tolerance, Verdict};
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
         ["diff", a, b, rest @ ..] => run(cmd_diff(a, b, rest)),
         ["export", file, out] => run(cmd_export(file, out)),
         ["demo", out, rest @ ..] => run(demo::write_with(out, rest)),
+        ["urdf", src, out, rest @ ..] => run(urdf::run(src, out, rest)),
         _ => {
             eprintln!("ferroscope: unrecognized arguments: {}", args.join(" "));
             usage();
@@ -73,6 +75,8 @@ USAGE
   ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
+  ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot sweeping its joints
+                     [--steps <n>] [--rate <hz>]
 
 EXIT CODES
   0  the answer is yes

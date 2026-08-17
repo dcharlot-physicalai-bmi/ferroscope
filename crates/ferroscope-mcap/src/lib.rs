@@ -146,6 +146,13 @@ pub enum Error {
     IdSpaceExhausted,
     /// A message referenced a channel that was never declared.
     UnknownChannel(u16),
+    /// One topic was used for two different schemas. An MCAP channel carries exactly one
+    /// schema, so this would have written payloads a reader decodes with the wrong shape.
+    SchemaConflict {
+        topic: String,
+        existing: String,
+        requested: String,
+    },
     Io(std::io::Error),
 }
 
@@ -180,6 +187,15 @@ impl fmt::Display for Error {
             Error::BadUtf8 { offset } => write!(f, "invalid UTF-8 in string at byte {offset}"),
             Error::IdSpaceExhausted => write!(f, "more than 65535 schemas or channels"),
             Error::UnknownChannel(id) => write!(f, "message references undeclared channel {id}"),
+            Error::SchemaConflict {
+                topic,
+                existing,
+                requested,
+            } => write!(
+                f,
+                "topic {topic:?} already carries schema {existing}; it cannot also carry \
+                 {requested}. One channel is one schema: use a second topic."
+            ),
             Error::Io(e) => write!(f, "io: {e}"),
         }
     }

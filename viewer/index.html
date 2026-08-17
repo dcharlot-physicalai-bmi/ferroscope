@@ -157,7 +157,8 @@
     <div class="slot" id="slotB"><b>B</b>
       <label><input type="file" id="fileB" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmB">compare with…</span></label>
     </div>
-    <button id="demoBtn" type="button">demo</button>
+    <button id="demoBtn" type="button" title="A one-legged hopper with a glTF body">hopper</button>
+    <button id="armBtn" type="button" title="A robot arm built from its own URDF">arm</button>
   </div>
   <span class="grow"></span>
   <nav>
@@ -179,7 +180,7 @@
   <section class="pane" id="paneScene">
     <h2>3D
       <span class="tools">
-        <button id="btnGhost" type="button" aria-pressed="true" title="Ghost copies of the machine at earlier times">ghosts</button>
+        <button id="btnGhost" type="button" aria-pressed="false" title="Ghost copies of the machine at earlier times">ghosts</button>
         <button id="btnPath" type="button" aria-pressed="true" title="The path travelled so far">path</button>
         <button id="btnGrid" type="button" aria-pressed="true">grid</button>
         <button id="btnMeasure" type="button" aria-pressed="false" title="Click two points on the machine to measure between them (m)">measure</button>
@@ -196,6 +197,7 @@
         <div class="row">
           <button id="demoBtn2" type="button">Load the demo run</button>
           <button id="demoBtn3" type="button">Load both and compare</button>
+          <button id="armBtn2" type="button">Load the URDF arm</button>
         </div>
         <p style="font-size:12px">Drag a <code>.mcap</code> anywhere on this window. Nothing is uploaded: turn your network off and it still works.</p>
       </div>
@@ -248,7 +250,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const S = {
   A:null, B:null, bundle:null, div:null, verdict:null,
   t:0, span:[0,1], playing:false, raf:0, last:0, speed:1,
-  lanes:[], hidden:new Set(), ghosts:true, path:true, grid:true,
+  lanes:[], hidden:new Set(), ghosts:false, path:true, grid:true,
   measuring:false, marks:[],
 };
 
@@ -267,7 +269,7 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 let renderer=null, scene=null, camera=null, controls=null, backend='—', envFailed=false;
 const G = { parts:new Map(), ghosts:[], path:null, contacts:null, grid:null };
-const GHOST_LAYERS = 5;
+const GHOST_LAYERS = 3;
 const GLTF = new GLTFLoader();
 // Meshes are cached by attachment name: a recording that reuses one mesh across ten links
 // parses it once.
@@ -469,7 +471,7 @@ function syncScene(){
       rec.ghosts = [];
       if(g.shape !== 'plane' && g.shape !== 'lines'){
         for(let k=0;k<GHOST_LAYERS;k++){
-          const gm = MATS.make([0.8,0.7,0.4], 0.10 + 0.055*k);
+          const gm = MATS.make([0.8,0.7,0.4], 0.12 + 0.07*k);
           const m = new THREE.Mesh(rec.mesh.geometry, gm);
           m.visible = false;
           scene.add(m);
@@ -496,7 +498,7 @@ function syncScene(){
 
     const dur = (S.span[1]-S.span[0])||1;
     rec.ghosts?.forEach((gh, k) => {
-      const tt = S.t - dur*0.42*((GHOST_LAYERS-k)/GHOST_LAYERS);
+      const tt = S.t - dur*0.12*((GHOST_LAYERS-k)/GHOST_LAYERS);
       const p2 = (S.ghosts && !hidden && tt >= S.span[0]) ? placed(g, tt) : null;
       gh.mesh.visible = !!p2;
       if(p2){
@@ -1035,6 +1037,8 @@ async function loadDemo(slot, name){
   }
 }
 el('demoBtn').addEventListener('click', () => loadDemo('A','a.mcap'));
+el('armBtn').addEventListener('click', () => loadDemo('A','arm.mcap'));
+el('armBtn2').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('demoBtn2').addEventListener('click', () => loadDemo('A','a.mcap'));
 el('demoBtn3').addEventListener('click', async () => {
   await loadDemo('A','a.mcap'); await loadDemo('B','c.mcap');

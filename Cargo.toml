@@ -7,6 +7,7 @@ members = [
     "crates/ferroscope-receipt",
     "crates/ferroscope-cli",
     "crates/ferroscope-run",
+    "crates/ferroscope-urdf",
     "crates/ferroscope-wasm",
 ]
 
@@ -22,11 +23,12 @@ keywords = ["robotics", "mcap", "observability", "simulation", "energy"]
 categories = ["science::robotics", "visualization", "wasm"]
 
 [workspace.dependencies]
-ferroscope-mcap = { version = "0.1.1", path = "crates/ferroscope-mcap" }
-ferroscope-schema = { version = "0.1.3", path = "crates/ferroscope-schema" }
+ferroscope-mcap = { version = "0.1.2", path = "crates/ferroscope-mcap" }
+ferroscope-schema = { version = "0.1.4", path = "crates/ferroscope-schema" }
 ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
 ferroscope-receipt = { version = "0.1.0", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
+ferroscope-urdf = { version = "0.1.0", path = "crates/ferroscope-urdf" }
 
 [profile.release]
 opt-level = 3

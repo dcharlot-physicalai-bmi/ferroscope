@@ -264,3 +264,69 @@ fn the_three_clocks_are_all_recoverable() {
     let v = json::parse(std::str::from_utf8(&m.data).unwrap()).unwrap();
     assert_eq!(v.get("step").unwrap().as_f64(), Some(10.0));
 }
+
+#[test]
+fn one_topic_cannot_carry_two_schemas() {
+    // This is not hypothetical. The URDF exporter wrote geometry and transforms to the same
+    // `/scene/<link>` topic, and every transform landed on a geometry-schema'd channel where a
+    // reader would decode it with the wrong shape. Nothing stopped it, so now something does.
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    let t = Stamp::sim(0, 0);
+    rec.transform(
+        "/scene/link",
+        t,
+        "world",
+        "link",
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let err = rec
+        .geometry(
+            "/scene/link",
+            t,
+            &ferroscope_schema::Geometry::boxed("world", "link", [1.0; 3]),
+        )
+        .unwrap_err();
+    // And the message says how to fix it, not just that something is wrong.
+    assert!(format!("{err}").contains("use a second topic"), "{err}");
+    match &err {
+        ferroscope_mcap::Error::SchemaConflict {
+            topic,
+            existing,
+            requested,
+        } => {
+            assert_eq!(topic, "/scene/link");
+            assert_eq!(existing, "ferroscope.Transform");
+            assert_eq!(requested, "ferroscope.Geometry");
+        }
+        other => panic!("expected a schema conflict, got {other}"),
+    }
+}
+
+#[test]
+fn the_same_schema_on_one_topic_is_still_fine() {
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    for step in 0..3u64 {
+        let t = Stamp::sim(step, step);
+        rec.transform(
+            "/scene/link",
+            t,
+            "world",
+            "link",
+            [0.0, 0.0, step as f64],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
+    }
+    let (bytes, _, _) = rec
+        .seal(ferroscope_receipt::RunSpec::new("s", 0), "test")
+        .unwrap();
+    assert_eq!(
+        mcap::read(&bytes)
+            .unwrap()
+            .messages_on("/scene/link")
+            .count(),
+        3
+    );
+}

@@ -249,6 +249,53 @@ file, on your machine, in milliseconds.
 
 ---
 
+## Point it at your robot
+
+```sh
+ferroscope urdf my_robot.urdf run.mcap --steps 400
+```
+
+That reads *your* description, declares one drawable per `<visual>`, sweeps every movable joint
+through its declared limits, runs forward kinematics per step, and writes a recording with a
+receipt. Then open it in the viewer and your robot is there, because the file says what your robot
+is.
+
+```text
+$ ferroscope urdf examples/robots/arm.urdf arm.mcap --steps 400
+  robot        bench_arm
+  root link    base
+  links        5 (7 visuals)
+  joints       4 total, 4 movable
+
+wrote arm.mcap (854445 bytes)
+  spec digest  f9ecf5286aabbd…
+  energy       14.48 J estimated (21.5 % compute)
+```
+
+`ferroscope-urdf` is its own crate and has **no dependencies beyond Ferroscope**, including no XML
+library: the dialect URDF uses is elements, attributes and comments, and a robot description is not
+worth an XML stack. Boxes, cylinders, spheres and meshes; fixed-axis `rpy` origins; fixed, revolute,
+continuous and prismatic joints; `<material><color>` for colour, with a palette per link when a
+material is absent.
+
+It is strict where being loose would cost you later. **Joint limits are enforced, not advisory.**
+A broken kinematic tree is named rather than half-drawn: a joint pointing at an undeclared link
+says which link, two roots say which links, and a cycle says so. A joint type it does not model
+(`floating`, `planar`) is held fixed and **reported in `notes`** rather than dropped. A `<mesh>`
+keeps its `filename` so an attachment under that name draws it, and the CLI tells you when a mesh
+is referenced and not attached, instead of leaving a hole in the scene for you to find.
+
+```rust
+let robot = Robot::parse(&std::fs::read_to_string("arm.urdf")?)?;
+robot.declare(&mut rec, t0, "/scene")?;                 // visuals, once
+for step in 0..steps {
+    let t = Stamp::sim(step * dt, step);
+    robot.log_pose(&mut rec, t, &joint_positions, "/scene")?;   // link transforms, per step
+}
+```
+
+---
+
 ## The viewer: WebGPU 3D in a tab
 
 Live: **[ferroscope.physicalai-bmi.org/viewer](https://ferroscope.physicalai-bmi.org/viewer)**
@@ -381,6 +428,8 @@ ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
 ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
 ferroscope demo    <out.mcap>            write a synthetic run
                    [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
+ferroscope urdf    <robot.urdf> <out.mcap>   record YOUR robot from its description
+                   [--steps <n>] [--rate <hz>]
 ```
 
 Exit codes are the point of the CLI existing:
@@ -412,6 +461,7 @@ ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-schema    Recorder, schemas, verify().   depends only on the three above.
 ferroscope-run       Scenarios, cases, suites,      native only: it reads clocks and
                      verdicts, local history.       writes files, and says so.
+ferroscope-urdf      URDF to scene, plus FK.        0 external deps, wasm-clean.
 ferroscope-cli       The CLI (binary: `ferroscope`).
 ferroscope-wasm      Browser bindings.              + wasm-bindgen.
 viewer/              The WebGPU workspace.          + three.js, vendored, not a CDN.
@@ -455,6 +505,9 @@ Everything above is a test, and the tests are the negative cases:
 | `nan_never_hashes_into_a_match_silently` | a diverged run passing because both sides went NaN |
 | `a_hole_in_the_telemetry_is_refused_not_smoothed` | an energy number quoted from gappy sampling |
 | `viability_cost_is_undefined_without_a_success` | a policy that never succeeds looking merely expensive |
+| `one_topic_cannot_carry_two_schemas` | a channel carrying payloads a reader decodes with the wrong shape. The URDF exporter did exactly this, writing transforms onto geometry channels, and nothing stopped it |
+| `a_broken_tree_is_named_rather_than_half_drawn` | a URDF whose joints point at links that do not exist, or that has two roots |
+| `joint_limits_are_enforced_rather_than_advisory` | a commanded angle past a limit quietly being obeyed |
 | `a_recording_opens_in_a_viewer_that_never_heard_of_ferroscope` | schema drift breaking third-party viewers |
 
 ```sh
@@ -469,9 +522,9 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-the five CLI verbs, the in-browser viewer, and the scenario harness with its six verbs.
+the CLI's seven verbs, the in-browser viewer, the scenario harness, and URDF import.
 
-**Next, in the open, on the same repository:** live streaming over WebTransport, a scenario runner
+**Next, in the open, on the same repository:** live streaming over WebTransport, collision geometry and inertial frames from URDF, a scenario runner
 that executes a spec rather than only describing one, and coupling to
 [Ferromotion](https://crates.io/crates/ferromotion) so a run can be produced and certified by the
 same stack that renders it.
