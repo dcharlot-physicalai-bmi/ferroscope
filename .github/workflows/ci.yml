@@ -64,6 +64,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
+      - name: the package is ferroscope-cli, the binary is ferroscope
+        run: test -x target/release/ferroscope
       - name: a run verifies, a drifted replay is located
         run: |
           B=target/release/ferroscope

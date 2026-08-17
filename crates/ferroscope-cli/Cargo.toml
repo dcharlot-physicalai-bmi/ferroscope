@@ -1,7 +1,10 @@
 [package]
 name = "ferroscope-cli"
 description = "The Ferroscope CLI: inspect, verify and compare robot recordings. Determinism receipts and a joules axis, installed as the `ferroscope` binary."
-version.workspace = true
+# 0.1.1, while the libraries stay at 0.1.0: 0.1.0 of this crate installed a binary called
+# `ferroscope-cli`, because an unanchored rename of `name = "ferroscope"` hit the [[bin]] name
+# as well as the package name. The libraries were never affected and are not being churned.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,6 +20,8 @@ ferroscope-schema = { workspace = true }
 ferroscope-ledger = { workspace = true }
 ferroscope-receipt = { workspace = true }
 
+# The package is `ferroscope-cli`; the binary is `ferroscope`. CI's end-to-end job runs
+# `target/release/ferroscope`, so this line has a test.
 [[bin]]
-name = "ferroscope-cli"
+name = "ferroscope"
 path = "src/main.rs"

@@ -177,7 +177,7 @@ const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
 ## Install
 
 ```sh
-cargo install ferroscope-cli      # installs the `ferroscope` binary
+cargo install ferroscope-cli      # installs a binary called `ferroscope`
 ```
 
 > The bare name `ferroscope` on crates.io belongs to an unrelated Rust debugger, published in
