@@ -142,6 +142,116 @@ pub struct Contact {
     pub penetration_m: f64,
 }
 
+/// A drawable primitive. A viewer draws what the recording declares, rather than guessing a
+/// robot's shape from its transforms, which is the difference between a 3-D panel that shows the
+/// machine and one that shows an axis triad.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// `size` is the full extent in x, y, z.
+    Box,
+    /// `size[0]` is the radius.
+    Sphere,
+    /// `size[0]` is the radius, `size[2]` the length along local z.
+    Cylinder,
+    /// An x-y plane of `size[0]` by `size[1]`, for a ground or a table.
+    Plane,
+    /// A polyline through `points`, in the parent frame.
+    Lines,
+}
+
+impl Shape {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Shape::Box => "box",
+            Shape::Sphere => "sphere",
+            Shape::Cylinder => "cylinder",
+            Shape::Plane => "plane",
+            Shape::Lines => "lines",
+        }
+    }
+}
+
+/// One drawable, attached to a frame.
+///
+/// Log it once for static scenery and it persists; log it again on the same `(frame, id)` to move
+/// or recolour it. `color` is deliberately **excluded from the trace digest**: a rendering choice
+/// must never be able to change a determinism verdict, the same rule that keeps log lines out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Geometry {
+    /// The frame this hangs off, matching a [`Transform`]'s `child`, or `world`.
+    pub frame: String,
+    /// Stable within the frame, so a later sample replaces this one instead of adding to it.
+    pub id: String,
+    pub shape: Shape,
+    pub size: [f64; 3],
+    /// Pose within the parent frame.
+    pub translation: [f64; 3],
+    /// `[x, y, z, w]`.
+    pub rotation: [f64; 4],
+    /// `[r, g, b, a]`, each 0 to 1.
+    pub color: [f64; 4],
+    /// Only for [`Shape::Lines`].
+    pub points: Vec<[f64; 3]>,
+}
+
+impl Geometry {
+    /// A box at the origin of its frame.
+    pub fn boxed(frame: &str, id: &str, size: [f64; 3]) -> Geometry {
+        Geometry {
+            frame: frame.into(),
+            id: id.into(),
+            shape: Shape::Box,
+            size,
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            color: [0.81, 0.67, 0.36, 1.0],
+            points: Vec::new(),
+        }
+    }
+    pub fn sphere(frame: &str, id: &str, radius: f64) -> Geometry {
+        Geometry {
+            shape: Shape::Sphere,
+            size: [radius, radius, radius],
+            ..Geometry::boxed(frame, id, [radius; 3])
+        }
+    }
+    pub fn cylinder(frame: &str, id: &str, radius: f64, length: f64) -> Geometry {
+        Geometry {
+            shape: Shape::Cylinder,
+            size: [radius, radius, length],
+            ..Geometry::boxed(frame, id, [radius, radius, length])
+        }
+    }
+    pub fn plane(frame: &str, id: &str, x: f64, y: f64) -> Geometry {
+        Geometry {
+            shape: Shape::Plane,
+            size: [x, y, 0.0],
+            color: [0.14, 0.19, 0.34, 1.0],
+            ..Geometry::boxed(frame, id, [x, y, 0.0])
+        }
+    }
+    pub fn lines(frame: &str, id: &str, points: Vec<[f64; 3]>) -> Geometry {
+        Geometry {
+            shape: Shape::Lines,
+            points,
+            color: [0.27, 0.78, 0.69, 1.0],
+            ..Geometry::boxed(frame, id, [0.0; 3])
+        }
+    }
+    pub fn at(mut self, translation: [f64; 3]) -> Geometry {
+        self.translation = translation;
+        self
+    }
+    pub fn oriented(mut self, rotation: [f64; 4]) -> Geometry {
+        self.rotation = rotation;
+        self
+    }
+    pub fn colored(mut self, color: [f64; 4]) -> Geometry {
+        self.color = color;
+        self
+    }
+}
+
 /// Instantaneous power on one named source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnergySample {
@@ -163,6 +273,8 @@ pub mod schemas {
     pub const CONTACT: &str = r#"{"type":"object","title":"ferroscope.Contact","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"body_a":{"type":"string"},"body_b":{"type":"string"},"point":{"type":"array","items":{"type":"number"}},"normal":{"type":"array","items":{"type":"number"}},"force_n":{"type":"number"},"penetration_m":{"type":"number"}}}"#;
 
     pub const ENERGY_SAMPLE: &str = r#"{"type":"object","title":"ferroscope.EnergySample","description":"Instantaneous power on one named source. rail is one of compute|actuation|overhead so a viewer can total E_task = E_compute + E_actuation without being told which topic means what.","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"rail":{"type":"string","enum":["compute","actuation","overhead"]},"source":{"type":"string"},"watts":{"type":"number"}},"required":["rail","source","watts"]}"#;
+
+    pub const GEOMETRY: &str = r#"{"type":"object","title":"ferroscope.Geometry","description":"One drawable primitive attached to a frame. Log once for static scenery; log again on the same (frame,id) to move it. color is excluded from the run's trace digest because a rendering choice must not change a determinism verdict.","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"frame":{"type":"string"},"id":{"type":"string"},"shape":{"type":"string","enum":["box","sphere","cylinder","plane","lines"]},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"color":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["frame","id","shape"]}"#;
 
     pub const SCALAR: &str = r#"{"type":"object","title":"ferroscope.Scalar","properties":{"sim_ns":{"type":"integer"},"wall_ns":{"type":"integer"},"step":{"type":"integer"},"value":{"type":"number"},"unit":{"type":"string"}},"required":["value"]}"#;
 
@@ -331,6 +443,46 @@ impl<W: Write> Recorder<W> {
         v.extend_from_slice(&c.normal);
         v.push(c.force_n);
         v.push(c.penetration_m);
+        self.emit(cid, t, &payload, &v, topic)
+    }
+
+    /// A drawable. Static scenery is one call before the loop; a moving part is one call per
+    /// step on the same `(frame, id)`.
+    pub fn geometry(&mut self, topic: &str, t: Stamp, g: &Geometry) -> ferroscope_mcap::Result<()> {
+        let cid = self.channel(topic, "ferroscope.Geometry", schemas::GEOMETRY)?;
+        let mut pts = String::from("[");
+        for (i, p) in g.points.iter().enumerate() {
+            if i > 0 {
+                pts.push(',');
+            }
+            pts.push('[');
+            for (j, x) in p.iter().enumerate() {
+                if j > 0 {
+                    pts.push(',');
+                }
+                json::write_number(&mut pts, *x);
+            }
+            pts.push(']');
+        }
+        pts.push(']');
+        let payload = stamp_obj(t)
+            .str("frame", &g.frame)
+            .str("id", &g.id)
+            .str("shape", g.shape.as_str())
+            .nums("size", &g.size)
+            .nums("translation", &g.translation)
+            .nums("rotation", &g.rotation)
+            .nums("color", &g.color)
+            .raw("points", &pts)
+            .finish();
+        // The digest sees the geometry that could change a physical conclusion, and not the
+        // colour it was drawn in.
+        let mut v = g.size.to_vec();
+        v.extend_from_slice(&g.translation);
+        v.extend_from_slice(&g.rotation);
+        for p in &g.points {
+            v.extend_from_slice(p);
+        }
         self.emit(cid, t, &payload, &v, topic)
     }
 
@@ -556,6 +708,19 @@ fn digest_values(schema: &str, v: &json::Value) -> Vec<f64> {
             out.extend(arr("normal"));
             out.extend(one("force_n"));
             out.extend(one("penetration_m"));
+            out
+        }
+        "ferroscope.Geometry" => {
+            let mut out = arr("size");
+            out.extend(arr("translation"));
+            out.extend(arr("rotation"));
+            if let Some(json::Value::Arr(pts)) = v.get("points") {
+                for p in pts {
+                    if let Some(a) = p.as_array() {
+                        out.extend(a.iter().filter_map(|e| e.as_f64()));
+                    }
+                }
+            }
             out
         }
         "ferroscope.EnergySample" => one("watts"),

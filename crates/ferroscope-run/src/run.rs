@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ferroscope_ledger::{Quote, Rail};
 use ferroscope_schema::json::Value;
-use ferroscope_schema::{Contact, JointState, Recorder, Stamp};
+use ferroscope_schema::{Contact, Geometry, JointState, Recorder, Stamp};
 
 /// One named criterion and its verdict.
 ///
@@ -316,6 +316,13 @@ impl Run {
 
     pub fn joints(&mut self, topic: &str, t: Stamp, js: &JointState) {
         let _ = self.rec.joints(topic, t, js);
+    }
+
+    /// Declare a drawable. Call it once before the loop for static scenery, or once per step on
+    /// the same `(frame, id)` for a moving part. This is what makes the 3-D panel show the
+    /// machine rather than an axis triad.
+    pub fn geometry(&mut self, topic: &str, t: Stamp, g: &Geometry) {
+        let _ = self.rec.geometry(topic, t, g);
     }
 
     pub fn contact(&mut self, topic: &str, t: Stamp, c: &Contact) {

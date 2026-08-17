@@ -3,551 +3,876 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ferroscope · open a robot recording in your browser</title>
-<meta name="description" content="Open an MCAP recording, verify its determinism receipt, read its energy ledger, and diff two runs. Entirely client-side: nothing is uploaded, and it works with the network off.">
+<title>Ferroscope Viewer</title>
+<meta name="description" content="A 3D viewer for robot recordings that runs entirely in your browser. Orbit the scene, scrub the timeline, read the determinism receipt and the joule ledger, and diff two runs. Nothing is uploaded.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%CE%A6%3C/text%3E%3C/svg%3E">
 <style>
-  :root{ --bg:#0b1024; --panel:#0e1630; --panel2:#080d1e; --line:#243157; --ink:#eef1f8; --dim:#8aa0bd;
-         --gold:#cfaa5b; --teal:#46c6b0; --violet:#9d8cff; --red:#ff6a6a;
-         --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace; --sans:"Inter",system-ui,-apple-system,sans-serif; }
+  :root{
+    --bg:#0b1024; --panel:#0e1630; --sunk:#070c1a; --line:#243157; --line2:#182242;
+    --ink:#eef1f8; --dim:#8aa0bd; --gold:#cfaa5b; --teal:#46c6b0; --violet:#9d8cff; --red:#ff6a6a;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace; --sans:"Inter",system-ui,-apple-system,sans-serif;
+    --hdr:46px; --bar:40px;
+  }
   *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
-  a{color:var(--gold)} a:hover{text-decoration:underline}
-  #wrap{max-width:1180px;margin:0 auto;padding:0 20px 70px}
-  header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
-         padding:16px 0 12px;border-bottom:1px solid var(--line)}
-  .brand{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  button{font-family:var(--mono);font-size:11.5px;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+  button:hover{border-color:var(--gold);color:var(--gold)}
+  button[aria-pressed=true]{border-color:var(--gold);color:var(--gold);background:rgba(207,170,91,.14)}
+  button:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible{
+    outline:2px solid var(--gold);outline-offset:2px}
+  a{color:var(--gold)}
+  code{font-family:var(--mono)}
+
+  #app{display:grid;height:100%;grid-template-rows:var(--hdr) auto auto 1fr var(--bar)}
+  header{display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--line);
+    background:var(--panel);min-width:0}
+  .brand{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim);white-space:nowrap}
   .brand b{color:var(--gold)}
-  header nav a{font-family:var(--mono);font-size:12px;color:var(--dim);margin-left:16px;text-decoration:none}
-  h1{font-size:26px;font-weight:650;letter-spacing:-.015em;margin:26px 0 8px}
-  h1 .thin{color:var(--dim);font-weight:400}
-  .lede{color:var(--dim);font-size:15px;line-height:1.6;max-width:70ch;margin:0 0 20px}
-  .lede b{color:var(--ink)}
-
-  .slots{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 18px}
-  @media (max-width:820px){ .slots{grid-template-columns:1fr} }
-  .slot{background:var(--panel);border:1px dashed var(--line);border-radius:11px;padding:16px 18px;
-        min-height:96px;display:flex;flex-direction:column;gap:7px;transition:border-color .15s,background .15s}
-  .slot.over{border-color:var(--gold);background:rgba(207,170,91,.08)}
+  header .grow{flex:1;min-width:0}
+  .files{display:flex;gap:8px;align-items:center;min-width:0}
+  .slot{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--dim);
+    border:1px dashed var(--line);border-radius:6px;padding:4px 8px;max-width:30vw;min-width:0}
   .slot.loaded{border-style:solid}
-  .slot .tag{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold)}
-  .slot .name{font-family:var(--mono);font-size:13px;color:var(--ink);word-break:break-all}
-  .slot .hint{font-size:12.5px;color:var(--dim);line-height:1.5}
-  .slot .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  button,.filebtn{font-family:var(--mono);font-size:12px;padding:7px 13px;border-radius:7px;
-        border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
-  button:hover,.filebtn:hover{border-color:var(--gold);color:var(--gold)}
-  button:disabled{opacity:.45;cursor:default}
-  button.primary{border-color:var(--gold);color:var(--gold);background:rgba(207,170,91,.12)}
+  .slot.over{border-color:var(--gold);background:rgba(207,170,91,.1)}
+  .slot .nm{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .slot b{color:var(--gold)}
   input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
-  input[type=file]:focus-visible + .filebtn{outline:2px solid var(--gold);outline-offset:2px}
+  header nav a{font-family:var(--mono);font-size:11px;color:var(--dim);text-decoration:none;margin-left:12px}
+  header nav a:hover{color:var(--gold)}
 
-  #err{display:none;margin:0 0 18px;padding:12px 16px;border:1px solid var(--red);border-radius:9px;
-       background:rgba(255,106,106,.1);color:var(--ink);font-family:var(--mono);font-size:12.5px;line-height:1.6}
+  #dock{display:grid;min-height:0;grid-template-columns:230px 6px 1fr 6px 300px;
+    grid-template-rows:1fr 6px 34%}
+  .pane{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:6px;
+    display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+  .pane>h2{margin:0;padding:7px 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--gold);font-weight:600;border-bottom:1px solid var(--line2);
+    display:flex;justify-content:space-between;align-items:center;gap:8px;flex:none}
+  .pane>h2 .tools{display:flex;gap:5px;flex-wrap:wrap}
+  .pane>h2 button{padding:2px 7px;font-size:10px}
+  .body{flex:1;min-height:0;overflow:auto}
+  .body.flush{overflow:hidden;position:relative}
+  .vsplit{cursor:col-resize} .hsplit{cursor:row-resize;grid-column:1/-1}
+  .vsplit:hover,.hsplit:hover,.vsplit:focus-visible,.hsplit:focus-visible{background:rgba(207,170,91,.3)}
 
-  #stage{display:none}
-  .top{display:grid;grid-template-columns:1fr 320px;gap:14px;margin-bottom:12px}
-  @media (max-width:900px){ .top{grid-template-columns:1fr} }
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 16px}
-  .card h2{margin:0 0 10px;font-family:var(--mono);font-size:11px;letter-spacing:.14em;
-           text-transform:uppercase;color:var(--gold);font-weight:600}
-  .scene{background:var(--panel2);border:1px solid var(--line);border-radius:11px;overflow:hidden;position:relative}
-  .scene canvas{display:block;max-width:100%}
-  .scene .cap{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .kv{font-family:var(--mono);font-size:11.5px;line-height:1.7}
-  .kv div{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid rgba(36,49,87,.55)}
-  .kv .k{color:var(--dim)} .kv .v{color:var(--ink);text-align:right;word-break:break-all}
+  #paneTopics{grid-column:1;grid-row:1}
+  #vs1{grid-column:2;grid-row:1}
+  #paneScene{grid-column:3;grid-row:1}
+  #vs2{grid-column:4;grid-row:1}
+  #paneInspect{grid-column:5;grid-row:1}
+  #hs1{grid-row:2}
+  #panePlots{grid-column:1/-1;grid-row:3}
+
+  @media (max-width:1000px){
+    #app{grid-template-rows:var(--hdr) auto auto 1fr var(--bar)}
+    #dock{grid-template-columns:1fr !important;
+      grid-template-rows:minmax(260px,44vh) auto auto auto !important;overflow-y:auto}
+    #paneScene{grid-column:1;grid-row:1}
+    #panePlots{grid-column:1;grid-row:2}
+    #paneTopics{grid-column:1;grid-row:3;max-height:40vh}
+    #paneInspect{grid-column:1;grid-row:4;max-height:60vh}
+    .vsplit,.hsplit{display:none}
+  }
+
+  #paneScene .body{background:var(--sunk)}
+  #gl{display:block;width:100%;height:100%;touch-action:none}
+  .hud{position:absolute;left:10px;top:8px;font-family:var(--mono);font-size:10.5px;color:var(--dim);
+    pointer-events:none;line-height:1.6;text-shadow:0 1px 3px #000}
+  .hud b{color:var(--ink)}
+  .axkey{position:absolute;right:10px;top:8px;font-family:var(--mono);font-size:10.5px;line-height:1.6;
+    pointer-events:none;text-align:right;text-shadow:0 1px 3px #000;color:var(--dim)}
+  .axkey .x{color:#ff8a8a} .axkey .y{color:#8ae89a} .axkey .z{color:#8ec4ff}
+  .nogl{padding:18px;font-size:13px;color:var(--dim);line-height:1.6}
+
+  .tree{font-family:var(--mono);font-size:11px;padding-bottom:8px}
+  .tree .row{display:flex;align-items:center;gap:6px;padding:3px 10px;color:var(--dim)}
+  .tree .row:hover{background:rgba(36,49,87,.4)}
+  .tree .row.head{color:var(--gold);letter-spacing:.1em;text-transform:uppercase;font-size:10px;padding-top:10px}
+  .tree .row .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+  .tree .row .c{color:var(--dim);font-size:10px;white-space:nowrap}
+  .tree input{accent-color:#cfaa5b;margin:0}
+  .sw{width:9px;height:9px;border-radius:2px;flex:none;border:1px solid rgba(0,0,0,.4)}
+
+  .kv{font-family:var(--mono);font-size:11px;line-height:1.6;padding:2px 10px 12px}
+  .kv .r{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid var(--line2)}
+  .kv .k{color:var(--dim);white-space:nowrap} .kv .v{color:var(--ink);text-align:right;word-break:break-all}
   .kv .good{color:var(--teal)} .kv .bad{color:var(--red)} .kv .warn{color:var(--gold)}
-  .verdict{font-family:var(--mono);font-size:12.5px;line-height:1.65;padding:11px 13px;border-radius:8px;margin:0 0 12px}
-  .verdict.good{border:1px solid var(--teal);background:rgba(70,198,176,.1)}
-  .verdict.bad{border:1px solid var(--red);background:rgba(255,106,106,.1)}
-  .verdict.neutral{border:1px solid var(--line);background:var(--panel2)}
-  .verdict b{color:var(--ink)}
+  .kv h3{margin:12px 0 4px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
 
-  .lanes{display:grid;gap:9px;margin-top:12px}
-  .lane h3{margin:0 0 3px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
-           color:var(--dim);font-weight:600;display:flex;justify-content:space-between;gap:10px}
+  #plots{display:flex;flex-direction:column;gap:5px;padding:5px 8px 10px}
+  .lane h3{margin:0 0 2px;font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;display:flex;justify-content:space-between;gap:8px}
   .lane h3 em{font-style:normal;color:var(--ink)}
-  .lane canvas{display:block;width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px}
-  .ctrls{display:flex;align-items:center;gap:12px;margin-top:13px;flex-wrap:wrap}
-  .ctrls input[type=range]{flex:1;min-width:170px;accent-color:#cfaa5b}
-  .ctrls label{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  #readout{font-family:var(--mono);font-size:11.5px;color:var(--ink);min-width:150px}
-  .scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .scrollx:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
-  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px;min-width:340px}
-  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid rgba(36,49,87,.55)}
-  th{color:var(--gold);font-weight:600} td{color:var(--dim)} td b{color:var(--ink)}
-  td.num{text-align:right;color:var(--ink)}
-  .note{color:var(--dim);font-size:12.5px;line-height:1.6;margin:14px 0 0;max-width:74ch}
-  footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);
-         font-family:var(--mono);font-size:11.5px;color:var(--dim)}
-  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .lane canvas{display:block;width:100%;background:var(--sunk);border:1px solid var(--line2);border-radius:5px}
+
+  footer{display:flex;align-items:center;gap:10px;padding:0 12px;border-top:1px solid var(--line);
+    background:var(--panel);min-width:0}
+  footer input[type=range]{flex:1;min-width:80px;accent-color:#cfaa5b}
+  footer .t{font-family:var(--mono);font-size:11px;color:var(--ink);white-space:nowrap}
+  footer .lab{font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap}
+  select{font-family:var(--mono);font-size:11px;background:var(--sunk);color:var(--ink);
+    border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+
+  #strip{font-family:var(--mono);font-size:11px;padding:6px 12px;border-bottom:1px solid var(--line);
+    display:none;line-height:1.5}
+  #strip.bad{background:rgba(255,106,106,.12);border-bottom-color:var(--red)}
+  #strip.good{background:rgba(70,198,176,.1);border-bottom-color:var(--teal)}
+  #strip b{color:var(--ink)}
+  #err{display:none;margin:6px 12px;padding:9px 12px;border:1px solid var(--red);border-radius:7px;
+    background:rgba(255,106,106,.1);font-family:var(--mono);font-size:11.5px;line-height:1.55}
+  #empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;text-align:center;padding:24px;color:var(--dim);background:var(--sunk)}
+  #empty h2{margin:0;font-size:19px;color:var(--ink);font-weight:620;letter-spacing:-.01em}
+  #empty p{margin:0;font-size:13.5px;line-height:1.6;max-width:54ch}
+  #empty .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 </style>
+<script type="importmap">
+{"imports":{
+  "three": "./vendor/three/three.webgpu.min.js",
+  "three/webgpu": "./vendor/three/three.webgpu.min.js",
+  "three/tsl": "./vendor/three/three.tsl.min.js",
+  "three/addons/": "./vendor/three/addons/"
+}}
+</script>
 </head>
 <body>
-<div id="wrap">
+<div id="app">
+
 <header>
   <span class="brand"><b>Φ</b> FERROSCOPE <span id="ver"></span></span>
+  <div class="files">
+    <div class="slot" id="slotA"><b>A</b>
+      <label><input type="file" id="fileA" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmA">open a .mcap</span></label>
+    </div>
+    <div class="slot" id="slotB"><b>B</b>
+      <label><input type="file" id="fileB" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmB">compare with…</span></label>
+    </div>
+    <button id="demoBtn" type="button">demo</button>
+  </div>
+  <span class="grow"></span>
   <nav>
-    <a href="https://ferroscope.physicalai-bmi.org/">About</a>
-    <a href="https://github.com/dcharlot-physicalai-bmi/ferroscope">GitHub</a>
-    <a href="https://physicalai-bmi.org/">Institute</a>
+    <a href="https://ferroscope.physicalai-bmi.org/">about</a>
+    <a href="https://github.com/dcharlot-physicalai-bmi/ferroscope">github</a>
   </nav>
 </header>
 
-<h1>Open a recording. <span class="thin">Nothing leaves this tab.</span></h1>
-<p class="lede">The MCAP parser, the SHA-256, the energy ledger and the replay comparator are all Rust compiled to WebAssembly and running <b>here, in your browser</b>. Drop a recording in slot A to read it. Drop a second one in slot B to find out whether it reproduced the first, and if it did not, <b>at which step it stopped</b>. Turn your network off first if you would like to check that claim.</p>
-
-<div class="slots">
-  <div class="slot" id="slotA" data-slot="A">
-    <span class="tag">Slot A · the run</span>
-    <div class="row">
-      <label><input type="file" id="fileA" accept=".mcap,application/octet-stream"><span class="filebtn" tabindex="0" role="button">Choose a .mcap file</span></label>
-      <button id="demoBtn" type="button">Load the demo run</button>
-    </div>
-    <span class="hint" id="hintA">Or drag a file onto this panel.</span>
-  </div>
-  <div class="slot" id="slotB" data-slot="B">
-    <span class="tag">Slot B · the replay to compare</span>
-    <div class="row">
-      <label><input type="file" id="fileB" accept=".mcap,application/octet-stream"><span class="filebtn" tabindex="0" role="button">Choose a .mcap file</span></label>
-      <button id="demoBtnB" type="button">Load the drifted demo</button>
-    </div>
-    <span class="hint" id="hintB">Optional. With both slots filled, the comparison runs automatically.</span>
-  </div>
-</div>
-
+<div id="strip" role="status"></div>
 <div id="err" role="alert"></div>
 
-<div id="stage">
-  <div id="cmp"></div>
+<div id="dock">
+  <section class="pane" id="paneTopics">
+    <h2>Scene tree</h2>
+    <div class="body"><div class="tree" id="tree"></div></div>
+  </section>
+  <div class="vsplit" id="vs1" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the scene tree"></div>
 
-  <div class="top">
-    <div class="scene">
-      <canvas id="scene" width="820" height="380" role="img" aria-label="Isometric view of the recorded pose trail, with the current frame marked."></canvas>
-      <span class="cap" id="sceneCap"></span>
-    </div>
-    <div>
-      <div class="card" style="margin-bottom:12px">
-        <h2>Receipt</h2>
-        <div class="kv" id="receipt"></div>
+  <section class="pane" id="paneScene">
+    <h2>3D
+      <span class="tools">
+        <button id="btnGhost" type="button" aria-pressed="true" title="Ghost copies of the machine at earlier times">ghosts</button>
+        <button id="btnPath" type="button" aria-pressed="true" title="The path travelled so far">path</button>
+        <button id="btnGrid" type="button" aria-pressed="true">grid</button>
+        <button id="btnFit" type="button" title="Frame the whole scene (f)">fit</button>
+      </span>
+    </h2>
+    <div class="body flush">
+      <canvas id="gl" role="img" aria-label="Three-dimensional view of the recorded scene. Drag to orbit, right-drag or two-finger drag to pan, wheel or pinch to zoom." tabindex="0"></canvas>
+      <div class="hud" id="hud"></div>
+      <div class="axkey"><span class="x">x</span> · <span class="y">y</span> · <span class="z">z up</span><br><span id="camhud"></span></div>
+      <div id="empty">
+        <h2>Open a recording.</h2>
+        <p>The MCAP parser, the SHA-256, the energy ledger and the replay comparator are WebAssembly running <b>in this tab</b>. Drop a second file on <b>B</b> and it reports whether the replay reproduced the first, and at which step it stopped.</p>
+        <div class="row">
+          <button id="demoBtn2" type="button">Load the demo run</button>
+          <button id="demoBtn3" type="button">Load both and compare</button>
+        </div>
+        <p style="font-size:12px">Drag a <code>.mcap</code> anywhere on this window. Nothing is uploaded: turn your network off and it still works.</p>
       </div>
-      <div class="card">
-        <h2>Energy ledger</h2>
-        <div class="kv" id="energy"></div>
-      </div>
     </div>
-  </div>
+  </section>
+  <div class="vsplit" id="vs2" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the inspector"></div>
 
-  <div class="lanes" id="lanes"></div>
+  <section class="pane" id="paneInspect">
+    <h2>Inspector</h2>
+    <div class="body"><div class="kv" id="inspect"></div></div>
+  </section>
 
-  <div class="ctrls">
-    <button id="play" type="button">▶ Play</button>
-    <label for="scrub">Timeline</label>
-    <input id="scrub" type="range" min="0" max="100" value="0" step="1" aria-describedby="readout">
-    <span id="readout" aria-live="off"></span>
-  </div>
+  <div class="hsplit" id="hs1" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the plots panel"></div>
 
-  <div class="card" style="margin-top:14px">
-    <h2>Topics</h2>
-    <div class="scrollx" tabindex="0" role="region" aria-label="Topics table, scrollable">
-    <table id="topics"><thead><tr><th>Topic</th><th>Schema</th><th style="text-align:right">Messages</th></tr></thead><tbody></tbody></table>
-    </div>
-  </div>
-
-  <p class="note" id="note"></p>
+  <section class="pane" id="panePlots">
+    <h2>Plots <span class="tools"><span class="lab" id="lanecount" style="font-family:var(--mono);font-size:10px;color:var(--dim)"></span></span></h2>
+    <div class="body"><div id="plots"></div></div>
+  </section>
 </div>
 
 <footer>
-  Φ Institute for Physical AI · Bailey Military Institute ·
-  <a href="https://ferroscope.physicalai-bmi.org/">ferroscope.physicalai-bmi.org</a> ·
-  MIT OR Apache-2.0
+  <button id="play" type="button" aria-label="Play or pause" aria-pressed="false">▶</button>
+  <span class="lab">t</span>
+  <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Timeline position" aria-describedby="tread">
+  <span class="t" id="tread">—</span>
+  <span class="lab">speed</span>
+  <select id="speed" aria-label="Playback speed">
+    <option value="0.25">0.25x</option><option value="1" selected>1x</option>
+    <option value="4">4x</option><option value="16">16x</option>
+  </select>
 </footer>
+
 </div>
 
 <script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Line2 } from 'three/addons/lines/webgpu/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import init, { open as fsOpen, diff as fsDiff, divergence_curve, version }
   from './pkg/ferroscope_wasm.js';
 
-const GOLD='#cfaa5b', TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a', DIM='#8aa0bd', LINE='#243157';
-const RAIL_COLOR = { actuation: 'rgba(207,170,91,.55)', compute: 'rgba(70,198,176,.65)', overhead: 'rgba(157,140,255,.6)' };
-
+const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
+const RAIL = { actuation:[.81,.67,.36], compute:[.27,.78,.69], overhead:[.62,.55,1] };
 const el = id => document.getElementById(id);
-const state = { A: null, B: null, bundle: null, lanes: [], idx: 0, n: 0, playing: false, timer: null, div: null };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const S = {
+  A:null, B:null, bundle:null, div:null, verdict:null,
+  t:0, span:[0,1], playing:false, raf:0, last:0, speed:1,
+  lanes:[], hidden:new Set(), ghosts:true, path:true, grid:true,
+};
 
 await init();
 el('ver').textContent = 'v' + version();
 
-// ---------------------------------------------------------------- file intake
+/* ---------------- three.js on WebGPU ----------------
+   A real renderer rather than a hand-rolled one: OrbitControls for CAD-style navigation,
+   physically-based materials, a shadow-casting sun, and instanced contact markers. The
+   WebGPU backend is used when the browser has it and falls back to WebGL2 when it does not,
+   and the HUD says which one is live rather than leaving you to guess.                     */
 
-function fail(msg) {
-  const box = el('err');
-  box.textContent = msg;
-  box.style.display = 'block';
+// Robotics is z-up. Setting this before the camera and controls exist makes orbiting,
+// panning and the grid all agree with the data instead of fighting it.
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
+
+let renderer=null, scene=null, camera=null, controls=null, backend='—';
+const G = { parts:new Map(), ghosts:[], path:null, contacts:null, grid:null };
+const GHOST_LAYERS = 5;
+const CONTACT_POOL = 96;
+
+const MATS = {
+  make(col, opacity){
+    const m = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(col[0], col[1], col[2]),
+      roughness: 0.42, metalness: 0.18,
+      transparent: opacity < 1, opacity,
+      depthWrite: opacity >= 1,
+    });
+    return m;
+  },
+};
+
+function shapeGeometry(shape){
+  switch(shape){
+    case 'sphere':   return new THREE.SphereGeometry(0.5, 28, 18);
+    // three's cylinder runs along +Y; the recording's runs along +Z.
+    case 'cylinder': return new THREE.CylinderGeometry(0.5, 0.5, 1, 28, 1).rotateX(Math.PI/2);
+    case 'plane':    return new THREE.PlaneGeometry(1, 1);
+    default:         return new THREE.BoxGeometry(1, 1, 1);
+  }
 }
-function clearFail() { el('err').style.display = 'none'; }
+function shapeScale(shape, sz){
+  if(shape==='sphere')   return [sz[0]*2, sz[0]*2, sz[0]*2];
+  if(shape==='cylinder') return [sz[0]*2, sz[1]*2, sz[2]];
+  if(shape==='plane')    return [sz[0], sz[1], 1];
+  return sz;
+}
 
-async function accept(slot, file) {
+async function initGL(){
+  const canvas = el('gl');
+  try {
+    renderer = new THREE.WebGPURenderer({ canvas, antialias:true, alpha:false });
+    await renderer.init();
+    backend = renderer.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL2';
+  } catch(e){
+    const d = document.createElement('div');
+    d.className = 'nogl';
+    d.textContent = 'This browser could not start a WebGPU or WebGL2 context, so the 3D panel '
+      + 'cannot draw (' + (e.message||e) + '). Every other panel still works, and the CLI reads '
+      + 'the same file.';
+    canvas.replaceWith(d);
+    return false;
+  }
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio||1));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setClearColor(0x070c1a, 1);
+
+  scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x070c1a, 6, 26);
+
+  camera = new THREE.PerspectiveCamera(50, 1, 0.01, 200);
+  camera.position.set(1.1, -1.1, 0.9);
+
+  controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.screenSpacePanning = false;
+  controls.minDistance = 0.08;
+  controls.maxDistance = 60;
+  controls.target.set(0, 0, 0.25);
+  controls.addEventListener('change', requestDraw);
+
+  // Sun plus sky bounce. One shadow-casting light is enough to read depth and contact.
+  const sun = new THREE.DirectionalLight(0xfff2dc, 2.4);
+  sun.position.set(1.6, -1.2, 2.6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  const d = 1.6;
+  Object.assign(sun.shadow.camera, {left:-d, right:d, top:d, bottom:-d, near:0.1, far:8});
+  sun.shadow.bias = -0.0012;
+  scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0x7fa6ff, 0x0b1024, 0.55));
+  scene.add(new THREE.AmbientLight(0x334066, 0.5));
+
+  // Grid: three's helper is XZ, so it is rotated into the robot's XY ground plane.
+  G.grid = new THREE.Group();
+  const fine = new THREE.GridHelper(4, 40, 0x1b2647, 0x121a33);
+  const major = new THREE.GridHelper(4, 8, 0x2b3a63, 0x2b3a63);
+  fine.rotation.x = Math.PI/2; major.rotation.x = Math.PI/2;
+  G.grid.add(fine, major);
+  const axes = new THREE.AxesHelper(0.32);
+  G.grid.add(axes);
+  scene.add(G.grid);
+
+  // The travelled path. A one-pixel line disappears against a lit scene, so this is a Line2
+  // ribbon with a real width, rebuilt when the playhead moves.
+  G.path = new Line2(new LineGeometry(), new THREE.Line2NodeMaterial({
+    color: 0xcfaa5b, linewidth: 3, transparent: true, opacity: 0.9, dashed: false,
+  }));
+  G.path.frustumCulled = false;
+  G.path.visible = false;
+  scene.add(G.path);
+
+  // Contact markers, as one instanced mesh so a thousand contacts cost one draw call.
+  G.contacts = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.5, 14, 10),
+    new THREE.MeshStandardMaterial({color:0xff6a6a, roughness:0.5, emissive:0x3a0a0a}),
+    CONTACT_POOL);
+  G.contacts.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  G.contacts.count = 0;
+  G.contacts.frustumCulled = false;
+  scene.add(G.contacts);
+
+  addEventListener('resize', resizeGL);
+  resizeGL();
+  return true;
+}
+
+function resizeGL(){
+  if(!renderer) return;
+  const c = el('gl');
+  const w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight);
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+  requestDraw();
+}
+
+/* Build or update the meshes for the current time. */
+function syncScene(){
+  if(!renderer || !S.bundle) return;
+  const tmp = new THREE.Object3D();
+
+  for(const g of S.bundle.geometry||[]){
+    const key = g.frame+'/'+g.id;
+    const hidden = S.hidden.has('geo:'+key);
+    let rec = G.parts.get(key);
+    if(!rec){
+      const geo = shapeGeometry(g.shape);
+      if(g.shape === 'lines'){
+        const pts = (g.points||[]).map(p => new THREE.Vector3(p[0],p[1],p[2]));
+        const lg = new THREE.BufferGeometry().setFromPoints(pts.length?pts:[new THREE.Vector3()]);
+        const mesh = new THREE.Line(lg, new THREE.LineBasicMaterial({color:0x46c6b0}));
+        rec = {mesh, mat:mesh.material, shape:'lines'};
+      } else {
+        const mat = MATS.make([0.8,0.7,0.4], 1);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.castShadow = g.shape !== 'plane';
+        mesh.receiveShadow = true;
+        rec = {mesh, mat, shape:g.shape};
+      }
+      scene.add(rec.mesh);
+      // Ghost copies: the fourth dimension, drawn rather than scrubbed for.
+      rec.ghosts = [];
+      if(g.shape !== 'plane' && g.shape !== 'lines'){
+        for(let k=0;k<GHOST_LAYERS;k++){
+          const gm = MATS.make([0.8,0.7,0.4], 0.10 + 0.055*k);
+          const m = new THREE.Mesh(rec.mesh.geometry, gm);
+          m.visible = false;
+          scene.add(m);
+          rec.ghosts.push({mesh:m, mat:gm});
+        }
+      }
+      G.parts.set(key, rec);
+    }
+
+    const pl = placed(g, S.t);
+    rec.mesh.visible = !hidden && !!pl;
+    if(pl){
+      rec.mesh.position.set(pl.t[0], pl.t[1], pl.t[2]);
+      rec.mesh.quaternion.set(pl.q[0], pl.q[1], pl.q[2], pl.q[3]);
+      const sc = shapeScale(g.shape, pl.s);
+      rec.mesh.scale.set(sc[0]||1e-4, sc[1]||1e-4, sc[2]||1e-4);
+      rec.mat.color.setRGB(pl.c[0], pl.c[1], pl.c[2]);
+      if(rec.mat.opacity !== undefined && rec.shape !== 'lines'){
+        rec.mat.opacity = pl.c[3];
+        rec.mat.transparent = pl.c[3] < 1;
+      }
+    }
+
+    const dur = (S.span[1]-S.span[0])||1;
+    rec.ghosts?.forEach((gh, k) => {
+      const tt = S.t - dur*0.42*((GHOST_LAYERS-k)/GHOST_LAYERS);
+      const p2 = (S.ghosts && !hidden && tt >= S.span[0]) ? placed(g, tt) : null;
+      gh.mesh.visible = !!p2;
+      if(p2){
+        gh.mesh.position.set(p2.t[0], p2.t[1], p2.t[2]);
+        gh.mesh.quaternion.set(p2.q[0], p2.q[1], p2.q[2], p2.q[3]);
+        const s2 = shapeScale(g.shape, p2.s);
+        gh.mesh.scale.set(s2[0]||1e-4, s2[1]||1e-4, s2[2]||1e-4);
+        gh.mat.color.setRGB(p2.c[0], p2.c[1], p2.c[2]);
+      }
+    });
+  }
+
+  // Path up to the playhead. Line2 wants a flat array, so it is rebuilt rather than range-drawn;
+  // at a few thousand samples that is cheaper than it sounds and always correct.
+  const rows = Object.values(S.bundle.poses||{})[0] || [];
+  const flat = [];
+  for(const r of rows){ if(r[0] > S.t) break; flat.push(r[1], r[2], r[3]); }
+  if(S.path && flat.length >= 6){
+    G.path.geometry.setPositions(flat);
+    G.path.computeLineDistances?.();
+    G.path.visible = true;
+  } else {
+    G.path.visible = false;
+  }
+  G.grid.visible = S.grid;
+
+  // Contacts inside a short window behind the playhead, sized by force.
+  const cs = S.bundle.contacts||[];
+  let fmax = 1e-9;
+  for(const q of cs) fmax = Math.max(fmax, Math.abs(q[4]));
+  let ci = 0;
+  for(const q of cs){
+    const age = S.t - q[0];
+    if(age < 0 || age > 0.3 || ci >= CONTACT_POOL) continue;
+    const f = Math.abs(q[4])/fmax;
+    const r = (0.014 + 0.03*f) * (1 - 0.5*age/0.3);
+    tmp.position.set(q[1], q[2], q[3]);
+    tmp.scale.setScalar(r*2);
+    tmp.quaternion.identity();
+    tmp.updateMatrix();
+    G.contacts.setMatrixAt(ci++, tmp.matrix);
+  }
+  G.contacts.count = ci;
+  G.contacts.instanceMatrix.needsUpdate = true;
+}
+
+let drawPending = false;
+function requestDraw(){
+  if(drawPending || !renderer) return;
+  drawPending = true;
+  requestAnimationFrame(() => {
+    drawPending = false;
+    controls?.update();
+    syncScene();
+    renderer.render(scene, camera);
+    el('camhud').textContent =
+      `${camera.position.distanceTo(controls.target).toFixed(2)} m · ${backend}`;
+  });
+}
+const drawScene = requestDraw;
+
+/* ---------------- time sampling ---------------- */
+function sampleAt(track, t){
+  if(!track || !track.length) return null;
+  if(track[0][0] > t) return track[0];
+  let lo=0, hi=track.length-1;
+  while(lo<hi){ const m=(lo+hi+1)>>1; if(track[m][0] <= t) lo=m; else hi=m-1; }
+  return track[lo];
+}
+function frameAt(name, t){
+  if(!name || name==='world') return {t:[0,0,0], q:[0,0,0,1]};
+  const r = sampleAt((S.bundle.frames||{})[name], t);
+  return r ? {t:[r[1],r[2],r[3]], q:[r[4],r[5],r[6],r[7]]} : {t:[0,0,0], q:[0,0,0,1]};
+}
+/* Compose a geometry's local pose with its (possibly moving) parent frame. */
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3();
+function placed(g, t){
+  const row = sampleAt(g.track, t); if(!row) return null;
+  const fr = frameAt(g.frame, t);
+  _q.set(fr.q[0], fr.q[1], fr.q[2], fr.q[3]);
+  _v.set(row[1], row[2], row[3]).applyQuaternion(_q);
+  _q2.set(row[4], row[5], row[6], row[7]);
+  const q = _q.clone().multiply(_q2);
+  return {
+    t: [fr.t[0]+_v.x, fr.t[1]+_v.y, fr.t[2]+_v.z],
+    q: [q.x, q.y, q.z, q.w],
+    s: [row[8], row[9], row[10]],
+    c: [row[11], row[12], row[13], row[14]],
+  };
+}
+
+/* ---------------- fit ---------------- */
+function fitView(){
+  if(!controls) return;
+  const box = new THREE.Box3();
+  let any = false;
+  for(const g of S.bundle?.geometry||[]){
+    for(const r of g.track){
+      const fr = frameAt(g.frame, r[0]);
+      _q.set(fr.q[0],fr.q[1],fr.q[2],fr.q[3]);
+      _v.set(r[1],r[2],r[3]).applyQuaternion(_q);
+      box.expandByPoint(new THREE.Vector3(fr.t[0]+_v.x, fr.t[1]+_v.y, fr.t[2]+_v.z));
+      any = true;
+    }
+  }
+  if(!any){ controls.target.set(0,0,0.25); camera.position.set(1.1,-1.1,0.9); controls.update(); return; }
+  const c = box.getCenter(new THREE.Vector3());
+  const r = Math.max(0.26, box.getSize(new THREE.Vector3()).length()*0.46 + 0.16);
+  controls.target.copy(c);
+  const dir = new THREE.Vector3(0.75,-0.75,0.55).normalize();
+  camera.position.copy(c).addScaledVector(dir, r*2.1);
+  controls.update();
+  requestDraw();
+}
+
+/* ---------------- panels ---------------- */
+function paintTree(){
+  const b=S.bundle; if(!b) return;
+  let h = '<div class="row head">Geometry</div>';
+  for(const g of b.geometry||[]){
+    const key='geo:'+g.frame+'/'+g.id, r=g.track[0];
+    const sw=`rgb(${Math.round(r[11]*255)},${Math.round(r[12]*255)},${Math.round(r[13]*255)})`;
+    h += `<div class="row"><input type="checkbox" ${S.hidden.has(key)?'':'checked'} data-k="${esc(key)}"
+            aria-label="Show ${esc(g.id)}"><span class="sw" style="background:${sw}"></span>
+          <span class="n">${esc(g.id)}</span>
+          <span class="c">${esc(g.shape)}${g.track.length>1?' · moving':''}</span></div>`;
+  }
+  h += '<div class="row head">Channels</div>';
+  for(const t of (b.topics||[]).slice().sort((a,c)=>c.count-a.count)){
+    h += `<div class="row"><span class="n" title="${esc(t.schema)}">${esc(t.topic)}</span>
+          <span class="c">${t.count}</span></div>`;
+  }
+  el('tree').innerHTML = h;
+  el('tree').querySelectorAll('input[data-k]').forEach(i => i.addEventListener('change', () => {
+    if(i.checked) S.hidden.delete(i.dataset.k); else S.hidden.add(i.dataset.k);
+    drawScene();
+  }));
+}
+
+const fmt = v => (v===undefined||v===null) ? '' :
+  (Math.abs(v)!==0 && (Math.abs(v)<1e-3||Math.abs(v)>=1e6)) ? v.toExponential(2) : v.toFixed(4);
+
+function paintInspector(){
+  const b=S.bundle; if(!b) return;
+  const row=(k,v,c='')=>`<div class="r"><span class="k">${k}</span><span class="v ${c}">${v}</span></div>`;
+  let h='';
+  if(S.verdict){
+    const v=S.verdict;
+    h += '<h3>Comparison</h3>';
+    h += row('verdict', esc(v.kind), v.kind==='incomparable'?'warn':(v.reproduced?'good':'bad'));
+    if(v.step>=0) h += row('diverged at step', v.step, 'bad');
+    if(v.channel) h += row('channel', esc(v.channel));
+    if(v.abs) h += row('|Δ|', v.abs.toExponential(3), 'bad');
+    h += row('same declared spec', v.same_spec?'yes':'no', v.same_spec?'good':'warn');
+  }
+  const r=b.receipt;
+  h += '<h3>Receipt</h3>';
+  if(r){
+    h += row('scenario', esc(r.scenario)) + row('seed', r.seed) + row('steps', r.steps);
+    h += row('integrator', esc(r.integrator)) + row('precision', esc(r.precision));
+    h += row('platform', esc(r.platform));
+    h += row('spec', esc(r.spec_digest.slice(0,14))+'…');
+    h += row('trace', esc(r.trace_digest.slice(0,14))+'…');
+    h += row('recomputed here', esc(r.recomputed.slice(0,14))+'…',
+             r.trace_digest===r.recomputed?'good':'bad');
+    h += row('non-finite', r.non_finite, r.non_finite?'bad':'');
+    h += row('verify', r.verified?'VERIFIED':'FAILED', r.verified?'good':'bad');
+  } else h += row('receipt','none','warn');
+  const e=b.energy;
+  if(e){
+    h += '<h3>E_task</h3>';
+    h += row('compute', e.compute_j.toFixed(3)+' J');
+    h += row('actuation', e.actuation_j.toFixed(3)+' J');
+    h += row('overhead', e.overhead_j.toFixed(3)+' J');
+    h += row('total', '<b>'+e.total_j.toFixed(3)+' J</b>');
+    h += row('compute share', (e.total_j? (e.compute_j/e.total_j*100).toFixed(1):'0')+' %');
+    h += row('peak', e.peak_w.toFixed(1)+' W · '+esc(e.peak_source));
+    h += row('coverage', esc(e.coverage), e.quotable?'good':'bad');
+  }
+  h += `<h3>At t = ${S.t.toFixed(3)} s</h3>`;
+  for(const [topic,rows] of Object.entries(b.poses||{})){
+    const s=sampleAt(rows,S.t); if(!s) continue;
+    h += row(esc(topic), `${s[1].toFixed(4)} ${s[2].toFixed(4)} ${s[3].toFixed(4)}`);
+  }
+  for(const [name,rows] of Object.entries(b.scalars||{})){
+    const s=sampleAt(rows,S.t); if(!s) continue;
+    h += row(esc(name), fmt(s[1]));
+  }
+  el('inspect').innerHTML = h;
+}
+
+function buildLanes(){
+  const b=S.bundle; S.lanes=[];
+  const pk=Object.keys(b.power||{});
+  if(pk.length) S.lanes.push({kind:'stack', title:'power · W, stacked by rail', keys:pk});
+  for(const [n,rows] of Object.entries(b.scalars||{})) S.lanes.push({kind:'series', title:n, rows, color:TEAL});
+  if((b.lag_ms||[]).length) S.lanes.push({kind:'series', title:'wall − sim · ms', rows:b.lag_ms, color:VIOLET});
+  if(S.div) S.lanes.push({kind:'log', title:`|Δ| vs B on ${S.div.channel} · log`, div:S.div});
+  el('plots').innerHTML = S.lanes.map((l,i) =>
+    `<div class="lane"><h3><span>${esc(l.title)}</span><em id="lv${i}"></em></h3>
+     <canvas id="lc${i}" height="54" role="img" aria-label="${esc(l.title)}"></canvas></div>`).join('');
+  el('lanecount').textContent = S.lanes.length+' lanes';
+}
+function fit2d(c,h){
+  const dpr=Math.max(1,Math.min(2,devicePixelRatio||1));
+  const w=c.clientWidth || c.parentElement.clientWidth || 300;
+  if(c.width!==Math.round(w*dpr) || c.height!==Math.round(h*dpr)){
+    c.style.height=h+'px'; c.width=Math.round(w*dpr); c.height=Math.round(h*dpr);
+  }
+  const x=c.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,w,h);
+  return {x,w,h};
+}
+const xOf=(t,w)=>{ const [a,b]=S.span; return (t-a)/((b-a)||1)*w; };
+function paintLanes(){
+  S.lanes.forEach((l,i) => {
+    const c=el('lc'+i); if(!c) return;
+    const {x,w,h}=fit2d(c,54);
+    let cur='';
+    if(l.kind==='stack'){
+      const series=l.keys.map(k=>S.bundle.power[k]);
+      const n=Math.min(...series.map(s=>s.length));
+      let hi=1e-9;
+      for(let j=0;j<n;j++){ let s=0; for(const a of series) s+=a[j][1]; hi=Math.max(hi,s); }
+      const prev=new Array(n).fill(0);
+      series.forEach((a,si)=>{
+        const rc=RAIL[l.keys[si].split('/')[0]]||[.55,.63,.74];
+        x.beginPath();
+        for(let j=0;j<n;j++){ const px=xOf(a[j][0],w), py=h-(prev[j]+a[j][1])/hi*h; j?x.lineTo(px,py):x.moveTo(px,py); }
+        for(let j=n-1;j>=0;j--) x.lineTo(xOf(a[j][0],w), h-prev[j]/hi*h);
+        x.closePath(); x.fillStyle=`rgba(${rc.map(v=>Math.round(v*255)).join(',')},.62)`; x.fill();
+        for(let j=0;j<n;j++) prev[j]+=a[j][1];
+      });
+      cur = series.reduce((s,a)=>{ const r=sampleAt(a,S.t); return s+(r?r[1]:0); },0).toFixed(1)+' W';
+    } else if(l.kind==='log'){
+      const FLOOR=-14, CEIL=-6, rows=l.div.curve;
+      x.beginPath();
+      rows.forEach((p,j)=>{
+        const px=j/(rows.length-1)*w;
+        const v=p[1]>0?Math.max(FLOOR,Math.log10(p[1])):FLOOR;
+        const py=h-2-(v-FLOOR)/(CEIL-FLOOR)*(h-4);
+        j?x.lineTo(px,py):x.moveTo(px,py);
+      });
+      x.strokeStyle=RED; x.lineWidth=1.4; x.stroke();
+      x.lineTo(w,h); x.lineTo(0,h); x.closePath(); x.fillStyle='rgba(255,106,106,.16)'; x.fill();
+      const onset=rows.findIndex(p=>p[1]>0);
+      if(onset>=0){ const px=onset/(rows.length-1)*w;
+        x.strokeStyle=RED; x.setLineDash([3,3]); x.beginPath();
+        x.moveTo(px+.5,0); x.lineTo(px+.5,h); x.stroke(); x.setLineDash([]); }
+      const idx=Math.min(rows.length-1,
+        Math.round((S.t-S.span[0])/((S.span[1]-S.span[0])||1)*(rows.length-1)));
+      cur = rows[idx] && rows[idx][1]>0 ? rows[idx][1].toExponential(2) : 'identical';
+    } else {
+      const ys=l.rows.map(p=>p[1]);
+      let lo=Math.min(...ys), hi=Math.max(...ys);
+      const sp=(hi-lo)||Math.abs(hi)||1; lo-=sp*.08; hi+=sp*.08;
+      x.beginPath();
+      l.rows.forEach((p,j)=>{ const px=xOf(p[0],w), py=h-2-(p[1]-lo)/(hi-lo)*(h-4);
+        j?x.lineTo(px,py):x.moveTo(px,py); });
+      x.strokeStyle=l.color; x.lineWidth=1.4; x.stroke();
+      const s=sampleAt(l.rows,S.t); cur = s?fmt(s[1]):'';
+    }
+    const px=xOf(S.t,w);
+    x.strokeStyle='rgba(238,241,248,.6)'; x.lineWidth=1;
+    x.beginPath(); x.moveTo(px+.5,0); x.lineTo(px+.5,h); x.stroke();
+    const lab=el('lv'+i); if(lab) lab.textContent=cur;
+  });
+}
+
+function paintHud(){
+  const b=S.bundle; if(!b){ el('hud').textContent=''; return; }
+  const p=Object.entries(b.poses||{})[0];
+  let h='';
+  if(p){ const s=sampleAt(p[1],S.t);
+    if(s) h += `<b>${esc(p[0])}</b> ${s[1].toFixed(4)} ${s[2].toFixed(4)} ${s[3].toFixed(4)} m<br>`; }
+  h += `t <b>${S.t.toFixed(3)}</b> / ${S.span[1].toFixed(3)} s`;
+  const nc=(b.contacts||[]).filter(q=>Math.abs(q[0]-S.t)<0.02).length;
+  if(nc) h += `<br><span style="color:${RED}">${nc} contact${nc>1?'s':''}</span>`;
+  el('hud').innerHTML=h;
+}
+
+/* ---------------- time ---------------- */
+function setT(t){
+  S.t = Math.max(S.span[0], Math.min(S.span[1], t));
+  el('scrub').value = Math.round((S.t-S.span[0])/((S.span[1]-S.span[0])||1)*1000);
+  el('tread').textContent = S.t.toFixed(3)+' s';
+  drawScene(); paintLanes(); paintInspector(); paintHud();
+}
+el('scrub').addEventListener('input', e =>
+  setT(S.span[0] + (+e.target.value/1000)*(S.span[1]-S.span[0])));
+el('speed').addEventListener('change', e => { S.speed = +e.target.value; });
+el('play').addEventListener('click', () => {
+  S.playing = !S.playing;
+  el('play').textContent = S.playing ? '❚❚' : '▶';
+  el('play').setAttribute('aria-pressed', String(S.playing));
+  S.last = performance.now();
+  if(S.playing) S.raf = requestAnimationFrame(tick); else cancelAnimationFrame(S.raf);
+});
+function tick(now){
+  if(!S.playing) return;
+  const dt = Math.min(0.1, (now-S.last)/1000); S.last = now;
+  let t = S.t + dt*S.speed;
+  if(t > S.span[1]) t = S.span[0];
+  setT(t);
+  S.raf = requestAnimationFrame(tick);
+}
+for(const [id,key] of [['btnGhost','ghosts'],['btnPath','path'],['btnGrid','grid']]){
+  el(id).addEventListener('click', () => {
+    S[key] = !S[key];
+    el(id).setAttribute('aria-pressed', String(S[key]));
+    drawScene();
+  });
+}
+el('btnFit').addEventListener('click', () => { fitView(); drawScene(); });
+
+/* ---------------- splitters ---------------- */
+const dockW=[230,300], dockH=[34];
+function applyDock(){
+  if(!matchMedia('(min-width:1001px)').matches) return;
+  const d = el('dock');
+  d.style.gridTemplateColumns = `${dockW[0]}px 6px 1fr 6px ${dockW[1]}px`;
+  d.style.gridTemplateRows = `1fr 6px ${dockH[0]}%`;
+}
+function splitter(id, axis, apply){
+  const s = el(id); if(!s) return;
+  let last=null;
+  s.addEventListener('pointerdown', e => { s.setPointerCapture(e.pointerId); last = axis==='x'?e.clientX:e.clientY; });
+  s.addEventListener('pointermove', e => {
+    if(last===null) return;
+    const v = axis==='x'?e.clientX:e.clientY;
+    apply(v-last); last=v; applyDock(); relayout();
+  });
+  const stop = e => { last=null; try{ s.releasePointerCapture(e.pointerId); }catch(_){} };
+  s.addEventListener('pointerup', stop); s.addEventListener('pointercancel', stop);
+  s.addEventListener('keydown', e => {
+    const d = {ArrowLeft:-24,ArrowRight:24,ArrowUp:-24,ArrowDown:24}[e.key];
+    if(d!==undefined){ e.preventDefault(); apply(d); applyDock(); relayout(); }
+  });
+}
+splitter('vs1','x', d => { dockW[0]=Math.max(150,Math.min(460,dockW[0]+d)); });
+splitter('vs2','x', d => { dockW[1]=Math.max(190,Math.min(520,dockW[1]-d)); });
+splitter('hs1','y', d => { dockH[0]=Math.max(12,Math.min(70,dockH[0]-d/innerHeight*100)); });
+applyDock();
+
+let rt=null;
+function relayout(){ clearTimeout(rt); rt=setTimeout(()=>{ drawScene(); paintLanes(); },40); }
+addEventListener('resize', relayout);
+
+/* ---------------- files ---------------- */
+const fail = m => { const b=el('err'); b.textContent=m; b.style.display='block'; };
+const clearFail = () => { el('err').style.display='none'; };
+
+async function accept(slot, file){
   clearFail();
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (slot === 'A') {
+  if(slot==='A'){
     let json;
-    try { json = fsOpen(bytes); }
-    catch (e) { return fail('Slot A: ' + (e.message || e)); }
-    state.A = { name: file.name, bytes };
-    state.bundle = JSON.parse(json);
+    try { json = fsOpen(bytes); } catch(e){ return fail('A: '+(e.message||e)); }
+    S.A = {name:file.name, bytes};
+    S.bundle = JSON.parse(json);
+    S.span = S.bundle.span || [0,1];
     el('slotA').classList.add('loaded');
-    el('hintA').innerHTML = `<b style="color:var(--ink)">${esc(file.name)}</b> · ${state.bundle.messages.toLocaleString()} messages · ${(bytes.length/1048576).toFixed(2)} MB`;
-    build();
+    el('nmA').textContent = `${file.name} · ${S.bundle.messages.toLocaleString()} msgs`;
+    el('empty').style.display = 'none';
+    fitView(); paintTree(); buildLanes(); setT(S.span[0]);
   } else {
-    state.B = { name: file.name, bytes };
+    S.B = {name:file.name, bytes};
     el('slotB').classList.add('loaded');
-    el('hintB').innerHTML = `<b style="color:var(--ink)">${esc(file.name)}</b> · ${(bytes.length/1048576).toFixed(2)} MB`;
+    el('nmB').textContent = file.name;
   }
   compare();
 }
+function compare(){
+  const strip = el('strip');
+  if(!S.A || !S.B){ strip.style.display='none'; S.div=null; S.verdict=null; return; }
+  let v;
+  try { v = JSON.parse(fsDiff(S.A.bytes, S.B.bytes, 0, 0)); }
+  catch(e){ return fail('comparison: '+(e.message||e)); }
+  S.verdict = v;
+  strip.style.display='block';
+  strip.className = v.kind==='incomparable' ? '' : (v.reproduced ? 'good' : 'bad');
+  let x = `<b>${esc(S.A.name)}</b> vs <b>${esc(S.B.name)}</b>`;
+  if(v.platform_a) x += ` · ${esc(v.platform_a)} vs ${esc(v.platform_b)}`;
+  x += ` · ${esc(v.text)}`;
+  if(v.kind==='diverged' && v.steps) x += ` · agreed for ${(v.step/v.steps*100).toFixed(1)}% of the trajectory`;
+  strip.innerHTML = x;
 
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-for (const s of ['A','B']) {
-  const slot = el('slot'+s);
-  el('file'+s).addEventListener('change', e => { if (e.target.files[0]) accept(s, e.target.files[0]); });
-  // The label's span is the visible control, so it needs its own keyboard activation.
-  slot.querySelector('.filebtn').addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el('file'+s).click(); }
+  const ch = (v.kind==='diverged'||v.kind==='within-tolerance'||v.kind==='non-finite')
+    ? v.channel : Object.keys(S.bundle?.poses||{})[0];
+  S.div = null;
+  if(ch){
+    try {
+      const curve = JSON.parse(divergence_curve(S.A.bytes, S.B.bytes, ch));
+      if(curve.length) S.div = {channel:ch, curve};
+    } catch(e){ /* a channel absent from one run simply has no lane */ }
+  }
+  buildLanes(); paintLanes(); paintInspector();
+}
+for(const s of ['A','B']){
+  el('file'+s).addEventListener('change', e => { if(e.target.files[0]) accept(s, e.target.files[0]); });
+  el('nm'+s).addEventListener('keydown', e => {
+    if(e.key==='Enter'||e.key===' '){ e.preventDefault(); el('file'+s).click(); }
   });
+  const slot = el('slot'+s);
   slot.addEventListener('dragover', e => { e.preventDefault(); slot.classList.add('over'); });
   slot.addEventListener('dragleave', () => slot.classList.remove('over'));
   slot.addEventListener('drop', e => {
     e.preventDefault(); slot.classList.remove('over');
-    if (e.dataTransfer.files[0]) accept(s, e.dataTransfer.files[0]);
+    if(e.dataTransfer.files[0]) accept(s, e.dataTransfer.files[0]);
   });
 }
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if(!f) return;
+  accept(S.A ? 'B' : 'A', f);
+});
 
-async function loadDemo(slot, name) {
+async function loadDemo(slot, name){
   clearFail();
   try {
     const r = await fetch(name);
-    if (!r.ok) throw new Error(`${name} returned HTTP ${r.status}. Generate it with: ferroscope demo ${name}`);
-    const buf = await r.arrayBuffer();
-    await accept(slot, new File([buf], name));
-  } catch (e) {
-    fail('Could not load the demo: ' + (e.message || e) +
-         '  ·  the demo files are produced by `ferroscope demo a.mcap` and `ferroscope demo c.mcap --drift 320`.');
+    if(!r.ok) throw new Error(`${name} returned HTTP ${r.status}`);
+    await accept(slot, new File([await r.arrayBuffer()], name));
+  } catch(e){
+    fail('demo: '+(e.message||e)+
+         '  ·  produce them with `ferroscope demo a.mcap --steps 300` and `... c.mcap --steps 300 --drift 90`.');
   }
 }
-el('demoBtn').addEventListener('click', () => loadDemo('A', 'a.mcap'));
-el('demoBtnB').addEventListener('click', () => loadDemo('B', 'c.mcap'));
-
-// ---------------------------------------------------------------- comparison
-
-function compare() {
-  const box = el('cmp');
-  if (!state.A || !state.B) { box.innerHTML = ''; state.div = null; return; }
-  let v;
-  try { v = JSON.parse(fsDiff(state.A.bytes, state.B.bytes, 0, 0)); }
-  catch (e) { return fail('Comparison failed: ' + (e.message || e)); }
-
-  const cls = v.kind === 'incomparable' ? 'neutral' : (v.reproduced ? 'good' : 'bad');
-  let extra = '';
-  if (v.kind === 'diverged') {
-    const pct = v.steps ? (v.step / v.steps * 100).toFixed(1) : '0.0';
-    extra = `<br>The runs agreed for <b>${pct}%</b> of the trajectory, then did not. ` +
-            `A: <b>${v.a}</b> &nbsp; B: <b>${v.b}</b>`;
-  } else if (v.by_digest) {
-    extra = '<br>Established from the digests alone; no per-step comparison was needed.';
-  }
-  box.innerHTML =
-    `<div class="verdict ${cls}"><b>${esc(state.A.name)}</b> vs <b>${esc(state.B.name)}</b>` +
-    `${v.platform_a ? ` &nbsp;·&nbsp; ${esc(v.platform_a)} vs ${esc(v.platform_b)}` : ''}` +
-    `${v.same_spec ? ' &nbsp;·&nbsp; same declared spec' : ''}<br>${esc(v.text)}${extra}</div>`;
-
-  // Draw the divergence lane on whichever channel the verdict pointed at, or the first
-  // pose channel when the runs agree and there is nothing to point at.
-  const channel = (v.kind === 'diverged' || v.kind === 'within-tolerance' || v.kind === 'non-finite')
-    ? v.channel
-    : Object.keys(state.bundle.poses || {})[0];
-  state.div = null;
-  if (channel) {
-    try {
-      const curve = JSON.parse(divergence_curve(state.A.bytes, state.B.bytes, channel));
-      if (curve.length) state.div = { channel, curve, onset: curve.findIndex(p => p[1] > 0) };
-    } catch (e) { /* a channel absent from one run simply has no lane */ }
-  }
-  build();
-}
-
-// ---------------------------------------------------------------- lanes
-
-function build() {
-  const b = state.bundle;
-  if (!b) return;
-  el('stage').style.display = 'block';
-
-  // Receipt panel
-  const r = b.receipt;
-  el('receipt').innerHTML = r ? [
-    ['scenario', esc(r.scenario)], ['seed', r.seed], ['steps', r.steps],
-    ['integrator', esc(r.integrator)], ['solver', esc(r.solver)],
-    ['precision', esc(r.precision)], ['platform', esc(r.platform)], ['build', esc(r.build)],
-    ['spec digest', esc(r.spec_digest.slice(0,16)) + '…'],
-    ['trace digest', esc(r.trace_digest.slice(0,16)) + '…'],
-    ['recomputed here', `<span class="${r.trace_digest === r.recomputed ? 'good' : 'bad'}">` +
-       esc(r.recomputed.slice(0,16)) + '…</span>'],
-    ['non-finite values', `<span class="${r.non_finite > 0 ? 'bad' : ''}">${r.non_finite}</span>`],
-    ['verify', `<span class="${r.verified ? 'good' : 'bad'}">${r.verified ? 'VERIFIED' : 'FAILED'}</span>`],
-  ].map(([k,v]) => `<div><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')
-   : '<div><span class="k">receipt</span><span class="v warn">none: this recording makes no reproducibility claim</span></div>';
-
-  // Energy panel
-  const e = b.energy;
-  el('energy').innerHTML = e ? [
-    ['E_compute', e.compute_j.toFixed(3) + ' J'],
-    ['E_actuation', e.actuation_j.toFixed(3) + ' J'],
-    ['E_overhead', e.overhead_j.toFixed(3) + ' J'],
-    ['E_task', `<b style="color:var(--ink)">${e.total_j.toFixed(3)} J</b>`],
-    ['compute share', (e.total_j ? (e.compute_j/e.total_j*100).toFixed(1) : '0.0') + ' %'],
-    ['duration', e.duration_s.toFixed(3) + ' s'],
-    ['mean power', e.mean_w.toFixed(2) + ' W'],
-    ['peak', `${e.peak_w.toFixed(2)} W · ${esc(e.peak_source)}`],
-    ['coverage', `<span class="${e.quotable ? 'good' : 'bad'}">${esc(e.coverage)}</span>`],
-  ].map(([k,v]) => `<div><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')
-   : '<div><span class="k">energy</span><span class="v warn">no EnergySample channels in this recording</span></div>';
-
-  // Topics
-  el('topics').querySelector('tbody').innerHTML = (b.topics || [])
-    .slice().sort((x,y) => y.count - x.count)
-    .map(t => `<tr><td><b>${esc(t.topic)}</b></td><td>${esc(t.schema || '(none)')}</td><td class="num">${t.count.toLocaleString()}</td></tr>`)
-    .join('');
-
-  // Lane set: power stack, every scalar, the clock drift, and the divergence lane.
-  state.lanes = [];
-  const powerKeys = Object.keys(b.power || {});
-  if (powerKeys.length) {
-    state.lanes.push({ kind: 'stack', title: 'Power · watts, stacked by rail', keys: powerKeys });
-  }
-  for (const [name, rows] of Object.entries(b.poses || {})) {
-    state.lanes.push({ kind: 'series', title: name + ' · height (z)', rows: rows.map(p => [p[0], p[3]]), color: GOLD, fill: 'rgba(207,170,91,.13)' });
-  }
-  for (const [name, rows] of Object.entries(b.scalars || {})) {
-    state.lanes.push({ kind: 'series', title: name, rows, color: TEAL });
-  }
-  if ((b.lag_ms || []).length) {
-    state.lanes.push({ kind: 'series', title: 'Wall − sim drift · milliseconds', rows: b.lag_ms, color: VIOLET });
-  }
-  if (state.div) {
-    state.lanes.push({ kind: 'log', title: `|Δ| vs slot B on ${state.div.channel} · log scale`, div: state.div });
-  }
-
-  const longest = state.lanes.reduce((m, l) =>
-    Math.max(m, l.kind === 'stack' ? (b.power[l.keys[0]] || []).length
-            : l.kind === 'log' ? l.div.curve.length : l.rows.length), 0);
-  state.n = Math.max(2, longest);
-  const scrub = el('scrub');
-  scrub.max = state.n - 1;
-  if (state.idx > state.n - 1) state.idx = 0;
-  scrub.value = state.idx;
-
-  el('lanes').innerHTML = state.lanes.map((l, i) =>
-    `<div class="lane"><h3><span>${esc(l.title)}</span><em id="lv${i}"></em></h3>` +
-    `<canvas id="lc${i}" height="76" role="img" aria-label="${esc(l.title)}"></canvas></div>`).join('');
-
-  el('note').innerHTML = state.div
-    ? `The divergence lane draws exact zeros on the floor of the log scale, so <b>identical</b> and <b>very slightly different</b> are visibly different states rather than both being "nothing".`
-    : `Drop a second recording into slot B to compare the two runs step by step.`;
-
-  render();
-}
-
-// ---------------------------------------------------------------- drawing
-
-function fit(c, h) {
-  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  const w = c.clientWidth || c.parentElement.clientWidth;
-  const hh = h || Math.round(c.height / (c.width / dpr || w) * w);
-  if (c.width !== Math.round(w*dpr) || c.height !== Math.round(hh*dpr)) {
-    c.style.height = hh + 'px';
-    c.width = Math.round(w*dpr); c.height = Math.round(hh*dpr);
-  }
-  const x = c.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
-  x.clearRect(0,0,w,hh);
-  return { x, w, h: hh };
-}
-
-function drawSeries(g, ys, lo, hi, color, fill) {
-  const { x, w, h } = g, pad = 4;
-  if (ys.length < 2) return;
-  x.beginPath();
-  ys.forEach((v, i) => {
-    const px = i/(ys.length-1)*w;
-    const py = h - pad - (v - lo)/((hi-lo) || 1)*(h - 2*pad);
-    i ? x.lineTo(px, py) : x.moveTo(px, py);
-  });
-  x.strokeStyle = color; x.lineWidth = 1.5; x.stroke();
-  if (fill) { x.lineTo(w,h); x.lineTo(0,h); x.closePath(); x.fillStyle = fill; x.fill(); }
-}
-
-function drawPlayhead(g, i, n) {
-  const px = i/Math.max(1,n-1)*g.w;
-  g.x.strokeStyle = 'rgba(238,241,248,.55)'; g.x.lineWidth = 1;
-  g.x.beginPath(); g.x.moveTo(px+.5, 0); g.x.lineTo(px+.5, g.h); g.x.stroke();
-}
-
-function railOf(key) { return key.split('/')[0]; }
-
-function drawLane(i, l) {
-  const c = el('lc'+i); if (!c) return;
-  const g = fit(c, 76);
-  const b = state.bundle;
-  let cur = '';
-
-  if (l.kind === 'stack') {
-    const series = l.keys.map(k => b.power[k].map(p => p[1]));
-    const n = Math.min(...series.map(s => s.length));
-    let hi = 0;
-    for (let j = 0; j < n; j++) hi = Math.max(hi, series.reduce((s, arr) => s + arr[j], 0));
-    hi = hi || 1;
-    const prev = new Array(n).fill(0);
-    series.forEach((arr, s) => {
-      const { x, w, h } = g;
-      x.beginPath();
-      for (let j = 0; j < n; j++) { const px = j/(n-1)*w, py = h - (prev[j]+arr[j])/hi*h; j ? x.lineTo(px,py) : x.moveTo(px,py); }
-      for (let j = n-1; j >= 0; j--) x.lineTo(j/(n-1)*w, h - prev[j]/hi*h);
-      x.closePath();
-      x.fillStyle = RAIL_COLOR[railOf(l.keys[s])] || 'rgba(138,160,189,.5)';
-      x.fill();
-      for (let j = 0; j < n; j++) prev[j] += arr[j];
-    });
-    const at = Math.min(n-1, Math.round(state.idx/(state.n-1)*(n-1)));
-    cur = series.reduce((s, arr) => s + arr[at], 0).toFixed(1) + ' W';
-    drawPlayhead(g, state.idx, state.n);
-  } else if (l.kind === 'log') {
-    const FLOOR = -14, CEIL = -6;
-    const ys = l.div.curve.map(p => p[1] > 0 ? Math.max(FLOOR, Math.log10(p[1])) : FLOOR);
-    drawSeries(g, ys, FLOOR, CEIL, RED, 'rgba(255,106,106,.16)');
-    if (l.div.onset >= 0) {
-      const px = l.div.onset/Math.max(1, ys.length-1)*g.w;
-      g.x.strokeStyle = RED; g.x.setLineDash([3,3]); g.x.lineWidth = 1;
-      g.x.beginPath(); g.x.moveTo(px+.5,0); g.x.lineTo(px+.5,g.h); g.x.stroke(); g.x.setLineDash([]);
-    }
-    const at = Math.min(ys.length-1, Math.round(state.idx/(state.n-1)*(ys.length-1)));
-    const v = l.div.curve[at] ? l.div.curve[at][1] : 0;
-    cur = v > 0 ? v.toExponential(2) : 'identical';
-    drawPlayhead(g, state.idx, state.n);
-  } else {
-    const ys = l.rows.map(p => p[1]);
-    let lo = Math.min(...ys), hi = Math.max(...ys);
-    const span = (hi - lo) || Math.abs(hi) || 1;
-    lo -= span*0.06; hi += span*0.06;
-    drawSeries(g, ys, lo, hi, l.color, l.fill);
-    const at = Math.min(ys.length-1, Math.round(state.idx/(state.n-1)*(ys.length-1)));
-    cur = fmt(ys[at]);
-    drawPlayhead(g, state.idx, state.n);
-  }
-  const label = el('lv'+i); if (label) label.textContent = cur;
-}
-
-function fmt(v) {
-  if (v === undefined || v === null) return '';
-  const a = Math.abs(v);
-  if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2);
-  return v.toFixed(4);
-}
-
-// An isometric trail of whatever pose channel the recording carries, so the scene works for a
-// hopper, an arm or a drone without knowing anything about the robot.
-function drawScene() {
-  const c = el('scene');
-  const g = fit(c, Math.min(420, Math.max(300, el('scene').parentElement.clientHeight || 380)));
-  const b = state.bundle;
-  const key = Object.keys(b.poses || {})[0];
-  if (!key) {
-    g.x.fillStyle = DIM; g.x.font = '13px ui-monospace,monospace'; g.x.textAlign = 'center';
-    g.x.fillText('no Transform channel in this recording', g.w/2, g.h/2);
-    el('sceneCap').textContent = '';
-    return;
-  }
-  const rows = b.poses[key];
-  const pts = rows.map(p => [p[1], p[2], p[3]]);
-  const iso = ([x,y,z]) => [(x - y)*0.866, z - (x + y)*0.25];
-  const flat = pts.map(iso);
-  const xs = flat.map(p => p[0]), ys = flat.map(p => p[1]);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const pad = 40;
-  // A degenerate axis must be IGNORED, not treated as unit scale. A vertical hop has zero
-  // extent in x, and substituting 1 there clamped the whole trail to 0.08 px tall.
-  const sx = (x1 - x0) > 1e-9 ? (g.w - 2*pad)/(x1 - x0) : Infinity;
-  const sy = (y1 - y0) > 1e-9 ? (g.h - 2*pad)/(y1 - y0) : Infinity;
-  const s = Math.min(sx, sy) === Infinity ? 1 : Math.min(sx, sy);
-  const px = p => pad + (p[0] - x0)*s + (g.w - 2*pad - (x1-x0)*s)/2;
-  const py = p => g.h - pad - (p[1] - y0)*s - (g.h - 2*pad - (y1-y0)*s)/2;
-
-  // World axes through the trail's first sample, so the reader can tell which way is up
-  // whatever the recording contains.
-  const o = pts[0];
-  const axis = (d, color, label) => {
-    const len = Math.max(x1-x0, y1-y0, 1e-6) * 0.28;
-    const a = iso(o), bb = iso([o[0]+d[0]*len, o[1]+d[1]*len, o[2]+d[2]*len]);
-    g.x.beginPath(); g.x.moveTo(px(a), py(a)); g.x.lineTo(px(bb), py(bb));
-    g.x.strokeStyle = color; g.x.lineWidth = 1; g.x.stroke();
-    g.x.fillStyle = color; g.x.font = '10px ui-monospace,monospace'; g.x.textAlign = 'center';
-    g.x.fillText(label, px(bb), py(bb) - 4);
-  };
-  axis([1,0,0], 'rgba(138,160,189,.55)', 'x');
-  axis([0,1,0], 'rgba(138,160,189,.55)', 'y');
-  axis([0,0,1], 'rgba(70,198,176,.6)', 'z');
-
-  // Trail
-  g.x.beginPath();
-  flat.forEach((p, i) => i ? g.x.lineTo(px(p), py(p)) : g.x.moveTo(px(p), py(p)));
-  g.x.strokeStyle = 'rgba(207,170,91,.45)'; g.x.lineWidth = 1.5; g.x.stroke();
-
-  // Contacts, where the recording has them
-  (b.contacts || []).forEach(ct => {
-    const p = iso([ct[1], ct[2], ct[3]]);
-    g.x.beginPath(); g.x.arc(px(p), py(p), 2, 0, Math.PI*2);
-    g.x.fillStyle = 'rgba(255,106,106,.35)'; g.x.fill();
-  });
-
-  // Current frame
-  const at = Math.min(flat.length-1, Math.round(state.idx/(state.n-1)*(flat.length-1)));
-  const p = flat[at];
-  g.x.beginPath(); g.x.arc(px(p), py(p), 6, 0, Math.PI*2);
-  g.x.fillStyle = GOLD; g.x.fill();
-  g.x.beginPath(); g.x.arc(px(p), py(p), 12, 0, Math.PI*2);
-  g.x.strokeStyle = 'rgba(207,170,91,.4)'; g.x.lineWidth = 1; g.x.stroke();
-
-  const q = pts[at];
-  el('sceneCap').textContent =
-    `${key}  ·  x ${q[0].toFixed(4)}  y ${q[1].toFixed(4)}  z ${q[2].toFixed(4)}` +
-    ((b.contacts || []).length ? `  ·  ${b.contacts.length} contacts` : '');
-}
-
-function render() {
-  if (!state.bundle) return;
-  drawScene();
-  state.lanes.forEach((l, i) => drawLane(i, l));
-  const span = state.bundle.span;
-  const frac = state.idx/Math.max(1, state.n-1);
-  const t = span ? span[0] + frac*(span[1]-span[0]) : frac;
-  el('readout').textContent = `t = ${t.toFixed(3)} s   (${state.idx+1}/${state.n})`;
-}
-
-el('scrub').addEventListener('input', e => { state.idx = +e.target.value; render(); });
-el('play').addEventListener('click', function () {
-  state.playing = !state.playing;
-  this.textContent = state.playing ? '❚❚ Pause' : '▶ Play';
-  if (state.playing) {
-    state.timer = setInterval(() => {
-      state.idx = (state.idx + 1) % state.n;
-      el('scrub').value = state.idx;
-      render();
-    }, 40);
-  } else clearInterval(state.timer);
+el('demoBtn').addEventListener('click', () => loadDemo('A','a.mcap'));
+el('demoBtn2').addEventListener('click', () => loadDemo('A','a.mcap'));
+el('demoBtn3').addEventListener('click', async () => {
+  await loadDemo('A','a.mcap'); await loadDemo('B','c.mcap');
 });
-let rt = null;
-window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 90); });
+
+try {
+  await initGL();
+  drawScene();
+} catch(e){
+  fail('the viewer could not start: ' + (e && e.message ? e.message : e));
+  throw e;
+}
 </script>
 </body>
 </html>

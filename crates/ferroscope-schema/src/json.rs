@@ -83,6 +83,11 @@ impl Obj {
         self.s.push_str(v);
         self
     }
+    /// Finish as a parsed [`Value`], for a caller that wants to keep building around it.
+    pub fn finish_value(self) -> Value {
+        parse(&self.finish()).unwrap_or(Value::Null)
+    }
+
     pub fn finish(mut self) -> String {
         self.s.push('}');
         self.s

@@ -249,26 +249,41 @@ file, on your machine, in milliseconds.
 
 ---
 
-## The viewer runs in your tab
+## The viewer: WebGPU 3D in a tab
+
+Live: **[ferroscope.physicalai-bmi.org/viewer](https://ferroscope.physicalai-bmi.org/viewer)**
 
 ```sh
-./viewer/build.sh                              # rebuild the wasm (already committed)
+./viewer/build.sh                               # rebuild the wasm (already committed)
 python3 -m http.server 8080 --directory viewer  # a module import of .wasm needs http, not file
 open http://localhost:8080
 ```
 
-Live: **[ferroscope.physicalai-bmi.org/viewer](https://ferroscope.physicalai-bmi.org/viewer)**
+A dockable workspace with a **three.js WebGPU** viewport, and it says which backend is live rather
+than leaving you to guess (WebGPU where the browser has it, WebGL2 where it does not):
 
-Drop a recording into slot A to read it: topics with schemas and counts, an isometric pose trail
-with contacts, a stacked power lane by rail, every scalar as its own lane, the wall-minus-sim drift,
-and the receipt **with the trace digest recomputed from the bytes you just dropped**. Drop a second
-recording into slot B and it tells you whether the replay reproduced the first, and if not, at which
-step it stopped, plus the log-scale divergence lane.
+- **3D**: orbit, pan and zoom with OrbitControls; a z-up ground grid and world axes, because
+  robotics is z-up and a viewer that disagrees with the data fights you; PBR materials and one
+  shadow-casting sun, so depth and contact read at a glance; **ghosts**, the same machine at
+  earlier instants, drawn rather than scrubbed for; the **path travelled** as a Line2 ribbon;
+  and contact markers sized by force, instanced so a thousand of them cost one draw call.
+- **Scene tree**: every declared part with its shape, whether it moves, its colour swatch, and a
+  checkbox. Every channel with its schema and message count.
+- **Inspector**: the comparison verdict, the receipt with the trace digest **recomputed from the
+  bytes you just dropped**, the joule ledger, and every pose and scalar at the current instant.
+- **Plots**: power stacked by rail, each scalar as a lane, wall-minus-sim drift, and the
+  log-scale divergence lane when a second run is loaded. All on one playhead.
+- **Timeline**: scrub, play, and a speed selector.
 
-183 KB of WebAssembly, one HTML file, no bundler, no worker, no upload, no account. **Turn your
-network off and it still works.** That is the difference between an open interface layer and a
-client for somebody's cloud, and it is only possible because the four libraries underneath are
-`std`-only.
+The 3-D panel draws **what the recording declares**, through the `ferroscope.Geometry` schema:
+boxes, spheres, cylinders, planes and polylines attached to frames, with size and colour on the
+per-step track. So a leg whose length *is* its compression, and a part that turns red on contact,
+are things the file says rather than things the viewer guesses. A recording with no geometry still
+opens; it just has nothing to draw.
+
+Drop a file on **A** to read it, a second on **B** to compare. No bundler, no worker, no upload,
+no account. **Turn your network off and it still works**: three.js is vendored into the repository rather
+than pulled from a CDN, for exactly that reason.
 
 The same functions are callable from any page:
 
@@ -379,7 +394,8 @@ ferroscope-schema    Recorder, schemas, verify().   depends only on the three ab
 ferroscope-run       Scenarios, cases, suites,      native only: it reads clocks and
                      verdicts, local history.       writes files, and says so.
 ferroscope-cli       The CLI (binary: `ferroscope`).
-ferroscope-wasm      Browser bindings.              + wasm-bindgen, the project's one dep.
+ferroscope-wasm      Browser bindings.              + wasm-bindgen.
+viewer/              The WebGPU workspace.          + three.js, vendored, not a CDN.
 ```
 
 ### Why reimplement MCAP?

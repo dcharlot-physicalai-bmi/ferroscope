@@ -4,7 +4,7 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.1, while the libraries stay at 0.1.0: 0.1.0 of this crate installed a binary called
 # `ferroscope-cli`, because an unanchored rename of `name = "ferroscope"` hit the [[bin]] name
 # as well as the package name. The libraries were never affected and are not being churned.
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

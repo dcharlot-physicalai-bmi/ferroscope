@@ -12,7 +12,7 @@
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{Precision, RunSpec};
-use ferroscope_schema::{Contact, JointState, Recorder, Stamp};
+use ferroscope_schema::{Contact, Geometry, JointState, Recorder, Stamp};
 
 /// A tiny deterministic generator. Not for cryptography and not for statistics — it exists
 /// so the demo has texture without importing anything, and so the same seed gives the same
@@ -83,9 +83,29 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
 
     // Hop dynamics, integrated semi-implicitly so the recording has a real trajectory in it
     // rather than a sampled analytic curve.
+    // Declare the scene once, so the built-in demo exercises the whole format and the 3-D
+    // panel has a hopper to draw rather than a moving dot.
+    let t0 = Stamp::sim(0, 0);
+    rec.geometry(
+        "/scene/ground",
+        t0,
+        &Geometry::plane("world", "ground", 3.0, 3.0),
+    )
+    .map_err(|e| e.to_string())?;
+    rec.geometry(
+        "/scene/body",
+        t0,
+        &Geometry::boxed("base", "body", [0.22, 0.16, 0.12]).colored([0.81, 0.67, 0.36, 1.0]),
+    )
+    .map_err(|e| e.to_string())?;
+
     let mut drift_applied: Option<u64> = None;
     let mut z = 0.35f64;
     let mut vz = 0.0f64;
+    // Travelling forward turns the trail, the ghosts and the contact points into information
+    // instead of one dot seen from five angles.
+    let mut x = -0.26f64;
+    let vx = 1.7f64;
     let k = 8_000.0; // leg stiffness, N/m
     let m = 12.0; // body mass, kg
     let g = -9.80665;
@@ -122,6 +142,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
         let az = g + fz / m;
         vz += az * (DT_NS as f64 * 1e-9);
         z += vz * (DT_NS as f64 * 1e-9);
+        x += vx * (DT_NS as f64 * 1e-9);
         if z < 0.05 {
             z = 0.05;
             vz = vz.abs() * 0.4;
@@ -133,8 +154,30 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
             t,
             "world",
             "base",
-            [0.0, 0.0, z],
+            [x, 0.0, z],
             [0.0, 0.0, 0.0, 1.0],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // The leg is a cylinder from foot to body, so its length IS the compression, and it
+        // turns red while in contact.
+        let leg_len = (z - 0.02).max(0.01);
+        rec.geometry(
+            "/scene/leg",
+            t,
+            &Geometry::cylinder("world", "leg", 0.022, leg_len)
+                .at([x, 0.0, leg_len * 0.5])
+                .colored(if penetration > 0.0 {
+                    [1.0, 0.42, 0.42, 1.0]
+                } else {
+                    [0.54, 0.63, 0.74, 1.0]
+                }),
+        )
+        .map_err(|e| e.to_string())?;
+        rec.geometry(
+            "/scene/foot",
+            t,
+            &Geometry::sphere("world", "foot", 0.03).at([x, 0.0, 0.02]),
         )
         .map_err(|e| e.to_string())?;
 
@@ -160,7 +203,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
                 &Contact {
                     body_a: "foot".into(),
                     body_b: "ground".into(),
-                    point: [0.0, 0.0, 0.0],
+                    point: [x, 0.0, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     force_n: fz,
                     penetration_m: penetration,

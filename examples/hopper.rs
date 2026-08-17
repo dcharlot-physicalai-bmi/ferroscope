@@ -15,7 +15,7 @@
 //! determinism receipt and a queryable history without asking for any of them.
 
 use ferroscope_run::prelude::*;
-use ferroscope_run::Case;
+use ferroscope_run::{Case, Geometry};
 
 const MASS_KG: f64 = 12.0;
 const G: f64 = -9.80665;
@@ -87,6 +87,25 @@ fn hop(run: &mut Run) -> Result<(), Halt> {
     let damping = 0.6 * (1.0 - restitution) * (k * MASS_KG).sqrt();
     // Launched upward from the rest length, which is what makes a hop a hop.
     let (mut z, mut vz) = (REST_M, 1.5f64);
+    // Travelling forward turns the trail, the ghosts and the contact points into information
+    // instead of one dot seen from five angles.
+    let (mut x, vx) = (-0.26f64, 1.7f64);
+
+    // Declare the scene once. The viewer draws what the recording says, so this is the whole
+    // difference between a 3-D panel showing a hopper and one showing a moving dot.
+    let t0 = ferroscope_run::prelude::Stamp::sim(0, 0);
+    run.geometry(
+        "/scene/ground",
+        t0,
+        &Geometry::plane("world", "ground", 3.0, 3.0),
+    );
+    run.geometry(
+        "/scene/body",
+        t0,
+        &Geometry::boxed("/robot/base", "body", [0.22, 0.16, 0.12])
+            .colored([0.81, 0.67, 0.36, 1.0]),
+    );
+
     let mut peak = z;
     let mut floor = z;
     let mut contacts = 0u32;
@@ -109,11 +128,30 @@ fn hop(run: &mut Run) -> Result<(), Halt> {
 
         vz += (G + f / MASS_KG) * run.dt();
         z += vz * run.dt();
+        x += vx * run.dt();
         peak = peak.max(z);
         floor = floor.min(z);
 
-        run.position("/robot/base", t, [0.0, 0.0, z]);
+        run.position("/robot/base", t, [x, 0.0, z]);
         run.scalar("/control/height", t, z, "m");
+        // The leg is a cylinder from the foot to the body, so its length IS the compression.
+        let leg_len = (z - 0.02).max(0.01);
+        run.geometry(
+            "/scene/leg",
+            t,
+            &Geometry::cylinder("world", "leg", 0.022, leg_len)
+                .at([x, 0.0, leg_len * 0.5])
+                .colored(if penetration > 0.0 {
+                    [1.0, 0.42, 0.42, 1.0]
+                } else {
+                    [0.54, 0.63, 0.74, 1.0]
+                }),
+        );
+        run.geometry(
+            "/scene/foot",
+            t,
+            &Geometry::sphere("world", "foot", 0.03).at([x, 0.0, 0.02]),
+        );
         if in_contact {
             run.contact(
                 "/robot/contacts",
@@ -121,7 +159,7 @@ fn hop(run: &mut Run) -> Result<(), Halt> {
                 &Contact {
                     body_a: "foot".into(),
                     body_b: "ground".into(),
-                    point: [0.0, 0.0, 0.0],
+                    point: [x, 0.0, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     force_n: f,
                     penetration_m: penetration,

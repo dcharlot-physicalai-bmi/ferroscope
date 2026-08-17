@@ -1,7 +1,8 @@
 [package]
 name = "ferroscope-wasm"
 description = "Ferroscope in the browser: open a recording, verify its receipt, and diff two runs, entirely client-side. No server, no upload, no account."
-version.workspace = true
+# 0.1.1 tracks the bundle gaining geometry and frame tracks for the 3-D panel.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

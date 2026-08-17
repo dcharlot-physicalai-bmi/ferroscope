@@ -9,7 +9,10 @@
 #   open http://localhost:8080
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# --out-dir is resolved RELATIVE TO THE CRATE PATH, not the working directory. Passing
+# "viewer/pkg" wrote the bundle to crates/ferroscope-wasm/viewer/pkg and left the real one
+# untouched, which also made CI's "committed bundle matches source" check unable to fail.
 wasm-pack build --release --target web --no-typescript \
-  --out-dir viewer/pkg crates/ferroscope-wasm
+  --out-dir "$PWD/viewer/pkg" crates/ferroscope-wasm
 rm -f viewer/pkg/.gitignore          # the pkg IS committed, so the viewer works from a clone
 ls -l viewer/pkg

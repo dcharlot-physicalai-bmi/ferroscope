@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::json::Obj;
+use crate::json::{Obj, Value};
 use crate::{mcap, verify, RECEIPT_BLOCK};
 
 /// Series longer than this are strided down. A 1080 px lane cannot show more.
@@ -25,6 +25,10 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
     let mut power: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();
     let mut contacts: Vec<[f64; 5]> = Vec::new();
     let mut lag: Vec<[f64; 2]> = Vec::new();
+    // (frame, id) -> the geometry's declaration plus its pose track over time.
+    let mut geom: BTreeMap<String, (Value, Vec<[f64; 15]>)> = BTreeMap::new();
+    // child frame name -> pose track, so a Geometry can name a frame rather than a topic.
+    let mut frames: BTreeMap<String, Vec<[f64; 8]>> = BTreeMap::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
 
     for m in &log.messages {
@@ -55,10 +59,11 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
                 let p = arr("translation");
                 let q = arr("rotation");
                 if p.len() == 3 && q.len() == 4 {
-                    poses
-                        .entry(ch.topic.clone())
-                        .or_default()
-                        .push([t, p[0], p[1], p[2], q[0], q[1], q[2], q[3]]);
+                    let row = [t, p[0], p[1], p[2], q[0], q[1], q[2], q[3]];
+                    poses.entry(ch.topic.clone()).or_default().push(row);
+                    if let Some(child) = val.get("child").and_then(|x| x.as_str()) {
+                        frames.entry(child.to_string()).or_default().push(row);
+                    }
                 }
             }
             "ferroscope.Scalar" => scalars
@@ -81,6 +86,53 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
                 if p.len() == 3 {
                     contacts.push([t, p[0], p[1], p[2], num("force_n")]);
                 }
+            }
+            "ferroscope.Geometry" => {
+                let frame = val.get("frame").and_then(|x| x.as_str()).unwrap_or("world");
+                let gid = val.get("id").and_then(|x| x.as_str()).unwrap_or("?");
+                let key = format!("{frame}/{gid}");
+                let tr = arr("translation");
+                let rot = arr("rotation");
+                let sz = arr("size");
+                let col = arr("color");
+                let g = |v: &[f64], i: usize, d: f64| *v.get(i).unwrap_or(&d);
+                let pose = [
+                    t,
+                    g(&tr, 0, 0.0),
+                    g(&tr, 1, 0.0),
+                    g(&tr, 2, 0.0),
+                    g(&rot, 0, 0.0),
+                    g(&rot, 1, 0.0),
+                    g(&rot, 2, 0.0),
+                    g(&rot, 3, 1.0),
+                    g(&sz, 0, 0.1),
+                    g(&sz, 1, 0.1),
+                    g(&sz, 2, 0.1),
+                    g(&col, 0, 0.8),
+                    g(&col, 1, 0.7),
+                    g(&col, 2, 0.4),
+                    g(&col, 3, 1.0),
+                ];
+                let entry = geom.entry(key).or_insert_with(|| {
+                    (
+                        Obj::new()
+                            .str("frame", frame)
+                            .str("id", gid)
+                            .str(
+                                "shape",
+                                val.get("shape").and_then(|x| x.as_str()).unwrap_or("box"),
+                            )
+                            .raw(
+                                "points",
+                                &val.get("points")
+                                    .map(|p| p.to_json())
+                                    .unwrap_or_else(|| "[]".into()),
+                            )
+                            .finish_value(),
+                        Vec::new(),
+                    )
+                });
+                entry.1.push(pose);
             }
             "ferroscope.JointState" => {
                 // Joint positions ride as one scalar lane per joint, named from the file.
@@ -139,6 +191,22 @@ pub fn bundle(bytes: &[u8]) -> Option<String> {
     write_map(&mut out, &scalars);
     out.push_str(",\"power\":");
     write_map(&mut out, &power);
+    // Geometry: one object per part, with its pose track strided down like any other lane.
+    out.push_str(",\"geometry\":[");
+    for (i, (_, (decl, track))) in geom.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(decl.to_json().trim_end_matches('}'));
+        out.push_str(",\"track\":");
+        write_series(&mut out, &stride(track));
+        out.push('}');
+    }
+    out.push(']');
+
+    out.push_str(",\"frames\":");
+    write_map(&mut out, &frames);
+
     out.push_str(",\"lag_ms\":");
     write_series(&mut out, &stride(&lag));
     out.push_str(",\"contacts\":");

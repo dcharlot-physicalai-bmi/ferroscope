@@ -65,8 +65,15 @@ jobs:
         with: { targets: wasm32-unknown-unknown }
       - uses: jetli/wasm-pack-action@v0.4.0
       - run: ./viewer/build.sh
+      - name: the bundle landed in viewer/pkg and nowhere else
+        # wasm-pack resolves --out-dir against the crate path, so this check once passed
+        # vacuously while the real bundle was never rewritten.
+        run: |
+          test ! -d crates/ferroscope-wasm/viewer
+          test -s viewer/pkg/ferroscope_wasm_bg.wasm
+          find viewer/pkg -newermt '-10 minutes' -name '*.wasm' | grep -q wasm
       - name: the committed bundle matches the source
-        run: git diff --stat --exit-code -- viewer/pkg/ferroscope_wasm.js
+        run: git diff --stat --exit-code -- viewer/pkg
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

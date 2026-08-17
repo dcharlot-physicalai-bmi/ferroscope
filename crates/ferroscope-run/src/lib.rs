@@ -72,6 +72,7 @@ pub mod store;
 
 mod harness;
 
+pub use ferroscope_schema::{Contact, Geometry, JointState, Shape, Stamp};
 pub use harness::{Case, Clause, Harness, Scenario, Selection, Suite, CASE_CAP};
 pub use run::{Check, Halt, Metric, Outcome, Run};
 pub use store::{Op, Predicate, Query, Record, Store, DEFAULT_ROOT};
@@ -80,5 +81,5 @@ pub use store::{Op, Predicate, Query, Record, Store, DEFAULT_ROOT};
 pub mod prelude {
     pub use crate::{Case, Halt, Harness, Outcome, Run, Scenario, Suite};
     pub use ferroscope_ledger::Rail;
-    pub use ferroscope_schema::{Contact, JointState, Stamp};
+    pub use ferroscope_schema::{Contact, Geometry, JointState, Shape, Stamp};
 }
