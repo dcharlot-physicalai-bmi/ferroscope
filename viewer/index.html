@@ -163,6 +163,7 @@
     </div>
     <button id="demoBtn" type="button" title="A one-legged hopper with a glTF body">hopper</button>
     <button id="armBtn" type="button" title="A robot arm built from its own URDF">arm</button>
+    <button id="so101Btn" type="button" title="The LeRobot SO-101: real calibrated kinematics and inertials">SO-101</button>
   </div>
   <span class="grow"></span>
   <nav>
@@ -204,6 +205,7 @@
           <button id="demoBtn2" type="button">Load the demo run</button>
           <button id="demoBtn3" type="button">Load both and compare</button>
           <button id="armBtn2" type="button">Load the URDF arm</button>
+          <button id="so101Btn2" type="button">Load the SO-101</button>
         </div>
         <p style="font-size:12px">Drag a <code>.mcap</code> anywhere on this window. Nothing is uploaded: turn your network off and it still works.</p>
       </div>
@@ -1068,6 +1070,8 @@ async function loadDemo(slot, name){
 el('demoBtn').addEventListener('click', () => loadDemo('A','a.mcap'));
 el('armBtn').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('armBtn2').addEventListener('click', () => loadDemo('A','arm.mcap'));
+el('so101Btn').addEventListener('click', () => loadDemo('A','so101.mcap'));
+el('so101Btn2').addEventListener('click', () => loadDemo('A','so101.mcap'));
 el('demoBtn2').addEventListener('click', () => loadDemo('A','a.mcap'));
 el('demoBtn3').addEventListener('click', async () => {
   await loadDemo('A','a.mcap'); await loadDemo('B','c.mcap');

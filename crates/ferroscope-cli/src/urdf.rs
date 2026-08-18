@@ -16,6 +16,7 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut check_only = false;
     let mut want_collision = true;
     let mut want_inertial = true;
+    let mut each = false;
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -48,6 +49,14 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
             "--no-inertial" => {
                 want_inertial = false;
                 i += 1;
+            }
+            "--sweep" => {
+                each = match flags.get(i + 1) {
+                    Some(&"each") => true,
+                    Some(&"all") => false,
+                    _ => return Err("--sweep takes `all` or `each`".into()),
+                };
+                i += 2;
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -152,21 +161,43 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
     }
 
-    // Every movable joint sweeps its own range on a phase offset, so the whole tree moves and
-    // nothing is left sitting at zero pretending to be rigid.
+    // Two ways to move a description you are inspecting.
+    //
+    // `all` drives every joint at once on a phase offset: the whole tree moves, so nothing sits
+    // at zero pretending to be rigid. It is also a knot — a kinematic sweep has no collision
+    // check, so a real arm folds through its own base and through the floor.
+    //
+    // `each` drives one joint at a time out of the home pose and back, which is what you
+    // actually want when the question is "does this joint go where the file says". Every other
+    // joint holds at home, so what you see moving is the joint being asked about.
     for step in 0..steps {
         let t = Stamp::sim(step * dt_ns, step);
         let u = step as f64 / steps as f64;
+        let n = movable.len().max(1);
         let q: Vec<(String, f64)> = movable
             .iter()
             .enumerate()
             .map(|(k, j)| {
                 let (lo, hi) = j.limits.unwrap_or((-3.0, 3.0));
-                let phase = std::f64::consts::TAU * (u + k as f64 / movable.len().max(1) as f64);
-                let mid = (lo + hi) * 0.5;
-                // 70 % of the declared range rather than 100 %: a full sweep of a real arm folds
-                // it through the floor, and a kinematic sweep has no collision check to stop it.
-                (j.name.clone(), mid + (hi - lo) * 0.35 * phase.sin())
+                let home = 0.0f64.clamp(lo, hi);
+                if each {
+                    // Joint k owns the k-th slice of the timeline; outside it, it holds home.
+                    let slice = u * n as f64 - k as f64;
+                    let v = if (0.0..1.0).contains(&slice) {
+                        // One full out-and-back through the whole declared range, starting and
+                        // ending at home so consecutive joints hand over without a jump.
+                        let s = (std::f64::consts::TAU * slice).sin();
+                        home + if s >= 0.0 { (hi - home) * s } else { (home - lo) * s }
+                    } else {
+                        home
+                    };
+                    (j.name.clone(), v)
+                } else {
+                    let phase = std::f64::consts::TAU * (u + k as f64 / n as f64);
+                    let mid = (lo + hi) * 0.5;
+                    // 70 % of the declared range rather than 100 %, to fold through less.
+                    (j.name.clone(), mid + (hi - lo) * 0.35 * phase.sin())
+                }
             })
             .collect();
         robot

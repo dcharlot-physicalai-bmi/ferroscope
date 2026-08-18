@@ -38,13 +38,31 @@ fn main() -> ExitCode {
         ["energy", file] => run(cmd_energy(file)),
         ["diff", a, b, rest @ ..] => run(cmd_diff(a, b, rest)),
         ["export", file, out] => run(cmd_export(file, out)),
-        ["demo", out, rest @ ..] => run(demo::write_with(out, rest)),
-        ["urdf", src, out, rest @ ..] => run(urdf::run(src, out, rest)),
+        ["demo", rest @ ..] if !rest.is_empty() => {
+            let (out, flags) = split_out(rest, "demo.mcap");
+            run(demo::write_with(out, flags))
+        }
+        ["urdf", src, rest @ ..] => {
+            let (out, flags) = split_out(rest, "robot.mcap");
+            run(urdf::run(src, out, flags))
+        }
         _ => {
             eprintln!("ferroscope: unrecognized arguments: {}", args.join(" "));
             usage();
             ExitCode::from(2)
         }
+    }
+}
+
+/// Split an optional leading output path from the flags that follow it.
+///
+/// The output path is optional, so `urdf robot.urdf --check` must not bind `--check` as the
+/// file to write. Only the *first* token can be the path, and only when it does not start with
+/// `--`: that keeps a flag's own value (`--steps 400`) from being mistaken for a filename.
+fn split_out<'a>(rest: &'a [&'a str], default: &'a str) -> (&'a str, &'a [&'a str]) {
+    match rest {
+        [first, tail @ ..] if !first.starts_with("--") => (first, tail),
+        _ => (default, rest),
     }
 }
 
@@ -76,7 +94,7 @@ USAGE
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description
-                     [--check] [--steps <n>] [--rate <hz>]
+                     [--check] [--steps <n>] [--rate <hz>] [--sweep all|each]
                      [--no-collision] [--no-inertial]
 
 EXIT CODES
@@ -350,4 +368,34 @@ fn cmd_export(path: &str, out: &str) -> Result<bool, String> {
     std::fs::write(out, &bundle).map_err(|e| format!("cannot write {out}: {e}"))?;
     println!("wrote {out} ({} bytes)", bundle.len());
     Ok(true)
+}
+
+#[cfg(test)]
+mod arg_tests {
+    use super::split_out;
+
+    #[test]
+    fn a_flag_in_the_output_slot_is_a_flag_and_not_a_filename() {
+        // This shipped broken: `urdf robot.urdf --check` bound "--check" as the file to write,
+        // so --check never reached the parser and a 1.4 MB file named `--check` appeared in the
+        // working directory. The exit code was still right, which is why nobody noticed.
+        let (out, flags) = split_out(&["--check"], "robot.mcap");
+        assert_eq!(out, "robot.mcap");
+        assert_eq!(flags, ["--check"]);
+    }
+
+    #[test]
+    fn an_explicit_output_path_still_wins_and_keeps_its_flags() {
+        let (out, flags) = split_out(&["run.mcap", "--steps", "10"], "robot.mcap");
+        assert_eq!(out, "run.mcap");
+        assert_eq!(flags, ["--steps", "10"]);
+    }
+
+    #[test]
+    fn a_flags_own_value_is_never_mistaken_for_the_output_path() {
+        // Only the FIRST token can be the path, so the 400 in `--steps 400` stays a value.
+        let (out, flags) = split_out(&["--steps", "400"], "robot.mcap");
+        assert_eq!(out, "robot.mcap");
+        assert_eq!(flags, ["--steps", "400"]);
+    }
 }

@@ -522,18 +522,52 @@ impl Robot {
                 }
             }
 
-            for v in link.visuals.iter().chain(link.collisions.iter()) {
-                if !v.mesh.is_empty() {
-                    out.push(Finding {
-                        kind: "mesh-unverified",
-                        link: name.clone(),
-                        detail: format!(
-                            "references mesh {:?}: geometry outside this file was not checked",
-                            v.mesh
-                        ),
-                        fails: false,
-                    });
+            // One note per distinct mesh, not one per reference. A real arm reuses the same
+            // servo hull for every joint and repeats it under both <visual> and <collision>,
+            // which turned four meshes into thirty-two identical lines. Which role it plays is
+            // the part worth saying: a collision mesh is a claim the physics engine will act
+            // on, a visual mesh only ever gets drawn.
+            let mut meshes: Vec<(&str, usize, usize)> = Vec::new();
+            for (v, is_collision) in link
+                .visuals
+                .iter()
+                .map(|v| (v, false))
+                .chain(link.collisions.iter().map(|v| (v, true)))
+            {
+                if v.mesh.is_empty() {
+                    continue;
                 }
+                match meshes.iter_mut().find(|(m, _, _)| *m == v.mesh) {
+                    Some(e) => {
+                        if is_collision {
+                            e.2 += 1
+                        } else {
+                            e.1 += 1
+                        }
+                    }
+                    None => meshes.push((&v.mesh, !is_collision as usize, is_collision as usize)),
+                }
+            }
+            for (mesh, n_vis, n_col) in meshes {
+                let role = match (n_vis, n_col) {
+                    (0, _) => "collision".to_string(),
+                    (_, 0) => "visual".to_string(),
+                    _ => "visual and collision".to_string(),
+                };
+                let refs = n_vis + n_col;
+                out.push(Finding {
+                    kind: "mesh-unverified",
+                    link: name.clone(),
+                    detail: format!(
+                        "{role} mesh {mesh:?}{}: geometry outside this file was not checked",
+                        if refs > 1 {
+                            format!(" ({refs} references)")
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    fails: false,
+                });
             }
         }
         out
@@ -1134,6 +1168,35 @@ mod check_tests {
             .unwrap();
         assert!(!f.fails, "an unchecked mesh is a note, not a defect");
         assert!(f.detail.contains("hull.glb"));
+    }
+
+    #[test]
+    fn one_mesh_used_many_times_is_one_note_that_says_how_many() {
+        // A real arm reuses one servo hull under both <visual> and <collision> on every joint.
+        // Reporting that once, with its role, is the difference between a finding and a wall.
+        let r = one_link(
+            GOOD_I,
+            r#"<visual><geometry><mesh filename="servo.stl"/></geometry></visual>
+               <visual><geometry><mesh filename="servo.stl"/></geometry></visual>
+               <collision><geometry><mesh filename="servo.stl"/></geometry></collision>
+               <collision><geometry><mesh filename="horn.stl"/></geometry></collision>"#,
+        );
+        let m: Vec<_> = r
+            .check()
+            .into_iter()
+            .filter(|f| f.kind == "mesh-unverified")
+            .collect();
+        assert_eq!(m.len(), 2, "one note per distinct mesh, got {m:?}");
+        assert!(
+            m[0].detail.contains("visual and collision") && m[0].detail.contains("3 references"),
+            "{}",
+            m[0].detail
+        );
+        assert!(
+            m[1].detail.contains("collision mesh") && !m[1].detail.contains("references"),
+            "a single reference should not be counted out loud: {}",
+            m[1].detail
+        );
     }
 
     #[test]

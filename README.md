@@ -304,6 +304,36 @@ inequality on the principal moments that every physically realisable rigid body 
 It found nine defects in this repository's own example URDF the first time it ran.
 `examples/robots/broken.urdf` carries one of each class and CI asserts every one is caught.
 
+### A real arm, not only a toy one
+
+`examples/robots/so101.urdf` is the **LeRobot SO-101**, the 5-DOF open-hardware arm with a gripper.
+Its kinematics and inertials are verbatim from the published calibrated description
+([TheRobotStudio SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100) / LeRobot, Apache-2.0):
+every joint origin, `rpy`, axis, limit, effort and velocity, and every link mass, centre of mass
+and inertia tensor. What is *not* verbatim is the geometry — upstream ships STL meshes of the
+printed parts, and this file substitutes boxes sized to the real link extents. So the arm moves
+exactly like an SO-101 and does not look like one, which the file says at the top rather than
+leaving you to discover it.
+
+```sh
+ferroscope urdf examples/robots/so101.urdf so101.mcap --steps 1440 --rate 240 --sweep each
+```
+
+That is the recording behind the **SO-101** button in the viewer, and it is the one that matters
+for how this behaves at size: 4.7 MB, 23,071 messages, 8 links across 6 joints. In the browser the
+WebAssembly parser takes it from bytes to a scene you can orbit in **118 ms**, and it plays back at
+the display's refresh rate. No upload, no server, no decode step in JavaScript.
+
+It checks clean, and CI asserts that it stays clean: the SO-101 is the closest thing here to a
+third-party description, so if the checker ever starts failing a shipped commercial arm, that is
+a bug in the checker and it surfaces there.
+
+`--sweep` chooses how the description is exercised. `all` (the default) drives every joint at once,
+which moves the whole tree but is also a knot — a kinematic sweep has no collision check, so a real
+arm folds through its own base and through the floor. `each` drives **one joint at a time** out of
+the home pose and back, which is what you want when the question is "does this joint go where the
+file says": everything else holds still, so what you see moving is the joint being asked about.
+
 The recording also carries **collision geometry** and **inertial properties** as their own layers,
 translucent over the visuals, with a centre-of-mass marker and an inertia ellipsoid whose semi-axes
 come from the principal moments. Toggle them in the viewer: seeing what the physics engine sees
