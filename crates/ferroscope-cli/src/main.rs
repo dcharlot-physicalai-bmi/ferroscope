@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 mod demo;
 mod glb;
+mod power;
 mod scene;
 mod urdf;
 
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
             let (out, flags) = split_out(rest, "demo.mcap");
             run(demo::write_with(out, flags))
         }
+        ["power", rest @ ..] => run(power::run(rest)),
         ["scene", src, rest @ ..] => {
             let (out, flags) = split_out(rest, "scene.mcap");
             run(scene::run(src, out, flags))
@@ -103,6 +105,8 @@ USAGE
                      [--no-collision] [--no-inertial] [--meshes <dir>]
   ferroscope scene   <scene.json> <out.mcap>  record a DESCRIBED scene
                      [--check]   ·   --schema prints the scene format
+  ferroscope power   [-- <command>]         what this machine can measure, and what
+                     [--out <run.mcap>] [--rate <hz>]    a command actually cost
 
 EXIT CODES
   0  the answer is yes

@@ -25,6 +25,7 @@ ferroscope-receipt = { workspace = true }
 ferroscope-urdf = { workspace = true }
 ferroscope-mesh = { workspace = true }
 ferroscope-scene = { workspace = true }
+ferroscope-power = { workspace = true }
 
 # The package is `ferroscope-cli`; the binary is `ferroscope`. CI's end-to-end job runs
 # `target/release/ferroscope`, so this line has a test.

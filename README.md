@@ -108,6 +108,52 @@ ledger carries a coverage verdict, and when the sampling cannot support the numb
 
 The number is still printed. A flagged measurement beats a missing one, as long as it is flagged.
 
+#### And now it actually measures
+
+`ferroscope power` reads the machine's own counters — Linux RAPL through `/sys/class/powercap`,
+macOS `powermetrics` — and integrates them over a real command:
+
+```sh
+ferroscope power                             # what can this machine tell me?
+ferroscope power --out run.mcap -- cargo build --release
+```
+
+```text
+power source
+  Linux RAPL, 1 top-level domain(s): package-0
+
+  E_compute    37.984 J  (measured, 20 samples)
+  mean power   19.216 W
+  coverage     sound (20 samples, median interval 105.1 ms)
+```
+
+Two traps are handled, because both produce a plausible wrong number rather than an error:
+
+- **Nested domains double-count.** `intel-rapl:0` is the package and `intel-rapl:0:0` is the core
+  *inside* it. Summing every directory under `powercap` counts those joules twice — silently,
+  by 30–60 %, always in the flattering direction. Only top-level domains are summed.
+- **The counters wrap**, on some parts every minute or two under load. A naive subtraction goes
+  hugely negative, and clamping that to zero drops a whole interval. Each domain's declared
+  `max_energy_range_uj` is used to unwrap.
+
+And when the machine will not say, it says *that*:
+
+```text
+no power interface: powermetrics is installed but this process cannot run it (powermetrics must
+be invoked as the superuser). macOS has no unprivileged power interface, so run under sudo to
+measure. Reporting no measurement rather than zero joules.
+```
+
+That case is the common one, not the exception: since the mitigation for CVE-2020-8694, RAPL's
+`energy_uj` is root-only on most distributions, so a meter that shrugs reports **0 J for a machine
+drawing 90 W**. The command still runs, its exit status still propagates, and no joules figure is
+printed at all.
+
+`FERROSCOPE_POWERCAP` overrides the sysfs root, which is how CI exercises the measuring path on
+every runner against a synthetic counter with a known right answer — a 20 W counter must read back
+as 20 W. A code path that only runs on hardware nobody in the loop owns is a code path nobody has
+run.
+
 ### 3. The receipt is recomputable from the file
 
 Every run is sealed with a receipt stored in the recording's own metadata. It has two halves:
@@ -410,6 +456,14 @@ the binary — no configuration, no network, no account:
 | `materials_search` | 437 materials, each with the source it is cited from |
 | `run_inspect` · `run_verify` · `run_energy` · `run_diff` | the CLI's read verbs |
 
+### On ACP
+
+Ferroscope deliberately does **not** implement the [Agent Client Protocol](https://agentclientprotocol.com).
+ACP connects an *editor* to a *coding agent*, and its `session/new` carries an `mcpServers` list
+that the client hands to that agent. So an ACP editor already delivers this server: configure
+`ferroscope-mcp` as an MCP server in Zed, JetBrains or Kiro and the agent gets all ten tools.
+Implementing ACP here would mean pretending to be a coding agent, which Ferroscope is not.
+
 The design rule for all of it is that **the caller is a model that has to fix its own mistakes**, so
 a refusal that does not say how is a wasted round trip:
 
@@ -668,6 +722,8 @@ ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-mesh      STL in, glTF out, and what     0 deps.  wasm-clean.
                      a mesh weighs.
+ferroscope-power     RAPL and powermetrics, or a    0 deps.  native only.
+                     clear reason there is nothing.
 ferroscope-schema    Recorder, schemas, verify().   depends only on the crates above.
 ferroscope-urdf      URDF to scene, plus FK,        0 external deps, wasm-clean.
                      validation and clearance.
@@ -743,12 +799,11 @@ refusal, the determinism receipt and comparator, `verify` recomputing a receipt 
 the CLI's eight verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, and the MCP server. **150 tests, clean clippy, three platforms in CI plus
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **159 tests, clean clippy, three platforms in CI plus
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 
-**Next, in the open, on the same repository:** live streaming over WebTransport, reading real power
-off the machine (RAPL, powermetrics) so the compute rail is measured rather than modelled, a
+**Next, in the open, on the same repository:** live streaming over WebTransport, a
 scenario runner that executes a spec rather than only describing one, and coupling to
 [Ferromotion](https://crates.io/crates/ferromotion) so a run can be produced and certified by the
 same stack that renders it.

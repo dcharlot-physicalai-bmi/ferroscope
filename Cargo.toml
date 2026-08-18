@@ -9,6 +9,7 @@ members = [
     "crates/ferroscope-run",
     "crates/ferroscope-urdf",
     "crates/ferroscope-mesh",
+    "crates/ferroscope-power",
     "crates/ferroscope-cad",
     "crates/ferroscope-scene",
     "crates/ferroscope-mcp",
@@ -33,6 +34,7 @@ ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
 ferroscope-receipt = { version = "0.1.0", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
 ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
+ferroscope-power = { version = "0.1.0", path = "crates/ferroscope-power" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
 ferroscope-scene = { version = "0.1.0", path = "crates/ferroscope-scene" }
 ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }

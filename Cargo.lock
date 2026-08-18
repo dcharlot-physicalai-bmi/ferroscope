@@ -161,6 +161,7 @@ dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
  "ferroscope-mesh",
+ "ferroscope-power",
  "ferroscope-receipt",
  "ferroscope-scene",
  "ferroscope-schema",
@@ -192,6 +193,10 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-mesh"
+version = "0.1.0"
+
+[[package]]
+name = "ferroscope-power"
 version = "0.1.0"
 
 [[package]]

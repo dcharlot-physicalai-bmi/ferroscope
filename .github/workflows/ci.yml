@@ -213,6 +213,74 @@ jobs:
           print('MCP: handshake, 10 tools, refusal with paths, record, verify, materials')
           PY
 
+  power:
+    # The measuring path runs against a synthetic powercap tree, so it is exercised on every
+    # runner rather than only on Linux hardware with root. A code path that can only run on a
+    # machine nobody in the loop owns is a code path nobody has run.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-cli
+      - name: with no meter, it refuses to invent joules
+        run: |
+          B=target/release/ferroscope
+          # An empty tree: a powercap directory with nothing in it, so RAPL is definitively absent.
+          export FERROSCOPE_POWERCAP="$(mktemp -d)"
+          $B power | tee /tmp/none.txt
+          grep -q "no power interface" /tmp/none.txt \
+            || { echo "an unavailable meter must say so"; exit 1; }
+          # It must still run the command, and must NOT print a joules figure.
+          $B power -- sh -c 'echo ran' | tee /tmp/run.txt
+          grep -q "ran" /tmp/run.txt || { echo "the command did not run"; exit 1; }
+          grep -q "NOT MEASURED" /tmp/run.txt || { echo "it should say the energy is not measured"; exit 1; }
+          grep -q "E_compute" /tmp/run.txt && { echo "it invented a joules figure"; exit 1; }
+          # And a failing command must still propagate its status.
+          ! $B power -- sh -c 'exit 3'
+          echo "no meter: says why, runs the command, quotes nothing"
+      - name: with a meter, it measures and the number is right
+        run: |
+          B=$PWD/target/release/ferroscope
+          D=$(mktemp -d)/powercap; mkdir -p "$D/intel-rapl:0"
+          printf 'package-0\n'  > "$D/intel-rapl:0/name"
+          printf '0\n'          > "$D/intel-rapl:0/energy_uj"
+          printf '4294967295\n' > "$D/intel-rapl:0/max_energy_range_uj"
+          # A counter climbing 2 J every 100 ms is exactly 20 W, so the reported figure has a
+          # known right answer rather than only a plausible one.
+          ( for i in $(seq 1 40); do sleep 0.1; printf '%s\n' "$((i*2000000))" > "$D/intel-rapl:0/energy_uj"; done ) &
+          FERROSCOPE_POWERCAP="$D" $B power --out /tmp/m.mcap --rate 10 -- sh -c 'sleep 2' | tee /tmp/m.txt
+          wait || true
+          grep -q "Linux RAPL" /tmp/m.txt || { echo "the override did not open the meter"; exit 1; }
+          $B verify /tmp/m.mcap | grep -q VERIFIED || { echo "the measured run does not verify"; exit 1; }
+          # 20 W is the truth; allow a wide band for scheduler jitter but refuse a wrong answer.
+          python3 - <<'PYCHK'
+          import re, sys
+          t = open('/tmp/m.txt').read()
+          m = re.search(r'mean power\s+([0-9.]+) W', t)
+          assert m, 'no mean power reported:\n' + t
+          w = float(m.group(1))
+          assert 14.0 < w < 26.0, f'a 20 W counter read back as {w} W'
+          j = float(re.search(r'E_compute\s+([0-9.]+) J', t).group(1))
+          assert 20.0 < j < 55.0, f'about 38 J expected, got {j}'
+          print(f'measured {w} W / {j} J against a synthetic 20 W counter')
+          PYCHK
+      - name: the subdomain trap stays shut
+        run: |
+          B=$PWD/target/release/ferroscope
+          D=$(mktemp -d)/powercap
+          for d in "intel-rapl:0" "intel-rapl:0:0" "intel-rapl:0:1"; do
+            mkdir -p "$D/$d"; printf '%s\n' "$d" > "$D/$d/name"
+            printf '1000000\n' > "$D/$d/energy_uj"; printf '4294967295\n' > "$D/$d/max_energy_range_uj"
+          done
+          FERROSCOPE_POWERCAP="$D" $B power | tee /tmp/nest.txt
+          # One top-level domain, not three: a core's joules are already inside its package.
+          grep -q "1 top-level domain" /tmp/nest.txt \
+            || { echo "subdomains were counted as their own domains"; cat /tmp/nest.txt; exit 1; }
+          echo "nested RAPL domains are not double-counted"
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.
@@ -267,7 +335,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: core crates have no runtime dependencies
         run: |
-          for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt ferroscope-mesh; do
+          for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt ferroscope-mesh \
+                   ferroscope-power; do
             n=$(cargo tree -p $c --edges normal --prefix none | grep -v '^$' | sort -u | wc -l)
             echo "$c: $n crate(s) in the runtime graph"
             [ "$n" -eq 1 ] || { cargo tree -p $c --edges normal; exit 1; }
