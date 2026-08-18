@@ -1,0 +1,19 @@
+{
+  "name": "a crate dropped beside a sweeping arm",
+  "duration_s": 4.0,
+  "rate_hz": 120,
+  "ground": [6, 6],
+  "bodies": [
+    { "id": "crate", "shape": "box", "size": [0.3, 0.3, 0.3], "color": "#a0703c",
+      "material": "6061-T6",
+      "motion": { "kind": "fall", "from": [0.6, 0.0, 1.8], "restitution": 0.35 } },
+    { "id": "beacon", "shape": "sphere", "size": [0.06, 0.06, 0.06], "color": "#46c6b0",
+      "motion": { "kind": "orbit", "center": [0, 0, 0.9], "radius": 0.8, "period_s": 3.0 } },
+    { "id": "shuttle", "shape": "cylinder", "size": [0.09, 0.09, 0.5], "color": "#9d8cff",
+      "motion": { "kind": "linear", "from": [-1.4, -0.9, 0.25], "to": [1.4, -0.9, 0.25],
+                  "period_s": 4.0 } }
+  ],
+  "robots": [
+    { "id": "arm", "urdf": "../robots/so101.urdf", "at": [0, 0, 0], "sweep": "each" }
+  ]
+}

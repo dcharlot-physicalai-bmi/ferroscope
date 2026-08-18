@@ -1,0 +1,20 @@
+[package]
+name = "ferroscope-cad"
+description = "The LUT-first bridge: resolve a link's mass properties from its mesh and a material table, and record which tier of the cascade answered. Checks a declared inertial against the geometry it claims to describe."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["cad", "robotics", "inertia", "materials", "provenance"]
+categories = ["science::robotics", "simulation"]
+# Not published: the physical-* crates are consumed from git until they are on crates.io.
+publish = false
+
+[dependencies]
+ferroscope-mesh = { workspace = true }
+physical-lut = { git = "https://github.com/dcharlot-physicalai-bmi/cad-future" }
+physical-units = { git = "https://github.com/dcharlot-physicalai-bmi/cad-future" }
+physical-cascade = { git = "https://github.com/dcharlot-physicalai-bmi/cad-future" }

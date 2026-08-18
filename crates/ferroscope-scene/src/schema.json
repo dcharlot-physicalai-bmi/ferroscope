@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ferroscope scene",
+  "description": "A scene to record. Units are metres, seconds, kilograms and radians throughout. The z axis is up. Everything has a default, so the smallest useful scene is one body with a motion.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "default": "scene", "description": "Shown as the scenario in the receipt." },
+    "duration_s": { "type": "number", "exclusiveMinimum": 0, "default": 4.0 },
+    "rate_hz": { "type": "number", "exclusiveMinimum": 0, "default": 120, "description": "Steps per second. duration_s x rate_hz must be at most 200000." },
+    "gravity": { "type": "number", "default": -9.81, "description": "Along z. Only the fall motion uses it." },
+    "ground": {
+      "default": [6, 6],
+      "description": "[width, depth] of the ground plane, or null for none.",
+      "oneOf": [{ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, { "type": "null" }]
+    },
+    "bodies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Unique. Becomes the topic name and the label in the viewer's scene tree." },
+          "shape": { "enum": ["box", "sphere", "cylinder", "plane"], "default": "box" },
+          "size": {
+            "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
+            "default": [0.2, 0.2, 0.2],
+            "description": "box: full extents. cylinder: [radius, radius, length]. sphere: three semi-axes, so [r, r, r] is a ball and [0.3, 0.1, 0.1] is an ellipsoid."
+          },
+          "color": { "description": "\"#rrggbb\", \"#rrggbbaa\", or four numbers in 0..1.", "default": "#9ea8bf" },
+          "material": { "type": "string", "description": "A material id, e.g. \"6061-T6\", \"PLA\", \"Ti-6Al-4V\". Recorded as a note; use materials_search to find one." },
+          "motion": { "$ref": "#/$defs/motion" }
+        },
+        "required": ["id"]
+      }
+    },
+    "robots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "default": "robot" },
+          "urdf": { "type": "string", "description": "Path to a URDF. Its links are drawn and its joints are swept." },
+          "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 0] },
+          "sweep": { "enum": ["each", "all"], "default": "each", "description": "each: one joint at a time out of the home pose, which is what you want to see a description move. all: every joint at once, which for a real arm folds it through the floor." }
+        },
+        "required": ["urdf"]
+      }
+    }
+  },
+  "$defs": {
+    "motion": {
+      "description": "How a body moves. Every motion has a closed form, so scrubbing to a time gives the same answer as playing to it.",
+      "type": "object",
+      "properties": { "kind": { "enum": ["static", "linear", "orbit", "oscillate", "fall"], "default": "static" } },
+      "oneOf": [
+        {
+          "title": "static", "description": "Sitting still.",
+          "properties": { "kind": { "const": "static" }, "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 0] } }
+        },
+        {
+          "title": "linear", "description": "Straight there and back, once per period.",
+          "properties": {
+            "kind": { "const": "linear" },
+            "from": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 0] },
+            "to": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [1, 0, 0] },
+            "period_s": { "type": "number", "exclusiveMinimum": 0, "default": 4.0 }
+          }
+        },
+        {
+          "title": "orbit", "description": "A circle about a centre, in the plane normal to axis. The body faces along travel.",
+          "properties": {
+            "kind": { "const": "orbit" },
+            "center": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 0] },
+            "radius": { "type": "number", "exclusiveMinimum": 0, "default": 1.0 },
+            "axis": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 1] },
+            "period_s": { "type": "number", "exclusiveMinimum": 0, "default": 4.0 }
+          }
+        },
+        {
+          "title": "oscillate", "description": "Back and forth along an axis.",
+          "properties": {
+            "kind": { "const": "oscillate" },
+            "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 0] },
+            "axis": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [1, 0, 0] },
+            "amplitude": { "type": "number", "default": 0.5 },
+            "period_s": { "type": "number", "exclusiveMinimum": 0, "default": 4.0 }
+          }
+        },
+        {
+          "title": "fall", "description": "Dropped, bouncing off the ground, coming to rest on its own extent. The only motion that uses gravity.",
+          "properties": {
+            "kind": { "const": "fall" },
+            "from": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "default": [0, 0, 2] },
+            "restitution": { "type": "number", "minimum": 0, "exclusiveMaximum": 1, "default": 0.4, "description": "Fraction of speed kept per bounce. 0 lands dead; at 1 it would never come to rest, which is refused." }
+          }
+        }
+      ]
+    }
+  },
+  "examples": [
+    {
+      "name": "a crate dropped beside a sweeping arm",
+      "duration_s": 4.0,
+      "rate_hz": 120,
+      "bodies": [
+        { "id": "crate", "shape": "box", "size": [0.3, 0.3, 0.3], "color": "#a0703c", "material": "PLA",
+          "motion": { "kind": "fall", "from": [0.6, 0.0, 1.8], "restitution": 0.35 } },
+        { "id": "beacon", "shape": "sphere", "size": [0.06, 0.06, 0.06], "color": "#46c6b0",
+          "motion": { "kind": "orbit", "center": [0, 0, 0.9], "radius": 0.8, "period_s": 3.0 } }
+      ],
+      "robots": [
+        { "id": "arm", "urdf": "examples/robots/so101.urdf", "at": [0, 0, 0], "sweep": "each" }
+      ]
+    }
+  ]
+}

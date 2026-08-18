@@ -107,6 +107,16 @@ impl Pose {
             rotation: q,
         }
     }
+
+    /// Carry a point from this frame out into the parent frame.
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let r = qrot(self.rotation, p);
+        [
+            self.translation[0] + r[0],
+            self.translation[1] + r[1],
+            self.translation[2] + r[2],
+        ]
+    }
 }
 
 fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
@@ -571,6 +581,64 @@ impl Robot {
             }
         }
         out
+    }
+
+    /// The lowest point of any collision geometry at this configuration, and the link it is on.
+    ///
+    /// A kinematic sweep has no collision check — it drives joints wherever the limits allow and
+    /// nothing stops the arm folding through the floor. That is a real property of what the tool
+    /// did, so rather than let a viewer be the first to notice, this measures it: the corners of
+    /// every collision box, the extremes of every cylinder and sphere, carried out to world and
+    /// reduced to a single worst height.
+    ///
+    /// Collision geometry rather than visual, deliberately. What the physics engine would have
+    /// touched is the question; what the renderer draws is a different and softer one.
+    pub fn lowest_point(&self, q: &[(String, f64)]) -> Option<(f64, String)> {
+        let poses = self.forward_kinematics(q);
+        let mut worst: Option<(f64, String)> = None;
+        for (name, link_pose) in &poses {
+            let Some(link) = self.links.iter().find(|l| l.name == *name) else {
+                continue;
+            };
+            for c in &link.collisions {
+                // The half-extent along each axis of the shape's own frame. A cylinder's size
+                // is [r, r, length] and a sphere's is three semi-axes, so half of each entry is
+                // the right box to sample in every case except the cylinder's length, which is
+                // already a full extent like the box's.
+                let h = match c.shape {
+                    Shape::Sphere => [c.size[0], c.size[1], c.size[2]],
+                    // A mesh's `size` is its SCALE, not its extent: a unit-scale hull would
+                    // read as a 1 m box and report a floor breach that never happened. The
+                    // extent lives in bytes this crate does not have, so meshes are skipped
+                    // and counted, and the caller says so rather than quoting a number that
+                    // came from the wrong field.
+                    Shape::Mesh => continue,
+                    _ => [c.size[0] * 0.5, c.size[1] * 0.5, c.size[2] * 0.5],
+                };
+                let world = link_pose.then(&c.pose);
+                for sx in [-1.0, 1.0] {
+                    for sy in [-1.0, 1.0] {
+                        for sz in [-1.0, 1.0] {
+                            let p = world.apply([h[0] * sx, h[1] * sy, h[2] * sz]);
+                            if worst.as_ref().is_none_or(|(z, _)| p[2] < *z) {
+                                worst = Some((p[2], name.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        worst
+    }
+
+    /// How many collision shapes [`Robot::lowest_point`] could not measure, because they are
+    /// meshes whose extent is not in this file.
+    pub fn unmeasurable_collisions(&self) -> usize {
+        self.links
+            .iter()
+            .flat_map(|l| l.collisions.iter())
+            .filter(|c| c.shape == Shape::Mesh)
+            .count()
     }
 
     /// Declare collision geometry, translucent and on its own topic namespace, so a reader can
@@ -1153,6 +1221,75 @@ mod check_tests {
             .expect("caught");
         assert!(!f.fails, "the root link is not moving, so it is a note");
         assert!(f.detail.contains("3"), "{}", f.detail);
+    }
+
+    #[test]
+    fn a_mesh_collision_is_skipped_rather_than_read_as_a_one_metre_box() {
+        // The bug this pins: a mesh's `size` is its scale. Unit scale looked like a 1 m cube,
+        // so a 20 mm part reported reaching 0.5 m below the floor.
+        let r = Robot::parse(
+            r#"<robot name="t">
+                 <link name="base">
+                   <inertial><mass value="1"/><inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+                   <collision><geometry><mesh filename="hull.stl"/></geometry></collision>
+                 </link>
+               </robot>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            r.lowest_point(&[]),
+            None,
+            "a mesh extent is not in this file"
+        );
+        assert_eq!(r.unmeasurable_collisions(), 1);
+    }
+
+    #[test]
+    fn the_lowest_point_is_measured_from_collision_geometry_in_world() {
+        // A 0.2 m cube of collision sitting on a link 1 m up: its floor is at 0.9 m.
+        let r = Robot::parse(
+            r#"<robot name="t">
+                 <link name="base">
+                   <inertial><mass value="1"/><inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+                   <collision><origin xyz="0 0 1"/><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+                 </link>
+               </robot>"#,
+        )
+        .unwrap();
+        let (z, link) = r.lowest_point(&[]).unwrap();
+        assert_eq!(link, "base");
+        assert!((z - 0.9).abs() < 1e-12, "got {z}");
+    }
+
+    #[test]
+    fn rotating_a_link_moves_its_lowest_point_by_the_geometry_not_the_origin() {
+        // A long bar on a hinge. At q=0 it lies along +x and its underside is at -0.05;
+        // swung a quarter turn about y it points down, and its lowest point is the far end.
+        let r = Robot::parse(
+            r#"<robot name="t">
+                 <link name="base"><inertial><mass value="1"/><inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial></link>
+                 <link name="bar">
+                   <inertial><mass value="1"/><inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+                   <collision><origin xyz="0.5 0 0"/><geometry><box size="1.0 0.1 0.1"/></geometry></collision>
+                 </link>
+                 <joint name="h" type="revolute">
+                   <parent link="base"/><child link="bar"/>
+                   <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
+                   <limit lower="-3.2" upper="3.2" effort="1" velocity="1"/>
+                 </joint>
+               </robot>"#,
+        )
+        .unwrap();
+        let flat = r.lowest_point(&[("h".into(), 0.0)]).unwrap().0;
+        assert!((flat + 0.05).abs() < 1e-9, "flat bar underside: {flat}");
+        let down = r
+            .lowest_point(&[("h".into(), std::f64::consts::FRAC_PI_2)])
+            .unwrap()
+            .0;
+        assert!(
+            (down + 1.0).abs() < 1e-9,
+            "bar pointing down reaches -1.0, got {down}"
+        );
     }
 
     #[test]

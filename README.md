@@ -363,6 +363,109 @@ for step in 0..steps {
 
 ---
 
+## Describe the scene you want
+
+Everything above reads a file some simulator produced. This goes the other way.
+
+A scene is JSON — bodies, how each one moves, and optionally a robot from its own URDF — and it
+records to the same plain MCAP, with the same determinism receipt and the same energy ledger:
+
+```json
+{
+  "name": "a crate dropped beside a sweeping arm",
+  "duration_s": 4.0, "rate_hz": 120,
+  "bodies": [
+    { "id": "crate", "shape": "box", "size": [0.3, 0.3, 0.3], "material": "6061-T6",
+      "motion": { "kind": "fall", "from": [0.6, 0, 1.8], "restitution": 0.35 } },
+    { "id": "beacon", "shape": "sphere", "size": [0.06, 0.06, 0.06],
+      "motion": { "kind": "orbit", "center": [0, 0, 0.9], "radius": 0.8, "period_s": 3.0 } }
+  ],
+  "robots": [ { "id": "arm", "urdf": "examples/robots/so101.urdf", "sweep": "each" } ]
+}
+```
+
+```sh
+ferroscope scene examples/scenes/warehouse.json warehouse.mcap
+ferroscope scene --schema          # the format, its defaults, and a worked example
+```
+
+Every motion has a **closed form**, so the pose at a timestamp costs the same whether you played to
+it or scrubbed to it, and two runs of one scene agree bit for bit without anything having to be
+careful about ordering. That is what lets a described scene carry the same receipt as a simulated
+one. `fall` is the exception worth naming: it is a real ballistic arc that bounces and comes to
+rest, and it still has a closed form because each bounce is a fixed fraction of the last.
+
+### An agent can drive all of it
+
+`ferroscope-mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. Point a client at
+the binary — no configuration, no network, no account:
+
+| tool | what it does |
+|---|---|
+| `scene_schema` | the format, with defaults and a worked example |
+| `scene_validate` | every problem at once, each with the JSON path that was wrong |
+| `scene_record` | records it, and returns the receipt, the joules and the clearance |
+| `robot_check` | is this URDF physically usable |
+| `mesh_check` | what an STL is, and what it would weigh |
+| `materials_search` | 437 materials, each with the source it is cited from |
+| `run_inspect` · `run_verify` · `run_energy` · `run_diff` | the CLI's read verbs |
+
+The design rule for all of it is that **the caller is a model that has to fix its own mistakes**, so
+a refusal that does not say how is a wasted round trip:
+
+```text
+4 problem(s) in this scene:
+  bodies[0].shape: unknown shape "cube"; expected one of box, sphere, cylinder, plane
+  bodies[0].size: expected 3 numbers, found 2
+  bodies[0].motion.kind: unknown motion "drop"; expected one of static, linear, orbit, oscillate, fall
+  bodies[0].color: "brown" is not a hex colour; expected "#rrggbb"
+```
+
+Every problem at once, not the first one — five mistakes should cost one pass, not five.
+
+## What a mesh weighs
+
+`ferroscope-mesh` reads STL (both dialects, deciding by arithmetic rather than by the leading word,
+because a binary STL may legally begin with `solid`), writes glTF, and integrates **volume, centre
+of mass and the full inertia tensor** straight off the triangles by the divergence theorem. Exact
+for any closed mesh; no sampling, no voxels.
+
+```sh
+ferroscope urdf my_robot.urdf out.mcap --meshes ./meshes
+```
+
+That resolves the meshes a URDF names, reports each one's triangle count, volume and whether it
+closes, converts it to glTF and carries it **inside** the recording as an attachment.
+
+It matters because a robot description makes two claims about every link — a *shape* and a *mass
+distribution* — and nothing in the usual toolchain checks that the second is consistent with the
+first. `ferroscope-cad` closes that loop against [CadFuture]'s material tables:
+
+```text
+AS 6061-T6 (Lut tier, ASM Handbook Vol 2, MatWeb)
+  density     2710 kg/m3
+  mass        0.1301 kg
+  inertia     ixx=2.1680e-5  iyy=4.3360e-5  izz=5.6368e-5
+
+That is the <inertial> block this geometry implies, about its centre of mass.
+```
+
+So a declared inertial can be *compared* with the geometry it claims to describe: a link heavier
+than solid stock of its own outline is impossible and is refused; a tensor that describes a
+different shape at the right mass is caught too, because the tensor is normalised by mass before
+comparison.
+
+### The tier is part of the answer
+
+[CadFuture] resolves every engineering query at the cheapest tier that can answer it — **LUT, then
+closed-form formula, then solver, then a model**. Which tier answered is not an implementation
+detail. It is the difference between a number that cost picojoules and one that cost joules, and
+between a number with a citation and one with a residual. Every value that crosses this bridge
+carries its tier and its source into the recording, because a quantity whose origin is not in the
+file is a quantity nobody can audit.
+
+[CadFuture]: https://github.com/dcharlot-physicalai-bmi/cad-future
+
 ## The viewer: WebGPU 3D in a tab
 
 Live: **[ferroscope.physicalai-bmi.org/viewer](https://ferroscope.physicalai-bmi.org/viewer)**
@@ -517,22 +620,32 @@ A CI gate is one line:
 
 ## Architecture
 
-Five crates. **The four core libraries have zero runtime dependencies**, `std` and nothing else, and all four
-build for `wasm32-unknown-unknown` unchanged. `ferroscope-run` depends only on those four and is
-native by design: a harness that writes run history to a directory is not a browser component.
+**Five crates carry zero runtime dependencies** — `std` and nothing else — and build for
+`wasm32-unknown-unknown` unchanged. Everything above them is additive, and the two crates that
+reach outside are the two that are not published, so nothing you install pulls in a tree.
 
 ```
 ferroscope-mcap      MCAP v0 reader + writer.       0 deps.  wasm-clean.
 ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
-ferroscope-schema    Recorder, schemas, verify().   depends only on the three above.
+ferroscope-mesh      STL in, glTF out, and what     0 deps.  wasm-clean.
+                     a mesh weighs.
+ferroscope-schema    Recorder, schemas, verify().   depends only on the crates above.
+ferroscope-urdf      URDF to scene, plus FK,        0 external deps, wasm-clean.
+                     validation and clearance.
+ferroscope-scene     Described scenes to MCAP.      0 external deps.
 ferroscope-run       Scenarios, cases, suites,      native only: it reads clocks and
                      verdicts, local history.       writes files, and says so.
-ferroscope-urdf      URDF to scene, plus FK.        0 external deps, wasm-clean.
 ferroscope-cli       The CLI (binary: `ferroscope`).
 ferroscope-wasm      Browser bindings.              + wasm-bindgen.
+ferroscope-cad       The LUT-first bridge.          + CadFuture. Not published.
+ferroscope-mcp       The MCP server.                + the above. Not published.
 viewer/              The WebGPU workspace.          + three.js, vendored, not a CDN.
 ```
+
+`ferroscope-cad` and `ferroscope-mcp` are marked `publish = false` on purpose: they consume
+CadFuture's `physical-*` crates from git, and those are not on crates.io yet. Everything you get
+from `cargo install ferroscope-cli` is the dependency-free half.
 
 ### Why reimplement MCAP?
 
@@ -589,10 +702,16 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-the CLI's seven verbs, the in-browser viewer, the scenario harness, and URDF import.
+the CLI's eight verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
+scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
+LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
+bridge, described scenes, and the MCP server. **150 tests, clean clippy, three platforms in CI plus
+wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
+scene format and the MCP protocol surface.
 
-**Next, in the open, on the same repository:** live streaming over WebTransport, collision geometry and inertial frames from URDF, a scenario runner
-that executes a spec rather than only describing one, and coupling to
+**Next, in the open, on the same repository:** live streaming over WebTransport, reading real power
+off the machine (RAPL, powermetrics) so the compute rail is measured rather than modelled, a
+scenario runner that executes a spec rather than only describing one, and coupling to
 [Ferromotion](https://crates.io/crates/ferromotion) so a run can be produced and certified by the
 same stack that renders it.
 

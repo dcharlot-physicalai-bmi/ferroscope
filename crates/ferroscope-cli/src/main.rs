@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 mod demo;
 mod glb;
+mod scene;
 mod urdf;
 
 use ferroscope_ledger::Rail;
@@ -41,6 +42,10 @@ fn main() -> ExitCode {
         ["demo", rest @ ..] if !rest.is_empty() => {
             let (out, flags) = split_out(rest, "demo.mcap");
             run(demo::write_with(out, flags))
+        }
+        ["scene", src, rest @ ..] => {
+            let (out, flags) = split_out(rest, "scene.mcap");
+            run(scene::run(src, out, flags))
         }
         ["urdf", src, rest @ ..] => {
             let (out, flags) = split_out(rest, "robot.mcap");
@@ -95,7 +100,9 @@ USAGE
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description
                      [--check] [--steps <n>] [--rate <hz>] [--sweep all|each]
-                     [--no-collision] [--no-inertial]
+                     [--no-collision] [--no-inertial] [--meshes <dir>]
+  ferroscope scene   <scene.json> <out.mcap>  record a DESCRIBED scene
+                     [--check]   ·   --schema prints the scene format
 
 EXIT CODES
   0  the answer is yes

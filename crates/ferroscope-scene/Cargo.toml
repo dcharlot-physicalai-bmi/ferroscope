@@ -1,0 +1,19 @@
+[package]
+name = "ferroscope-scene"
+description = "Describe a scene as JSON and get a recording: bodies, motions and robots, with errors an agent can act on. The authoring surface behind the Ferroscope MCP server."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "simulation", "scene", "mcap", "authoring"]
+categories = ["science::robotics", "simulation"]
+
+[dependencies]
+ferroscope-mcap = { workspace = true }
+ferroscope-schema = { workspace = true }
+ferroscope-ledger = { workspace = true }
+ferroscope-receipt = { workspace = true }
+ferroscope-urdf = { workspace = true }

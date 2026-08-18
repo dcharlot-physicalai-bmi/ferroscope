@@ -111,6 +111,108 @@ jobs:
           grep '/scene/tf/' /tmp/arm.txt | grep -qv 'ferroscope.Transform' && exit 1
           echo "every channel carries the schema its name implies"
 
+  scene:
+    # The authoring surface: a described scene must record, verify against its own receipt, and
+    # move the things it says it moves. The last one is the check that matters — geometry
+    # declared in the wrong frame still renders, it just never goes anywhere.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-cli
+      - name: a described scene becomes a verified recording
+        run: |
+          B=target/release/ferroscope
+          $B scene examples/scenes/warehouse.json warehouse.mcap | tee /tmp/scene.txt
+          $B verify warehouse.mcap
+          grep -q "VERIFIED" <($B verify warehouse.mcap)
+          # Every body in the scene must reach the recording, with its own frame and a
+          # transform stream addressing that frame.
+          $B inspect warehouse.mcap > /tmp/insp.txt
+          for id in crate beacon shuttle; do
+            grep -q "/scene/body/$id" /tmp/insp.txt || { echo "no geometry for $id"; exit 1; }
+            grep -q "/scene/tf/$id"   /tmp/insp.txt || { echo "no transform for $id"; exit 1; }
+          done
+          grep -q "/scene/arm/tf/base_link" /tmp/insp.txt || { echo "the robot is missing"; exit 1; }
+          echo "every described body and the robot reached the recording"
+      - name: a bad scene is refused with the path that was wrong
+        run: |
+          B=target/release/ferroscope
+          cat > /tmp/bad.json <<'JSON'
+          {"duration_s":-1,"bodies":[{"id":"a","shape":"cube","size":[1,1],
+                                      "motion":{"kind":"drop"}}]}
+          JSON
+          ! $B scene /tmp/bad.json /tmp/bad.mcap 2>/tmp/err.txt
+          for want in 'duration_s' 'bodies[0].shape' 'bodies[0].size' 'bodies[0].motion.kind'; do
+            grep -qF "$want" /tmp/err.txt || { echo "no problem reported for $want"; cat /tmp/err.txt; exit 1; }
+          done
+          # And the refusal must name the alternatives, not just say no.
+          grep -q "oscillate" /tmp/err.txt || { echo "the refusal does not list the motions"; exit 1; }
+          echo "every problem is named with its path"
+
+  mcp:
+    # The agent-facing surface, driven exactly as a client drives it: handshake, tool list, and
+    # a scene authored, refused, corrected and recorded over stdio.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-mcp
+      - name: the server speaks MCP and records what it is asked for
+        run: |
+          python3 - > /tmp/in.jsonl <<'PY'
+          import json
+          def call(i, n, a): print(json.dumps({"jsonrpc":"2.0","id":i,"method":"tools/call",
+                                               "params":{"name":n,"arguments":a}}))
+          print(json.dumps({"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}))
+          print(json.dumps({"jsonrpc":"2.0","method":"notifications/initialized"}))
+          print(json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+          call(2, "scene_validate", {"scene": json.dumps(
+              {"bodies":[{"id":"a","shape":"cube","motion":{"kind":"drop"}}]})})
+          call(3, "scene_record", {"out":"/tmp/mcp.mcap","scene": json.dumps(
+              {"name":"ci","duration_s":1.0,"rate_hz":60,
+               "bodies":[{"id":"ball","shape":"sphere","size":[0.1,0.1,0.1],
+                          "motion":{"kind":"fall","from":[0,0,2]}}]})})
+          call(4, "run_verify", {"run":"/tmp/mcp.mcap"})
+          call(5, "materials_search", {"query":"aluminium","limit":3})
+          PY
+          target/release/ferroscope-mcp < /tmp/in.jsonl > /tmp/out.jsonl
+          python3 - <<'PY'
+          import json, sys
+          out = {}
+          for line in open('/tmp/out.jsonl'):
+              d = json.loads(line)
+              out[d.get('id')] = d
+          def fail(m):
+              print('FAIL:', m); sys.exit(1)
+
+          # A notification must NOT be answered; only ids 0..5 may appear.
+          assert set(out) <= {0,1,2,3,4,5}, f'unexpected replies: {sorted(out)}'
+          if out[0]['result']['serverInfo']['name'] != 'ferroscope': fail('bad serverInfo')
+          names = {t['name'] for t in out[1]['result']['tools']}
+          for t in ['scene_schema','scene_validate','scene_record','robot_check',
+                    'mesh_check','materials_search','run_inspect','run_verify',
+                    'run_energy','run_diff']:
+              if t not in names: fail(f'tool {t} is not listed')
+
+          bad = out[2]['result']
+          if not bad['isError']: fail('an invalid scene must come back as an error')
+          txt = bad['content'][0]['text']
+          for want in ['bodies[0].shape', 'bodies[0].motion.kind', 'oscillate']:
+              if want not in txt: fail(f'the refusal does not mention {want}: {txt}')
+
+          rec = out[3]['result']
+          if rec['isError']: fail('recording failed: ' + rec['content'][0]['text'])
+          if 'spec digest' not in rec['content'][0]['text']: fail('no receipt reported')
+
+          if 'VERIFIED' not in out[4]['result']['content'][0]['text']: fail('the run does not verify')
+
+          # The spelling fix: the table is US English, the query is not.
+          mats = out[5]['result']['content'][0]['text']
+          if 'Aluminum' not in mats: fail('"aluminium" found no aluminium: ' + mats)
+          print('MCP: handshake, 10 tools, refusal with paths, record, verify, materials')
+          PY
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.
@@ -165,7 +267,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: core crates have no runtime dependencies
         run: |
-          for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt; do
+          for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt ferroscope-mesh; do
             n=$(cargo tree -p $c --edges normal --prefix none | grep -v '^$' | sort -u | wc -l)
             echo "$c: $n crate(s) in the runtime graph"
             [ "$n" -eq 1 ] || { cargo tree -p $c --edges normal; exit 1; }

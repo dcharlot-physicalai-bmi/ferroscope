@@ -145,12 +145,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferroscope-cad"
+version = "0.1.0"
+dependencies = [
+ "ferroscope-mesh",
+ "physical-cascade",
+ "physical-lut",
+ "physical-units",
+]
+
+[[package]]
 name = "ferroscope-cli"
 version = "0.1.5"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
+ "ferroscope-mesh",
  "ferroscope-receipt",
+ "ferroscope-scene",
  "ferroscope-schema",
  "ferroscope-urdf",
 ]
@@ -167,6 +179,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferroscope-mcp"
+version = "0.1.0"
+dependencies = [
+ "ferroscope-cad",
+ "ferroscope-mesh",
+ "ferroscope-receipt",
+ "ferroscope-scene",
+ "ferroscope-schema",
+ "ferroscope-urdf",
+]
+
+[[package]]
+name = "ferroscope-mesh"
+version = "0.1.0"
+
+[[package]]
 name = "ferroscope-receipt"
 version = "0.1.0"
 
@@ -178,6 +206,17 @@ dependencies = [
  "ferroscope-mcap",
  "ferroscope-receipt",
  "ferroscope-schema",
+]
+
+[[package]]
+name = "ferroscope-scene"
+version = "0.1.0"
+dependencies = [
+ "ferroscope-ledger",
+ "ferroscope-mcap",
+ "ferroscope-receipt",
+ "ferroscope-schema",
+ "ferroscope-urdf",
 ]
 
 [[package]]
@@ -329,6 +368,38 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "physical-cascade"
+version = "0.1.0"
+source = "git+https://github.com/dcharlot-physicalai-bmi/cad-future#26b428048133625714f6a8bdc389c5a784d5f18c"
+dependencies = [
+ "physical-constraint",
+ "physical-lut",
+ "physical-units",
+]
+
+[[package]]
+name = "physical-constraint"
+version = "0.1.0"
+source = "git+https://github.com/dcharlot-physicalai-bmi/cad-future#26b428048133625714f6a8bdc389c5a784d5f18c"
+dependencies = [
+ "physical-lut",
+ "physical-units",
+]
+
+[[package]]
+name = "physical-lut"
+version = "0.1.0"
+source = "git+https://github.com/dcharlot-physicalai-bmi/cad-future#26b428048133625714f6a8bdc389c5a784d5f18c"
+dependencies = [
+ "physical-units",
+]
+
+[[package]]
+name = "physical-units"
+version = "0.1.0"
+source = "git+https://github.com/dcharlot-physicalai-bmi/cad-future#26b428048133625714f6a8bdc389c5a784d5f18c"
 
 [[package]]
 name = "pkg-config"

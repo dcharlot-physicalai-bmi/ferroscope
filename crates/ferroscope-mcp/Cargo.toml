@@ -1,0 +1,27 @@
+[package]
+name = "ferroscope-mcp"
+description = "The Ferroscope MCP server: describe a scene in JSON and get back a recording with a determinism receipt, an energy ledger and a ground-clearance report. Also checks robot descriptions, meshes and materials."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["mcp", "robotics", "simulation", "agent", "scene"]
+categories = ["science::robotics", "simulation"]
+# Not published: it reaches the material tables through ferroscope-cad, which consumes the
+# physical-* crates from git until they are on crates.io.
+publish = false
+
+[[bin]]
+name = "ferroscope-mcp"
+path = "src/main.rs"
+
+[dependencies]
+ferroscope-scene = { workspace = true }
+ferroscope-schema = { workspace = true }
+ferroscope-receipt = { workspace = true }
+ferroscope-urdf = { workspace = true }
+ferroscope-mesh = { workspace = true }
+ferroscope-cad = { workspace = true }

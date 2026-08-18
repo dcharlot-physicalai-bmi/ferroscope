@@ -17,6 +17,7 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut want_collision = true;
     let mut want_inertial = true;
     let mut each = false;
+    let mut mesh_dir: Option<&str> = None;
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -49,6 +50,10 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
             "--no-inertial" => {
                 want_inertial = false;
                 i += 1;
+            }
+            "--meshes" => {
+                mesh_dir = Some(*flags.get(i + 1).ok_or("--meshes needs a directory")?);
+                i += 2;
             }
             "--sweep" => {
                 each = match flags.get(i + 1) {
@@ -95,7 +100,7 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         .filter(|v| !v.mesh.is_empty())
         .map(|v| v.mesh.as_str())
         .collect();
-    if !meshes.is_empty() {
+    if !meshes.is_empty() && mesh_dir.is_none() {
         // Say it rather than draw nothing: a mesh visual with no attachment is a hole in the
         // scene, and the reader should hear about it here instead of wondering in the viewer.
         println!(
@@ -103,12 +108,18 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
             meshes.len(),
             meshes.join(", ")
         );
-        println!("               attach the glTF bytes under those names to draw them");
+        println!("               pass --meshes <dir> to resolve, convert and carry them");
     }
 
     // The validator runs before anything else, because a description that is not physically
     // usable is worth saying so about whether or not you asked for a recording.
-    let findings = robot.check();
+    let mut findings = robot.check();
+    if mesh_dir.is_some() {
+        // "geometry outside this file was not checked" stops being true the moment it is: the
+        // mesh report below states the triangle count, the volume and whether it closes. Two
+        // contradictory lines about the same mesh is worse than either alone.
+        findings.retain(|f| f.kind != "mesh-unverified");
+    }
     let failures = findings.iter().filter(|f| f.fails).count();
     if findings.is_empty() {
         println!("\n  CHECKS       all clear");
@@ -129,6 +140,7 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         return Ok(failures == 0);
     }
 
+    let mut worst_clearance: Option<(f64, String, u64)> = None;
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
     let t0 = Stamp::sim(0, 0);
     rec.geometry(
@@ -150,6 +162,62 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
             .declare_inertial(&mut rec, t0, "/scene")
             .map_err(|e| e.to_string())?;
     }
+    // Meshes, when the caller says where they live. A URDF names its geometry by relative path
+    // and ships nothing; resolving those paths turns the description into a scene that actually
+    // draws, and the bytes then travel inside the recording so the resolution happens once.
+    if let Some(dir) = mesh_dir {
+        let mut attached = 0usize;
+        let mut missing: Vec<String> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for link in &robot.links {
+            for v in link.visuals.iter().chain(link.collisions.iter()) {
+                if v.mesh.is_empty() || seen.contains(&v.mesh) {
+                    continue;
+                }
+                seen.push(v.mesh.clone());
+                let path = std::path::Path::new(dir).join(&v.mesh);
+                let Ok(bytes) = std::fs::read(&path) else {
+                    missing.push(v.mesh.clone());
+                    continue;
+                };
+                let mesh = ferroscope_mesh::stl::read(&bytes)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let (tight, open) = mesh.is_watertight();
+                let props = mesh.mass_properties(1.0);
+                println!(
+                    "  mesh         {:<44} {:>7} tri  {:>9.2} cm³  {}",
+                    v.mesh,
+                    mesh.triangles(),
+                    props.volume * 1e6,
+                    if tight {
+                        "closed".to_string()
+                    } else {
+                        format!("OPEN: {open} edge(s)")
+                    }
+                );
+                let glb = ferroscope_mesh::gltf::write(
+                    &mesh,
+                    &link.name,
+                    [
+                        v.color[0] as f32,
+                        v.color[1] as f32,
+                        v.color[2] as f32,
+                        v.color[3] as f32,
+                    ],
+                );
+                rec.attach(&v.mesh, "model/gltf-binary", &glb, t0)
+                    .map_err(|e| e.to_string())?;
+                attached += 1;
+            }
+        }
+        println!("  meshes       {attached} converted to glTF and attached");
+        for m in &missing {
+            // Named rather than counted: a mesh the description references and the directory
+            // does not have is the one fact the caller needs to fix it.
+            println!("               NOT FOUND under {dir}: {m}");
+        }
+    }
+
     // The findings ride in the recording too, so a reader who only has the file still sees them.
     for f in &findings {
         rec.event(
@@ -207,6 +275,15 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         robot
             .log_pose(&mut rec, t, &q, "/scene")
             .map_err(|e| e.to_string())?;
+        // What the sweep did to the floor. Nothing here stops the arm going through it, so the
+        // least this can do is measure it and put the number in the file.
+        if let Some((z, link)) = robot.lowest_point(&q) {
+            rec.scalar("/clearance/lowest", t, z, "m")
+                .map_err(|e| e.to_string())?;
+            if worst_clearance.as_ref().is_none_or(|(w, _, _)| z < *w) {
+                worst_clearance = Some((z, link, step));
+            }
+        }
         for (name, v) in &q {
             rec.scalar(&format!("/joints/{name}"), t, *v, "rad")
                 .map_err(|e| e.to_string())?;
@@ -253,6 +330,38 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         quote.total_j,
         quote.compute_fraction() * 100.0
     );
+    if let Some((z, link, step)) = worst_clearance {
+        // Stated either way. "It stayed above the floor" is a result, and a reader who only
+        // hears about the bad case cannot tell a clean sweep from an unmeasured one.
+        if z < 0.0 {
+            println!(
+                "  clearance    BELOW THE GROUND PLANE: {link} reached {z:.4} m at step {step}"
+            );
+            println!(
+                "               the declared joint limits permit this pose and nothing here \
+                 forbids it:"
+            );
+            println!(
+                "               a kinematic sweep has no collision check, and a real mounting \
+                 surface is not in the file."
+            );
+            println!("               the whole curve is on /clearance/lowest in the recording.");
+        } else {
+            println!("  clearance    lowest point {z:.4} m ({link}), never below the floor");
+        }
+        let skipped = robot.unmeasurable_collisions();
+        if skipped > 0 {
+            println!(
+                "               {skipped} mesh collision(s) NOT measured: a mesh's extent is \
+                 not in the URDF"
+            );
+        }
+    } else if robot.unmeasurable_collisions() > 0 {
+        println!(
+            "  clearance    not measured: every collision shape is a mesh, whose extent is \
+             not in the URDF"
+        );
+    }
     println!("  open it      https://ferroscope.physicalai-bmi.org/viewer");
     // Exit 1 when the description has defects, so this is a gate and not just a report.
     Ok(failures == 0)

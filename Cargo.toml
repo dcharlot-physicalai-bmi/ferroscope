@@ -8,6 +8,10 @@ members = [
     "crates/ferroscope-cli",
     "crates/ferroscope-run",
     "crates/ferroscope-urdf",
+    "crates/ferroscope-mesh",
+    "crates/ferroscope-cad",
+    "crates/ferroscope-scene",
+    "crates/ferroscope-mcp",
     "crates/ferroscope-wasm",
 ]
 
@@ -28,6 +32,10 @@ ferroscope-schema = { version = "0.1.5", path = "crates/ferroscope-schema" }
 ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
 ferroscope-receipt = { version = "0.1.0", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
+ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
+ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
+ferroscope-scene = { version = "0.1.0", path = "crates/ferroscope-scene" }
+ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }
 ferroscope-urdf = { version = "0.1.1", path = "crates/ferroscope-urdf" }
 
 [profile.release]
