@@ -423,6 +423,44 @@ a refusal that does not say how is a wasted round trip:
 
 Every problem at once, not the first one — five mistakes should cost one pass, not five.
 
+### Or over HTTP, with nothing installed
+
+The same crate compiled to wasm runs at the edge, so a scene can be recorded by anything that can
+make a request:
+
+```sh
+curl -X POST https://physicalai-bmi.org/api/scene/record \
+     -d '{"duration_s":3,"rate_hz":100,
+          "bodies":[{"id":"crate","shape":"box","size":[0.3,0.3,0.3],
+                     "motion":{"kind":"fall","from":[0.6,0,1.8]}}],
+          "robots":[{"id":"arm","urdf":"so101"}]}' -o scene.mcap
+```
+
+```text
+x-ferroscope-trace-digest:  64adb806a715535f3dd6d16ce9bf0626…
+x-ferroscope-joules:        50.232
+x-ferroscope-lowest-point:  -0.2057 arm/moving_jaw_so101_v1_link
+```
+
+The receipt, the joules and the clearance come back in headers, so none of it costs a second
+request or a parse of the file you were just handed. `GET /api/scene/schema` is the format,
+`POST /api/scene/validate` checks without recording, CORS is open, and there is no key. A short
+list of robots is built in, so `"urdf": "so101"` resolves without you shipping a description.
+
+And the part worth saying plainly: **a scene recorded by wasm in a Cloudflare Worker verifies, byte
+for byte, under the native CLI.** Two runtimes with nothing in common but the bytes, agreeing —
+which is the entire reason the receipt is defined over the file rather than over the process.
+
+From a page, with no build step:
+
+```js
+import { record } from 'https://physicalai-bmi.org/assets/ferroscope/ferroscope.js';
+
+const run = await record({ duration_s: 3, bodies: [ /* … */ ] });
+run.receipt.traceDigest;  // recomputable from run.bytes alone
+run.joules;               // E_task, estimated
+```
+
 ## What a mesh weighs
 
 `ferroscope-mesh` reads STL (both dialects, deciding by arithmetic rather than by the leading word,

@@ -2,7 +2,7 @@
 name = "ferroscope-urdf"
 description = "Read a URDF and turn it into a Ferroscope scene: one drawable per visual, one transform per link from forward kinematics. Zero dependencies beyond Ferroscope."
 # 0.1.1 adds collision and inertial parsing, and Robot::check, the description validator.
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

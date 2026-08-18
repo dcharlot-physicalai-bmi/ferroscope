@@ -36,7 +36,7 @@ ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
 ferroscope-scene = { version = "0.1.0", path = "crates/ferroscope-scene" }
 ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }
-ferroscope-urdf = { version = "0.1.1", path = "crates/ferroscope-urdf" }
+ferroscope-urdf = { version = "0.1.2", path = "crates/ferroscope-urdf" }
 
 [profile.release]
 opt-level = 3
