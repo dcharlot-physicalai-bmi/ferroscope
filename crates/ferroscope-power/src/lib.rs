@@ -95,6 +95,23 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Keep only the domains whose energy is not already counted inside another one.
+///
+/// A top-level domain has exactly one colon: `intel-rapl:0`. A subdomain has two,
+/// `intel-rapl:0:0`, and its joules are already inside its parent's — so summing every directory
+/// under `powercap` counts them twice, silently, by 30–60 %, always in the flattering direction.
+///
+/// This is a pure function on names rather than a filter buried in the directory walk, because a
+/// Windows filesystem cannot create a directory called `intel-rapl:0` at all, and an invariant
+/// this load-bearing should not be reachable only through a filesystem that can spell it.
+pub fn top_level_domains(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| n.matches(':').count() == 1)
+        .cloned()
+        .collect()
+}
+
 /// One domain's cumulative counter and its wrap point.
 #[derive(Clone, Debug)]
 struct Counter {
@@ -170,13 +187,7 @@ impl Meter {
             .collect();
         names.sort();
 
-        // A top-level domain has exactly one colon: `intel-rapl:0`. A subdomain has two,
-        // `intel-rapl:0:0`, and its joules are already inside its parent's.
-        let top: Vec<String> = names
-            .iter()
-            .filter(|n| n.matches(':').count() == 1)
-            .cloned()
-            .collect();
+        let top = top_level_domains(&names);
 
         if top.is_empty() {
             return Meter::unavailable(format!(
@@ -399,6 +410,29 @@ pub fn parse_powermetrics(text: &str) -> Option<f64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nested_domains_are_dropped_by_name_alone() {
+        // Runs on every platform, including the one whose filesystem cannot represent these
+        // names: `intel-rapl:0:0` is the core inside package `intel-rapl:0`.
+        let names: Vec<String> = [
+            "intel-rapl:0",
+            "intel-rapl:0:0",
+            "intel-rapl:0:1",
+            "intel-rapl:1",
+            "intel-rapl:1:0",
+            "amd-rapl:0",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            top_level_domains(&names),
+            vec!["intel-rapl:0", "intel-rapl:1", "amd-rapl:0"],
+            "only domains that contain no other domain may be summed"
+        );
+        assert!(top_level_domains(&[]).is_empty());
+    }
+
     /// Lay out a fake `/sys/class/powercap`, so the parsing is testable on a machine with no RAPL.
     fn fake_sysfs(dir: &Path, domains: &[(&str, &str, u64, u64)]) {
         std::fs::create_dir_all(dir).unwrap();
@@ -417,7 +451,10 @@ mod tests {
         p
     }
 
+    // Windows reserves the colon in a filename, so a real sysfs name cannot exist there.
+    // The naming rule itself is covered on every platform by the test above.
     #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
     fn a_subdomain_is_never_summed_into_its_parent() {
         // The silent 30-60 % error: intel-rapl:0:0 is the core INSIDE package intel-rapl:0, so
         // summing every directory counts those joules twice.
@@ -446,7 +483,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    // Windows reserves the colon in a filename, so a real sysfs name cannot exist there.
+    // The naming rule itself is covered on every platform by the test above.
     #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
     fn energy_between_two_reads_becomes_watts() {
         let d = tmp("rate");
         fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, u32::MAX as u64)]);
@@ -469,7 +509,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    // Windows reserves the colon in a filename, so a real sysfs name cannot exist there.
+    // The naming rule itself is covered on every platform by the test above.
     #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
     fn a_wrapped_counter_does_not_read_as_negative_or_zero_energy() {
         // RAPL registers roll over, on some parts every minute or two under load. A naive
         // subtraction goes hugely negative; clamping it to zero silently drops the interval.
@@ -489,7 +532,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    // Windows reserves the colon in a filename, so a real sysfs name cannot exist there.
+    // The naming rule itself is covered on every platform by the test above.
     #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
     fn an_unreadable_counter_reports_why_instead_of_zero() {
         // The modern default on Linux: the directory is there, energy_uj is root-only. A meter
         // that shrugs here reports 0 J for a machine drawing 90 W.
