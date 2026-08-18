@@ -187,7 +187,11 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
                         // One full out-and-back through the whole declared range, starting and
                         // ending at home so consecutive joints hand over without a jump.
                         let s = (std::f64::consts::TAU * slice).sin();
-                        home + if s >= 0.0 { (hi - home) * s } else { (home - lo) * s }
+                        home + if s >= 0.0 {
+                            (hi - home) * s
+                        } else {
+                            (home - lo) * s
+                        }
                     } else {
                         home
                     };

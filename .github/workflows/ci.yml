@@ -87,7 +87,7 @@ jobs:
           grep -q "0 that fail" /tmp/so101.txt || { echo "the SO-101 no longer checks clean"; exit 1; }
           # --check must not be swallowed as the output path. It was, and a 1.4 MB file named
           # `--check` appeared in the working directory while the exit code stayed correct.
-          test ! -e -- '--check' || { echo "--check was treated as a filename"; exit 1; }
+          test ! -e './--check' || { echo "--check was treated as a filename"; exit 1; }
           test -z "$(ls -A)" || { echo "--check wrote something: $(ls -A)"; exit 1; }
           echo "the SO-101 checks clean and --check writes nothing"
       - name: a URDF becomes a verified recording
