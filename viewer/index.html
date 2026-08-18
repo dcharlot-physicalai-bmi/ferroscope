@@ -35,7 +35,28 @@
     color:var(--dim);white-space:nowrap}
   .brand b{color:var(--gold)}
   header .grow{flex:1;min-width:0}
-  .files{display:flex;gap:8px;align-items:center;min-width:0}
+  .files{display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap;row-gap:7px}
+  /* Below ~620px the two file slots and the demo buttons cannot share a row: they overlap,
+     and axe reports that as a target-size failure because a partially obscured control is
+     not a 24px target. Adding a fourth demo button is what tipped it, so the buttons get
+     their own row rather than each new one making the squeeze worse. */
+  @media (max-width:620px){
+    header{flex-direction:column;align-items:stretch;gap:8px}
+    /* The slots stack rather than share a row: a loaded slot's label is "name · N msgs",
+       which at 390px is wider than half the screen, so side by side the first one's text
+       runs straight through the second one's border. */
+    .files{width:100%;flex-direction:column;align-items:stretch}
+    .slot{max-width:none;width:100%}
+    /* The HUD reads left, the axis key reads right, and on a phone they meet in the middle
+       and print over each other. The HUD is the one carrying a topic name, so it gets the
+       width and the axis key drops below it. */
+    .hud{max-width:100%;position:static;padding:8px 10px 0}
+    .axkey{position:static;text-align:left;padding:2px 10px 6px}
+    #paneScene .body{overflow:hidden}
+    .demos{display:flex;gap:8px;flex-wrap:wrap;row-gap:7px;width:100%}
+    header nav{display:flex;gap:4px}
+    header nav a{margin-left:0;margin-right:12px}
+  }
   .slot{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--dim);
     border:1px dashed var(--line);border-radius:6px;padding:4px 8px;max-width:44vw;min-width:0}
   .slot.loaded{border-style:solid}
@@ -119,6 +140,11 @@
   .lane h3 em{font-style:normal;color:var(--ink)}
   .lane canvas{display:block;width:100%;background:var(--sunk);border:1px solid var(--line2);border-radius:5px}
 
+  .vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .skip{position:absolute;left:-9999px;top:0;font-family:var(--mono);font-size:12px;padding:8px 14px;
+    background:var(--panel);border:1px solid var(--gold);color:var(--gold);z-index:20;border-radius:0 0 6px 0}
+  .skip:focus{left:0}
   footer{display:flex;align-items:center;gap:10px;padding:0 12px;border-top:1px solid var(--line);
     background:var(--panel);min-width:0}
   footer input[type=range]{flex:1;min-width:80px;accent-color:#cfaa5b}
@@ -150,7 +176,9 @@
 </script>
 </head>
 <body>
+<a class="skip" href="#paneScene">Skip to the 3D view</a>
 <div id="app">
+<h1 class="vh">Ferroscope viewer</h1>
 
 <header>
   <span class="brand"><b>Φ</b> FERROSCOPE <span id="ver"></span></span>
@@ -161,10 +189,12 @@
     <div class="slot" id="slotB"><b>B</b>
       <label><input type="file" id="fileB" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmB">compare with…</span></label>
     </div>
+    <span class="demos">
     <button id="demoBtn" type="button" title="A one-legged hopper with a glTF body">hopper</button>
     <button id="armBtn" type="button" title="A robot arm built from its own URDF">arm</button>
     <button id="so101Btn" type="button" title="The LeRobot SO-101: real calibrated kinematics and inertials">SO-101</button>
     <button id="sceneBtn" type="button" title="A described scene: bodies, motions and a robot, authored as JSON">scene</button>
+    </span>
   </div>
   <span class="grow"></span>
   <nav>
@@ -176,7 +206,7 @@
 <div id="strip" role="status"></div>
 <div id="err" role="alert"></div>
 
-<div id="dock">
+<main id="dock">
   <section class="pane" id="paneTopics">
     <h2>Scene tree</h2>
     <div class="body" tabindex="0"><div class="tree" id="tree"></div></div>
@@ -225,7 +255,7 @@
     <h2>Plots <span class="tools"><span class="lab" id="lanecount" style="font-family:var(--mono);font-size:10px;color:var(--dim)"></span></span></h2>
     <div class="body" tabindex="0"><div id="plots"></div></div>
   </section>
-</div>
+</main>
 
 <footer>
   <button id="play" type="button" aria-label="Play or pause" aria-pressed="false">▶</button>
