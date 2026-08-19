@@ -156,11 +156,12 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-cli"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
  "ferroscope-mesh",
+ "ferroscope-phrase",
  "ferroscope-power",
  "ferroscope-receipt",
  "ferroscope-scene",
@@ -185,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "ferroscope-cad",
  "ferroscope-mesh",
+ "ferroscope-phrase",
  "ferroscope-receipt",
  "ferroscope-scene",
  "ferroscope-schema",
@@ -194,6 +196,13 @@ dependencies = [
 [[package]]
 name = "ferroscope-mesh"
 version = "0.1.0"
+
+[[package]]
+name = "ferroscope-phrase"
+version = "0.1.0"
+dependencies = [
+ "ferroscope-scene",
+]
 
 [[package]]
 name = "ferroscope-power"
@@ -245,7 +254,9 @@ dependencies = [
 name = "ferroscope-wasm"
 version = "0.1.2"
 dependencies = [
+ "ferroscope-phrase",
  "ferroscope-receipt",
+ "ferroscope-scene",
  "ferroscope-schema",
  "wasm-bindgen",
 ]

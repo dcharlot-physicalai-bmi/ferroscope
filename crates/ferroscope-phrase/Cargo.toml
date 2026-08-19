@@ -1,0 +1,19 @@
+[package]
+name = "ferroscope-phrase"
+description = "Say what you want to see in English and get a Ferroscope scene, together with what it understood, what it assumed, and what it ignored. Deterministic, offline, no dependencies."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "simulation", "scene", "parsing", "authoring"]
+categories = ["science::robotics", "simulation", "parsing"]
+
+[dependencies]
+
+[dev-dependencies]
+# The parser must produce JSON the real scene reader accepts — asserting on strings would only
+# prove the two agree with each other.
+ferroscope-scene = { workspace = true }

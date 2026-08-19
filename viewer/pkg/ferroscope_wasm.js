@@ -149,6 +149,76 @@ export function open(bytes) {
 }
 
 /**
+ * Record a scene, in the tab, and hand back the MCAP bytes.
+ *
+ * The same crate the CLI and the edge endpoint run, so a scene authored here produces the same
+ * bytes and the same receipt as one authored anywhere else.
+ * @param {string} scene_json
+ * @returns {Uint8Array}
+ */
+export function record_scene(scene_json) {
+    const ptr0 = passStringToWasm0(scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.record_scene(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * Record a scene with one robot description supplied by the caller.
+ *
+ * The page fetches the URDF (it knows how to make requests; this does not) and passes the text
+ * in. Any robot whose name does not match is skipped and noted in the recording.
+ * @param {string} scene_json
+ * @param {string} robot_name
+ * @param {string} urdf
+ * @returns {Uint8Array}
+ */
+export function record_scene_with(scene_json, robot_name, urdf) {
+    const ptr0 = passStringToWasm0(scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(robot_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(urdf, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.record_scene_with(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * Read an English phrase into a scene, in the tab.
+ *
+ * Returns `{ scene, understood[], assumed[], ignored[] }`, or an object with `error` and `hint`
+ * when the phrase names nothing recordable. Deterministic and offline: no request leaves the
+ * page, which is the same promise the viewer already makes about the files you open in it.
+ * @param {string} text
+ * @returns {string}
+ */
+export function scene_from_text(text) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.scene_from_text(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
  * Verify one recording against its own receipt. Returns JSON:
  * `{ verified, spec_matches, trace_matches, stored, recomputed, messages, non_finite }`.
  * @param {Uint8Array} bytes

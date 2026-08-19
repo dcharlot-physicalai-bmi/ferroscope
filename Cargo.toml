@@ -12,6 +12,7 @@ members = [
     "crates/ferroscope-power",
     "crates/ferroscope-cad",
     "crates/ferroscope-scene",
+    "crates/ferroscope-phrase",
     "crates/ferroscope-mcp",
     "crates/ferroscope-wasm",
 ]
@@ -37,6 +38,7 @@ ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
 ferroscope-power = { version = "0.1.0", path = "crates/ferroscope-power" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
 ferroscope-scene = { version = "0.1.0", path = "crates/ferroscope-scene" }
+ferroscope-phrase = { version = "0.1.0", path = "crates/ferroscope-phrase" }
 ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }
 ferroscope-urdf = { version = "0.1.2", path = "crates/ferroscope-urdf" }
 

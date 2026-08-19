@@ -33,6 +33,14 @@ const TOOLS: &[Tool] = &[
         r#"{"type":"object","properties":{}}"#,
     ),
     (
+        "scene_from_text",
+        "Turn an English phrase into a scene, and say what it understood, what it assumed, and \
+         which words it could not use. Deterministic and offline — for open-ended language, \
+         write the JSON yourself against scene_schema. Returns the scene for you to check or \
+         edit before scene_record.",
+        r#"{"type":"object","properties":{"text":{"type":"string","description":"e.g. \"drop three red crates from 2 m beside an SO-101 arm for 6 seconds\""}},"required":["text"]}"#,
+    ),
+    (
         "scene_validate",
         "Check a scene without recording it. Returns every problem at once, each with the JSON \
          path that was wrong, so one pass fixes the whole document.",
@@ -93,6 +101,7 @@ const TOOLS: &[Tool] = &[
 pub fn call(name: &str, args: &Value) -> String {
     let r = match name {
         "scene_schema" => Ok(Scene::SCHEMA.to_string()),
+        "scene_from_text" => scene_from_text(args),
         "scene_validate" => scene_validate(args),
         "scene_record" => scene_record(args),
         "robot_check" => robot_check(args),
@@ -150,6 +159,35 @@ fn parse_scene(args: &Value) -> Result<Scene, String> {
         s.push_str("\nCall scene_schema for the full shape, defaults and a worked example.");
         s
     })
+}
+
+fn scene_from_text(args: &Value) -> Result<String, String> {
+    let text = arg(args, "text")?;
+    let r = ferroscope_phrase::read(text).map_err(|e| e.to_string())?;
+    let mut out = format!("\"{text}\"\n");
+    for u in &r.understood {
+        out.push_str(&format!("  understood   {u}\n"));
+    }
+    for a in &r.assumed {
+        out.push_str(&format!("  assumed      {a}\n"));
+    }
+    if !r.ignored.is_empty() {
+        // Reported, never dropped in silence: a scene quietly stripped of half the sentence is
+        // a scene the caller cannot tell apart from one that worked.
+        out.push_str(&format!(
+            "  NOT USED     {} — no meaning in the scene vocabulary\n",
+            r.ignored
+                .iter()
+                .map(|w| format!("{w:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    out.push_str(&format!(
+        "\n{}\n\nCheck it, edit anything that is wrong, then pass it to scene_record.",
+        r.scene_json
+    ));
+    Ok(out)
 }
 
 fn scene_validate(args: &Value) -> Result<String, String> {

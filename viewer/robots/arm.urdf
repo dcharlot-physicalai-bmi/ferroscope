@@ -1,0 +1,128 @@
+<?xml version="1.0"?>
+<!-- A four-joint arm with a gripper, written the way a URDF should be written: a visual AND a
+     collision per link, inertias computed from the same primitives (box: m(b²+c²)/12; cylinder
+     about its axis: m·r²/2), and joint limits that mean something.
+
+     This file passes `ferroscope urdf arm.urdf out.mcap --check`. It did not when it was first
+     written: the checker found nine defects, every link missing collision geometry and every
+     movable link missing an <inertial>. See broken.urdf for one of each defect class. -->
+<robot name="bench_arm">
+  <link name="base">
+    <visual>
+      <origin xyz="0 0 0.025"/>
+      <geometry><cylinder radius="0.09" length="0.05"/></geometry>
+      <material name="dark"><color rgba="0.20 0.26 0.42 1"/></material>
+    </visual>
+      <collision>
+      <origin xyz="0 0 0.025"/>
+      <geometry><cylinder radius="0.09" length="0.05"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.025"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.00446667" ixy="0" ixz="0" iyy="0.00446667" iyz="0" izz="0.0081"/>
+    </inertial>
+  </link>
+
+  <link name="shoulder_link">
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.055" length="0.10"/></geometry>
+      <material name="gold"><color rgba="0.81 0.67 0.36 1"/></material>
+    </visual>
+      <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.055" length="0.10"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="1.2"/>
+      <inertia ixx="0.0019075" ixy="0" ixz="0" iyy="0.0019075" iyz="0" izz="0.001815"/>
+    </inertial>
+  </link>
+
+  <link name="upper_arm">
+    <visual>
+      <origin xyz="0 0 0.14"/>
+      <geometry><box size="0.07 0.07 0.28"/></geometry>
+      <material name="steel"><color rgba="0.54 0.63 0.74 1"/></material>
+    </visual>
+      <collision>
+      <origin xyz="0 0 0.14"/>
+      <geometry><box size="0.07 0.07 0.28"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.14"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.0104125" ixy="0" ixz="0" iyy="0.0104125" iyz="0" izz="0.001225"/>
+    </inertial>
+  </link>
+
+  <link name="forearm">
+    <visual>
+      <origin xyz="0 0 0.105"/>
+      <geometry><box size="0.055 0.055 0.21"/></geometry>
+      <material name="teal"><color rgba="0.27 0.78 0.69 1"/></material>
+    </visual>
+      <collision>
+      <origin xyz="0 0 0.105"/>
+      <geometry><box size="0.055 0.055 0.21"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.105"/>
+      <mass value="0.9"/>
+      <inertia ixx="0.00353437" ixy="0" ixz="0" iyy="0.00353437" iyz="0" izz="0.00045375"/>
+    </inertial>
+  </link>
+
+  <link name="gripper">
+    <visual>
+      <origin xyz="0 0 0.03"/>
+      <geometry><box size="0.05 0.09 0.06"/></geometry>
+      <material name="violet"><color rgba="0.62 0.55 1.0 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="0 0.035 0.075"/>
+      <geometry><box size="0.02 0.02 0.05"/></geometry>
+      <material name="violet"><color rgba="0.62 0.55 1.0 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.035 0.075"/>
+      <geometry><box size="0.02 0.02 0.05"/></geometry>
+      <material name="violet"><color rgba="0.62 0.55 1.0 1"/></material>
+    </visual>
+      <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><box size="0.05 0.09 0.1"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.045"/>
+      <mass value="0.35"/>
+      <inertia ixx="0.00034125" ixy="0" ixz="0" iyy="0.000177917" iyz="0" izz="0.000309167"/>
+    </inertial>
+  </link>
+
+  <joint name="yaw" type="revolute">
+    <parent link="base"/><child link="shoulder_link"/>
+    <origin xyz="0 0 0.05"/><axis xyz="0 0 1"/>
+    <limit lower="-2.6" upper="2.6" effort="20" velocity="2.5"/>
+  </joint>
+
+  <joint name="shoulder" type="revolute">
+    <parent link="shoulder_link"/><child link="upper_arm"/>
+    <origin xyz="0 0 0.10"/><axis xyz="0 1 0"/>
+    <limit lower="-1.1" upper="1.1" effort="18" velocity="2.0"/>
+  </joint>
+
+  <joint name="elbow" type="revolute">
+    <parent link="upper_arm"/><child link="forearm"/>
+    <origin xyz="0 0 0.28"/><axis xyz="0 1 0"/>
+    <limit lower="-2.2" upper="0.2" effort="12" velocity="2.0"/>
+  </joint>
+
+  <joint name="wrist" type="revolute">
+    <parent link="forearm"/><child link="gripper"/>
+    <origin xyz="0 0 0.21"/><axis xyz="0 0 1"/>
+    <limit lower="-2.8" upper="2.8" effort="6" velocity="3.0"/>
+  </joint>
+</robot>

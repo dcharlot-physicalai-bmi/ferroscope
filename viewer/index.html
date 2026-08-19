@@ -142,6 +142,23 @@
 
   .vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
     clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  /* Say what you want, in words. The report below the box is the point: it says what it
+     understood, what it filled in, and which words it could not use — so a sentence that
+     silently lost half its meaning is visible rather than left for you to spot in the 3D. */
+  #saybar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);
+    background:var(--panel);flex-wrap:wrap}
+  #saybar label{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--gold);flex:none}
+  #say{flex:1;min-width:180px;font-family:var(--sans);font-size:13px;color:var(--ink);
+    background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:7px 10px;min-height:30px}
+  #say::placeholder{color:var(--dim)}
+  #sayOut{grid-column:1/-1;font-family:var(--mono);font-size:11px;line-height:1.65;padding:0 12px 8px;
+    color:var(--dim);background:var(--panel);border-bottom:1px solid var(--line);max-height:19vh;overflow:auto}
+  #sayOut:empty{display:none}
+  #sayOut .ok{color:var(--teal)} #sayOut .warn{color:var(--gold)} #sayOut .bad{color:var(--red)}
+  #sayOut b{color:var(--ink);font-weight:600}
+  #sayOut pre{margin:6px 0 0;padding:8px 10px;background:var(--sunk);border:1px solid var(--line2);
+    border-radius:6px;overflow:auto;color:var(--ink);font-size:10.5px;white-space:pre;max-height:11vh}
   .skip{position:absolute;left:-9999px;top:0;font-family:var(--mono);font-size:12px;padding:8px 14px;
     background:var(--panel);border:1px solid var(--gold);color:var(--gold);z-index:20;border-radius:0 0 6px 0}
   .skip:focus{left:0}
@@ -206,6 +223,15 @@
 <div id="strip" role="status"></div>
 <div id="err" role="alert"></div>
 
+<div id="saybar">
+  <label for="say">Say</label>
+  <input id="say" type="text" autocomplete="off" spellcheck="false"
+         placeholder="drop three red crates from 2 m beside an SO-101 arm for 6 seconds"
+         aria-describedby="sayOut">
+  <button id="sayGo" type="button">record it</button>
+  <button id="sayEg" type="button" title="Fill the box with an example">example</button>
+</div>
+<div id="sayOut" role="status" aria-live="polite" tabindex="0"></div>
 <main id="dock">
   <section class="pane" id="paneTopics">
     <h2>Scene tree</h2>
@@ -278,7 +304,8 @@ import { Line2 } from 'three/addons/lines/webgpu/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import init, { open as fsOpen, diff as fsDiff, divergence_curve, attachment, version }
+import init, { open as fsOpen, diff as fsDiff, divergence_curve, attachment, version,
+               scene_from_text, record_scene, record_scene_with }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -297,6 +324,9 @@ const S = {
 };
 
 await init();
+// Top-level await, so anything below this line may use the module. The flag exists for the
+// say bar, whose handler can fire from a keystroke before this module body has finished.
+const wasmReady = true;
 el('ver').textContent = 'v' + version();
 
 /* ---------------- three.js on WebGPU ----------------
@@ -1103,6 +1133,77 @@ el('armBtn').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('armBtn2').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('so101Btn').addEventListener('click', () => loadDemo('A','so101.mcap'));
 el('sceneBtn').addEventListener('click', () => loadDemo('A','warehouse.mcap'));
+
+/* ---------------- say what you want ---------------- */
+const EXAMPLES = [
+  'drop three red crates from 2 m beside an SO-101 arm for 6 seconds',
+  'a 30 cm aluminium cube orbiting at 0.8 m every 3 s',
+  'two cylinders sliding back and forth and a robot arm',
+  'drop a ball on the moon for 8 seconds',
+  'a gold pillar oscillating every 2 s and five balls falling',
+];
+let egAt = 0;
+el('sayEg').addEventListener('click', () => {
+  el('say').value = EXAMPLES[egAt++ % EXAMPLES.length];
+  el('say').focus();
+});
+
+function sayReport(r) {
+  const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  let h = '';
+  for (const u of r.understood || []) h += `<div class="ok">understood &nbsp;${esc(u)}</div>`;
+  for (const a of r.assumed || [])    h += `<div>assumed &nbsp;&nbsp;&nbsp;&nbsp;${esc(a)}</div>`;
+  if ((r.ignored || []).length) {
+    h += `<div class="warn">NOT USED &nbsp;&nbsp;&nbsp;` +
+         `${r.ignored.map((w) => '"' + esc(w) + '"').join(', ')} — no meaning in the scene vocabulary</div>`;
+  }
+  return h;
+}
+
+async function sayGo() {
+  const text = el('say').value.trim();
+  const out = el('sayOut');
+  if (!text) { out.innerHTML = ''; return; }
+  if (!wasmReady) { out.innerHTML = '<div class="bad">the WebAssembly module is still loading</div>'; return; }
+  out.innerHTML = '<div>reading…</div>';
+  let r;
+  try {
+    r = JSON.parse(scene_from_text(text));
+  } catch (e) {
+    out.innerHTML = `<div class="bad">${e.message || e}</div>`;
+    return;
+  }
+  if (r.error) {
+    // A refusal always carries a way forward; showing only "no" is a wall.
+    out.innerHTML = `<div class="bad">${r.error}</div><div>${r.hint}</div>`;
+    return;
+  }
+  out.innerHTML = sayReport(r) + `<pre tabindex="0">${r.scene.replace(/[&<>]/g,
+    (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</pre>`;
+
+  // A robot named in the scene needs its description. The page can fetch; the wasm cannot.
+  let bytes;
+  try {
+    const m = /"urdf"\s*:\s*"([^"]+)"/.exec(r.scene);
+    if (m) {
+      const name = m[1].replace(/\.urdf$/, '').split('/').pop();
+      const res = await fetch(`robots/${name}.urdf`);
+      bytes = res.ok
+        ? record_scene_with(r.scene, name, await res.text())
+        : record_scene(r.scene);
+      if (!res.ok) out.innerHTML += `<div class="warn">robots/${name}.urdf did not load, so the robot is not in this recording</div>`;
+    } else {
+      bytes = record_scene(r.scene);
+    }
+  } catch (e) {
+    out.innerHTML += `<div class="bad">${e.message || e}</div>`;
+    return;
+  }
+  await accept('A', new File([bytes], 'said.mcap'));
+  out.innerHTML += `<div class="ok">recorded ${bytes.length.toLocaleString()} bytes in this tab — nothing was uploaded</div>`;
+}
+el('sayGo').addEventListener('click', sayGo);
+el('say').addEventListener('keydown', (e) => { if (e.key === 'Enter') sayGo(); });
 el('so101Btn2').addEventListener('click', () => loadDemo('A','so101.mcap'));
 el('demoBtn2').addEventListener('click', () => loadDemo('A','a.mcap'));
 el('demoBtn3').addEventListener('click', async () => {

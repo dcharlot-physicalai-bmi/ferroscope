@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 ferroscope-scene = { workspace = true }
+ferroscope-phrase = { workspace = true }
 ferroscope-schema = { workspace = true }
 ferroscope-receipt = { workspace = true }
 ferroscope-urdf = { workspace = true }

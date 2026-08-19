@@ -441,6 +441,38 @@ careful about ordering. That is what lets a described scene carry the same recei
 one. `fall` is the exception worth naming: it is a real ballistic arc that bounces and comes to
 rest, and it still has a closed form because each bounce is a fixed fraction of the last.
 
+### Or just say it
+
+You should not have to write JSON to see a crate fall.
+
+```sh
+ferroscope say "drop three red crates from 2 m beside an SO-101 arm for 6 seconds"
+```
+
+```text
+  understood   3 boxes each of 0.3 m, falling from 2 m
+  understood   arm: the so101 description, sweeping one joint at a time
+  assumed      box size 0.3 m (not stated)
+  assumed      120 Hz (say "at 60 Hz" to change it)
+  NOT USED     "belt", "conveyor" — no meaning in the scene vocabulary
+```
+
+**That last line is the whole design.** Any phrase reader fails on language it was not built for;
+what separates a useful one from an infuriating one is whether it tells you *which words it threw
+away*. A sentence that silently loses "onto a conveyor belt" produces a scene with no conveyor and
+no explanation, and you are left comparing your sentence against a picture, guessing which half
+arrived.
+
+So it always reports three things — what it **understood**, what it **assumed** because you did
+not say, and what it **could not use** — and `--json` prints the scene it built, which is ordinary
+scene JSON you can edit and re-run. It is a starting point you can correct, never a black box.
+
+It is deterministic and offline: no key, no request, no model. That also means it is *small* —
+shapes, five motions, counts, units, colours, materials, and a few worlds with different gravity.
+For anything more open-ended, a model is the right tool, and the MCP server below is how you get
+one. The viewer runs this parser in WebAssembly, so typing a sentence into the page and getting a
+recording back never leaves the tab.
+
 ### An agent can drive all of it
 
 `ferroscope-mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. Point a client at
@@ -449,6 +481,7 @@ the binary — no configuration, no network, no account:
 | tool | what it does |
 |---|---|
 | `scene_schema` | the format, with defaults and a worked example |
+| `scene_from_text` | an English phrase, with what it understood, assumed and ignored |
 | `scene_validate` | every problem at once, each with the JSON path that was wrong |
 | `scene_record` | records it, and returns the receipt, the joules and the clearance |
 | `robot_check` | is this URDF physically usable |
@@ -796,10 +829,10 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-the CLI's eight verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
+the CLI's nine verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **159 tests, clean clippy, three platforms in CI plus
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **175 tests, clean clippy, three platforms in CI plus
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 

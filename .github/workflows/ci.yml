@@ -150,6 +150,43 @@ jobs:
           grep -q "oscillate" /tmp/err.txt || { echo "the refusal does not list the motions"; exit 1; }
           echo "every problem is named with its path"
 
+  say:
+    # English in, a recording out — and the report that makes it usable: what it understood,
+    # what it filled in, and which words it could not use.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-cli
+      - name: a sentence becomes a verified recording
+        run: |
+          B=target/release/ferroscope
+          $B say "drop three red crates from 2 m beside an SO-101 arm onto a conveyor belt for 6 seconds" \
+             said.mcap --json | tee /tmp/say.txt
+          $B verify said.mcap | grep -q VERIFIED || { echo "the said scene does not verify"; exit 1; }
+          # Three crates AND the built-in robot, which the binary carries rather than reading
+          # off disk — `cargo install` users have no examples/ directory.
+          $B inspect said.mcap > /tmp/i.txt
+          for id in crate1 crate2 crate3; do
+            grep -q "/scene/tf/$id" /tmp/i.txt || { echo "no $id"; exit 1; }
+          done
+          grep -q "/scene/arm/tf/base_link" /tmp/i.txt || { echo "the built-in robot did not load"; exit 1; }
+          # It must SAY what it could not use, or a sentence silently loses half its meaning.
+          grep -q 'NOT USED' /tmp/say.txt || { echo "it did not report the words it ignored"; exit 1; }
+          grep -q 'conveyor' /tmp/say.txt || { echo "conveyor was dropped in silence"; exit 1; }
+          grep -q '"duration_s": 6' /tmp/say.txt || { echo "\"for 6 seconds\" was not honoured"; exit 1; }
+          # And filler must NOT be reported, or the word that mattered is buried.
+          grep -E 'NOT USED.*"(a|the|onto)"' /tmp/say.txt && { echo "filler reported as ignored"; exit 1; }
+          echo "a sentence recorded, verified, and reported honestly"
+      - name: a phrase naming nothing is refused with a way forward
+        run: |
+          B=target/release/ferroscope
+          ! $B say "make it look nice" /tmp/x.mcap 2>/tmp/e.txt
+          grep -q "names a thing" /tmp/e.txt || { cat /tmp/e.txt; exit 1; }
+          grep -q "crate" /tmp/e.txt || { echo "the refusal offers no way forward"; exit 1; }
+          test ! -e /tmp/x.mcap || { echo "a refused phrase still wrote a file"; exit 1; }
+          echo "refused, with the vocabulary and the unusable words named"
+
   mcp:
     # The agent-facing surface, driven exactly as a client drives it: handshake, tool list, and
     # a scene authored, refused, corrected and recorded over stdio.

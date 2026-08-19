@@ -13,9 +13,11 @@
 
 use std::process::ExitCode;
 
+mod builtin;
 mod demo;
 mod glb;
 mod power;
+mod say;
 mod scene;
 mod urdf;
 
@@ -45,6 +47,10 @@ fn main() -> ExitCode {
             run(demo::write_with(out, flags))
         }
         ["power", rest @ ..] => run(power::run(rest)),
+        ["say", phrase, rest @ ..] => {
+            let (out, flags) = split_out(rest, "scene.mcap");
+            run(say::run(phrase, out, flags))
+        }
         ["scene", src, rest @ ..] => {
             let (out, flags) = split_out(rest, "scene.mcap");
             run(scene::run(src, out, flags))
@@ -105,6 +111,8 @@ USAGE
                      [--no-collision] [--no-inertial] [--meshes <dir>]
   ferroscope scene   <scene.json> <out.mcap>  record a DESCRIBED scene
                      [--check]   ·   --schema prints the scene format
+  ferroscope say     \"<phrase>\" [<out.mcap>]  describe the scene in ENGLISH
+                     [--json] [--check]
   ferroscope power   [-- <command>]         what this machine can measure, and what
                      [--out <run.mcap>] [--rate <hz>]    a command actually cost
 

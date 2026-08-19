@@ -61,9 +61,11 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
     let rec = scene.record(|p| {
+        // Relative to the scene file first, because that is what "arm.urdf" written next to it
+        // means; then the built-in names, so a hand-written scene may also just say "so101".
         std::fs::read_to_string(base.join(p))
-            .or_else(|_| std::fs::read_to_string(p))
             .ok()
+            .or_else(|| crate::builtin::load(p))
     })?;
     std::fs::write(out, &rec.bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
 

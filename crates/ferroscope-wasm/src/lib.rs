@@ -287,3 +287,73 @@ fn fin(v: f64) -> String {
         "null".to_string()
     }
 }
+
+/// Read an English phrase into a scene, in the tab.
+///
+/// Returns `{ scene, understood[], assumed[], ignored[] }`, or an object with `error` and `hint`
+/// when the phrase names nothing recordable. Deterministic and offline: no request leaves the
+/// page, which is the same promise the viewer already makes about the files you open in it.
+#[wasm_bindgen]
+pub fn scene_from_text(text: &str) -> String {
+    use ferroscope_schema::json::Obj;
+    match ferroscope_phrase::read(text) {
+        Ok(r) => Obj::new()
+            .str("scene", &r.scene_json)
+            .strs("understood", &r.understood)
+            .strs("assumed", &r.assumed)
+            .strs("ignored", &r.ignored)
+            .finish(),
+        Err(e) => Obj::new()
+            .str("error", &e.message)
+            .str("hint", &e.hint)
+            .finish(),
+    }
+}
+
+/// Record a scene, in the tab, and hand back the MCAP bytes.
+///
+/// The same crate the CLI and the edge endpoint run, so a scene authored here produces the same
+/// bytes and the same receipt as one authored anywhere else.
+#[wasm_bindgen]
+pub fn record_scene(scene_json: &str) -> Result<Vec<u8>, JsValue> {
+    let scene = ferroscope_scene::Scene::parse(scene_json).map_err(|problems| {
+        JsValue::from_str(&format!(
+            "{} problem(s):\n{}",
+            problems.len(),
+            problems
+                .iter()
+                .map(|p| format!("  {}: {}", p.path, p.message))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
+    })?;
+    // A browser has no filesystem, so a robot named in the scene is fetched by the page and
+    // handed back through `record_scene_with`. Here, robots are skipped and noted.
+    let rec = scene.record(|_| None).map_err(|e| JsValue::from_str(&e))?;
+    Ok(rec.bytes)
+}
+
+/// Record a scene with one robot description supplied by the caller.
+///
+/// The page fetches the URDF (it knows how to make requests; this does not) and passes the text
+/// in. Any robot whose name does not match is skipped and noted in the recording.
+#[wasm_bindgen]
+pub fn record_scene_with(
+    scene_json: &str,
+    robot_name: &str,
+    urdf: &str,
+) -> Result<Vec<u8>, JsValue> {
+    let scene = ferroscope_scene::Scene::parse(scene_json)
+        .map_err(|p| JsValue::from_str(&format!("{} problem(s) in the scene", p.len())))?;
+    let rec = scene
+        .record(|want| {
+            let stem = want
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(want)
+                .trim_end_matches(".urdf");
+            (stem == robot_name).then(|| urdf.to_string())
+        })
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(rec.bytes)
+}
