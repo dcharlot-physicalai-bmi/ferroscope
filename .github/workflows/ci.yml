@@ -178,6 +178,17 @@ jobs:
           # And filler must NOT be reported, or the word that mattered is buried.
           grep -E 'NOT USED.*"(a|the|onto)"' /tmp/say.txt && { echo "filler reported as ignored"; exit 1; }
           echo "a sentence recorded, verified, and reported honestly"
+      - name: the embedded robots are the same files the repository shows
+        # The CLI embeds its descriptions because a published tarball contains only the crate
+        # directory — an include_str! reaching into examples/ compiles locally and fails at
+        # `cargo publish`. Two copies can drift into two different robots under one name, so
+        # they are compared rather than trusted.
+        run: |
+          for r in so101 arm; do
+            cmp "examples/robots/$r.urdf" "crates/ferroscope-cli/robots/$r.urdf" \
+              || { echo "$r.urdf has drifted between examples/ and the crate"; exit 1; }
+          done
+          echo "the embedded robots match the repository's copies"
       - name: a phrase naming nothing is refused with a way forward
         run: |
           B=target/release/ferroscope

@@ -5,9 +5,14 @@
 //! embedded: `cargo install ferroscope-cli` then `ferroscope say "an SO-101"` works with no
 //! files at all. Anything else is still a path, resolved by the caller.
 
+/// The descriptions live inside the crate rather than in `examples/`, because a published
+/// tarball contains only the crate directory: an `include_str!` reaching outside it compiles
+/// here and fails at `cargo publish`, which is exactly where this was caught. `examples/robots/`
+/// keeps the copies a reader browses, and CI asserts the two are byte-identical so they cannot
+/// drift into two different robots with one name.
 pub const BUILTIN: &[(&str, &str)] = &[
-    ("so101", include_str!("../../../examples/robots/so101.urdf")),
-    ("arm", include_str!("../../../examples/robots/arm.urdf")),
+    ("so101", include_str!("../robots/so101.urdf")),
+    ("arm", include_str!("../robots/arm.urdf")),
 ];
 
 /// Resolve a robot reference: a built-in name first, then a path on disk.
