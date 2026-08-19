@@ -8,9 +8,11 @@ use ferroscope_scene::Scene;
 
 pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut check_only = false;
+    let mut sweep = false;
     for f in flags {
         match *f {
             "--check" => check_only = true,
+            "--sweep" => sweep = true,
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -20,6 +22,10 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
     }
     let text = std::fs::read_to_string(scene_path)
         .map_err(|e| format!("cannot read {scene_path}: {e}"))?;
+
+    if sweep {
+        return sweep_cases(scene_path, &text, out, check_only);
+    }
 
     let scene = match Scene::parse(&text) {
         Ok(s) => s,
@@ -89,4 +95,79 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
     }
     println!("  open it      https://ferroscope.physicalai-bmi.org/viewer");
     Ok(true)
+}
+
+/// Record every case and report a verdict per case.
+///
+/// The exit code is the point: a scenario that quietly reports failures is a scenario nobody
+/// gates on. One failing check fails the sweep.
+fn sweep_cases(path: &str, text: &str, out: &str, check_only: bool) -> Result<bool, String> {
+    let suite = match ferroscope_scene::Suite::parse(text) {
+        Ok(s) => s,
+        Err(problems) => {
+            eprintln!("{path}: {} problem(s)", problems.len());
+            for p in &problems {
+                eprintln!("  {}: {}", p.path, p.message);
+            }
+            return Ok(false);
+        }
+    };
+
+    println!("{path}");
+    println!("  suite        {}", suite.name);
+    println!("  cases        {}", suite.cases.len());
+    for c in &suite.checks {
+        let bound = match (c.at_least, c.at_most) {
+            (Some(lo), Some(hi)) => format!("{lo} .. {hi}"),
+            (Some(lo), None) => format!(">= {lo}"),
+            (None, Some(hi)) => format!("<= {hi}"),
+            _ => String::new(),
+        };
+        println!("  check        {:<28} {} {bound}", c.name, c.measure.name());
+    }
+    if check_only {
+        println!("\n  CHECKS       this suite is valid");
+        return Ok(true);
+    }
+
+    // The output path becomes a stem: one recording per case, so a failing case can be opened.
+    let stem = out.strip_suffix(".mcap").unwrap_or(out);
+    let results = suite.run(crate::builtin::load)?;
+
+    // The measured value of every check is printed on a pass as well as a failure. A column of
+    // "pass" with no numbers is a table nobody can sanity-check, and the one number a scene-wide
+    // column WOULD show is usually the wrong one: a robot dominates the scene minimum, so a
+    // crate-scoped verdict sat next to the arm's depth and read as a contradiction.
+    println!("\n  {:<26} {:>7} {:>9}  VERDICT", "CASE", "STEPS", "JOULES");
+    let mut failed = 0usize;
+    for (i, r) in results.iter().enumerate() {
+        println!(
+            "  {:<26} {:>7} {:>9.2}  {}",
+            r.label,
+            r.recorded.steps,
+            r.recorded.total_j,
+            if r.passed() { "pass" } else { "FAIL" }
+        );
+        for (name, ok, why) in &r.checks {
+            println!("      {} {name}: {why}", if *ok { "ok  " } else { "FAIL" });
+        }
+        if !r.passed() {
+            failed += 1;
+        }
+        let file = format!("{stem}-{i}.mcap");
+        std::fs::write(&file, &r.recorded.bytes)
+            .map_err(|e| format!("cannot write {file}: {e}"))?;
+    }
+
+    println!(
+        "\n  {} case(s), {} passed, {} failed",
+        results.len(),
+        results.len() - failed,
+        failed
+    );
+    println!(
+        "  wrote        {stem}-0.mcap .. {stem}-{}.mcap",
+        results.len() - 1
+    );
+    Ok(failed == 0)
 }

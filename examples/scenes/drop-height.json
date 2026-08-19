@@ -1,0 +1,19 @@
+{
+  "name": "how high can a crate fall beside the arm",
+  "duration_s": 2.5,
+  "rate_hz": 120,
+  "cases": { "drop_m": [0.5, 1.0, 2.0, 4.0], "bounce": [0.1, 0.6] },
+  "bodies": [
+    { "id": "crate", "shape": "box", "size": [0.3, 0.3, 0.3], "color": "#a0703c",
+      "material": "PLA",
+      "motion": { "kind": "fall", "from": [0.8, 0, {"$": "drop_m"}],
+                  "restitution": {"$": "bounce"} } }
+  ],
+  "robots": [ { "id": "arm", "urdf": "so101", "sweep": "each" } ],
+  "checks": [
+    { "name": "the crate never leaves the floor", "measure": "lowest_point",
+      "of": "crate", "at_least": -0.001 },
+    { "name": "under 120 J", "measure": "total_j", "at_most": 120 },
+    { "name": "settles within 1.5 s", "measure": "settled_s", "of": "crate", "at_most": 1.5 }
+  ]
+}

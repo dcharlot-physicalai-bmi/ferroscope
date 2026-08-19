@@ -37,7 +37,9 @@ use ferroscope_schema::json::{self, Value};
 use ferroscope_schema::{Geometry, Recorder, Shape, Stamp};
 
 mod motion;
+mod suite;
 pub use motion::Motion;
+pub use suite::{CaseResult, Check, Measure, Suite};
 
 /// What was wrong, and where.
 #[derive(Clone, Debug, PartialEq)]
@@ -116,8 +118,28 @@ pub struct Recorded {
     pub steps: u64,
     /// The lowest point any body reached, and which one. `None` when nothing was measurable.
     pub lowest: Option<(f64, String)>,
+    /// The last sim time, in seconds, at which each body actually moved.
+    ///
+    /// "Does it settle before the run ends" is the question a drop test is really asking, and it
+    /// is one of the few things here that varies with the parameters people sweep.
+    pub settled_by: Vec<(String, f64)>,
+    /// The lowest point each body and robot reached, by id.
+    ///
+    /// The scene-wide minimum is usually the wrong thing to assert on: put a robot in the scene
+    /// and it dominates, so a check named "the crate stays on the floor" quietly becomes a check
+    /// about the arm. Scoping a check to a body is what makes it mean what it says.
+    pub lowest_by: Vec<(String, f64)>,
     /// Notes worth showing the caller: things that are legal but probably not intended.
     pub notes: Vec<String>,
+}
+
+/// Keep the running minimum for one id.
+fn note_lowest(acc: &mut Vec<(String, f64)>, id: &str, z: f64) {
+    match acc.iter_mut().find(|(k, _)| k == id) {
+        Some((_, w)) if z < *w => *w = z,
+        Some(_) => {}
+        None => acc.push((id.to_string(), z)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +530,9 @@ impl Scene {
         }
 
         let mut lowest: Option<(f64, String)> = None;
+        let mut lowest_by: Vec<(String, f64)> = Vec::new();
+        let mut settled_by: Vec<(String, f64)> = Vec::new();
+        let mut last_pos: Vec<(String, [f64; 3])> = Vec::new();
         for step in 0..steps {
             let t_s = step as f64 / self.rate_hz;
             let t = Stamp::sim(step * dt_ns, step);
@@ -524,6 +549,26 @@ impl Scene {
                 let z = p[2] - half;
                 if lowest.as_ref().is_none_or(|(w, _)| z < *w) {
                     lowest = Some((z, b.id.clone()));
+                }
+                note_lowest(&mut lowest_by, &b.id, z);
+                // The last moment it moved. A body that is still moving at the final step has
+                // its settle time equal to the run length, which is exactly the signal a
+                // "settles in time" check needs.
+                match last_pos.iter_mut().find(|(k, _)| *k == b.id) {
+                    Some((_, prev)) => {
+                        let d = (0..3).map(|k| (p[k] - prev[k]).abs()).fold(0.0, f64::max);
+                        if d > 1e-4 {
+                            *prev = p;
+                            match settled_by.iter_mut().find(|(k, _)| *k == b.id) {
+                                Some((_, w)) => *w = t_s,
+                                None => settled_by.push((b.id.clone(), t_s)),
+                            }
+                        }
+                    }
+                    None => {
+                        last_pos.push((b.id.clone(), p));
+                        settled_by.push((b.id.clone(), 0.0));
+                    }
                 }
             }
             for (r, robot, movable, prefix) in &robots {
@@ -567,6 +612,7 @@ impl Scene {
                     if lowest.as_ref().is_none_or(|(w, _)| z < *w) {
                         lowest = Some((z, format!("{}/{link}", r.id)));
                     }
+                    note_lowest(&mut lowest_by, &r.id, z);
                 }
             }
             // A stated, crude power model: the scene is kinematic, so this is what it would
@@ -608,6 +654,8 @@ impl Scene {
             compute_fraction: quote.compute_fraction(),
             steps,
             lowest,
+            lowest_by,
+            settled_by,
             notes,
         })
     }

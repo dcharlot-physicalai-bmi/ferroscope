@@ -44,7 +44,10 @@ jobs:
           H=target/release/examples/hopper
           $H collect --json > /dev/null
           $H suites
-          ! $H run --suite acceptance            # 5 of 13 cases fail by design: exit 1
+          # `! cmd` asserts NOTHING under `set -e`: the shell suppresses -e for an inverted
+          # command, so a suite that started passing would have sailed through. Captured.
+          rc=0; $H run --suite acceptance > /dev/null || rc=$?
+          test "$rc" -eq 1 || { echo "the acceptance suite must fail (5 of 13 by design), got $rc"; exit 1; }
           $H run --scenario budget               # this one must pass: exit 0
           $H list --limit 5
           $H list --result 'worst_penetration_m:>:0.08' --json > /dev/null
@@ -69,7 +72,8 @@ jobs:
         run: |
           B=target/release/ferroscope
           $B urdf examples/robots/arm.urdf /tmp/ok.mcap --check
-          ! $B urdf examples/robots/broken.urdf /tmp/bad.mcap --check
+          rc=0; $B urdf examples/robots/broken.urdf /tmp/bad.mcap --check > /dev/null || rc=$?
+          test "$rc" -eq 1 || { echo "a broken description must exit 1, got $rc"; exit 1; }
           $B urdf examples/robots/broken.urdf /tmp/bad.mcap --check 2>&1 | tee /tmp/bad.txt || true
           for kind in no-collision no-inertial zero-inertia triangle-inequality \
                       not-positive-definite bad-mass; do
@@ -135,6 +139,48 @@ jobs:
           done
           grep -q "/scene/arm/tf/base_link" /tmp/insp.txt || { echo "the robot is missing"; exit 1; }
           echo "every described body and the robot reached the recording"
+      - name: a sweep judges every case and fails the build when one fails
+        # The exit code is the whole point: a scenario that reports failures and exits 0 is a
+        # scenario nobody can gate on.
+        run: |
+          B=target/release/ferroscope
+          rc=0; $B scene examples/scenes/drop-height.json /tmp/sw.mcap --sweep > /tmp/sw.txt 2>&1 || rc=$?
+          cat /tmp/sw.txt
+          test "$rc" -eq 1 || { echo "a sweep with failing cases must exit 1, got $rc"; exit 1; }
+          grep -q "8 case(s), 5 passed, 3 failed" /tmp/sw.txt \
+            || { echo "the shipped scenario no longer discriminates"; cat /tmp/sw.txt; exit 1; }
+          # Every case is its own recording with its own receipt.
+          for i in 0 1 2 3 4 5 6 7; do
+            $B verify "/tmp/sw-$i.mcap" | grep -q VERIFIED || { echo "case $i does not verify"; exit 1; }
+          done
+          # And the cases must differ, or the parameter did nothing.
+          $B verify /tmp/sw-0.mcap | grep 'trace digest' > /tmp/d0
+          $B verify /tmp/sw-7.mcap | grep 'trace digest' > /tmp/d7
+          cmp -s /tmp/d0 /tmp/d7 && { echo "every case produced the same run"; exit 1; }
+          # The measured number is printed on a pass too, not only on a failure.
+          grep -q "ok   settles within 1.5 s: settled_s\[crate\] = " /tmp/sw.txt \
+            || { echo "a passing check reports no number"; exit 1; }
+          echo "8 cases judged, each verified, each distinct"
+      - name: a check scoped to a body does not silently measure the scene
+        # The defect this pins: with a robot in the scene the scene-wide minimum is the robot's,
+        # so an unscoped check named after the crate is a statement about the arm.
+        run: |
+          B=target/release/ferroscope
+          cat > /tmp/scope.json <<'JSON'
+          {"duration_s":0.6,"rate_hz":30,
+           "bodies":[{"id":"crate","shape":"box","size":[0.2,0.2,0.2],
+                      "motion":{"kind":"static","at":[0,0,0.1]}},
+                     {"id":"sinker","shape":"box","size":[0.2,0.2,0.2],
+                      "motion":{"kind":"static","at":[0,0,-3]}}],
+           "checks":[{"name":"scoped","measure":"lowest_point","of":"crate","at_least":-0.001},
+                     {"name":"whole scene","measure":"lowest_point","at_least":-0.001}]}
+          JSON
+          rc=0; $B scene /tmp/scope.json /tmp/scope.mcap --sweep > /tmp/scope.txt 2>&1 || rc=$?
+          cat /tmp/scope.txt
+          test "$rc" -eq 1 || { echo "the unscoped check must fail the sweep, got $rc"; exit 1; }
+          grep -q "ok   scoped" /tmp/scope.txt || { echo "the scoped check should pass"; exit 1; }
+          grep -q "FAIL whole scene" /tmp/scope.txt || { echo "the unscoped check should fail"; exit 1; }
+          echo "a scoped check measures what it names"
       - name: a bad scene is refused with the path that was wrong
         run: |
           B=target/release/ferroscope
@@ -142,7 +188,8 @@ jobs:
           {"duration_s":-1,"bodies":[{"id":"a","shape":"cube","size":[1,1],
                                       "motion":{"kind":"drop"}}]}
           JSON
-          ! $B scene /tmp/bad.json /tmp/bad.mcap 2>/tmp/err.txt
+          rc=0; $B scene /tmp/bad.json /tmp/bad.mcap 2>/tmp/err.txt || rc=$?
+          test "$rc" -eq 1 || { echo "a bad scene must exit 1, got $rc"; exit 1; }
           for want in 'duration_s' 'bodies[0].shape' 'bodies[0].size' 'bodies[0].motion.kind'; do
             grep -qF "$want" /tmp/err.txt || { echo "no problem reported for $want"; cat /tmp/err.txt; exit 1; }
           done
@@ -192,7 +239,8 @@ jobs:
       - name: a phrase naming nothing is refused with a way forward
         run: |
           B=target/release/ferroscope
-          ! $B say "make it look nice" /tmp/x.mcap 2>/tmp/e.txt
+          rc=0; $B say "make it look nice" /tmp/x.mcap 2>/tmp/e.txt || rc=$?
+          test "$rc" -eq 1 || { echo "an unreadable phrase must exit 1, got $rc"; exit 1; }
           grep -q "names a thing" /tmp/e.txt || { cat /tmp/e.txt; exit 1; }
           grep -q "crate" /tmp/e.txt || { echo "the refusal offers no way forward"; exit 1; }
           test ! -e /tmp/x.mcap || { echo "a refused phrase still wrote a file"; exit 1; }
@@ -287,7 +335,8 @@ jobs:
           grep -q "NOT MEASURED" /tmp/run.txt || { echo "it should say the energy is not measured"; exit 1; }
           grep -q "E_compute" /tmp/run.txt && { echo "it invented a joules figure"; exit 1; }
           # And a failing command must still propagate its status.
-          ! $B power -- sh -c 'exit 3'
+          rc=0; $B power -- sh -c 'exit 3' > /dev/null || rc=$?
+          test "$rc" -eq 1 || { echo "a failing command must propagate, got $rc"; exit 1; }
           echo "no meter: says why, runs the command, quotes nothing"
       - name: with a meter, it measures and the number matches the counter
         run: |
@@ -435,4 +484,5 @@ jobs:
           $B verify a.mcap
           $B energy a.mcap
           $B diff a.mcap b.mcap                 # exit 0: same spec, two platforms, one answer
-          ! $B diff a.mcap c.mcap               # exit 1: located divergence
+          rc=0; $B diff a.mcap c.mcap > /dev/null || rc=$?   # exit 1: located divergence
+          test "$rc" -eq 1 || { echo "a diverged pair must exit 1, got $rc"; exit 1; }

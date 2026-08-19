@@ -110,7 +110,7 @@ USAGE
                      [--check] [--steps <n>] [--rate <hz>] [--sweep all|each]
                      [--no-collision] [--no-inertial] [--meshes <dir>]
   ferroscope scene   <scene.json> <out.mcap>  record a DESCRIBED scene
-                     [--check]   ·   --schema prints the scene format
+                     [--check] [--sweep]   ·   --schema prints the scene format
   ferroscope say     \"<phrase>\" [<out.mcap>]  describe the scene in ENGLISH
                      [--json] [--check]
   ferroscope power   [-- <command>]         what this machine can measure, and what

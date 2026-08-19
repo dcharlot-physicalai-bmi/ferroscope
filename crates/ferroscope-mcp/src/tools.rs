@@ -54,6 +54,14 @@ const TOOLS: &[Tool] = &[
         r#"{"type":"object","properties":{"scene":{"type":"string","description":"The scene as a JSON string."},"out":{"type":"string","description":"Path to write the .mcap to."}},"required":["scene","out"]}"#,
     ),
     (
+        "scene_sweep",
+        "Run a scene over a grid of cases and judge each one. Add \"cases\" (name -> list of \
+         numbers), write {\"$\": \"name\"} anywhere a number belongs, and \"checks\" with a \
+         measure and a bound. Returns a verdict per case with the number that decided it. This \
+         is the scenario, not the single run.",
+        r#"{"type":"object","properties":{"scene":{"type":"string","description":"The scene as a JSON string, with cases and checks."},"out":{"type":"string","description":"Optional path stem; each case is written to <stem>-<i>.mcap."}},"required":["scene"]}"#,
+    ),
+    (
         "robot_check",
         "Read a URDF and report whether it is physically usable: links the renderer draws that \
          the engine cannot touch, movable links with no inertial, impossible inertia tensors, \
@@ -104,6 +112,7 @@ pub fn call(name: &str, args: &Value) -> String {
         "scene_from_text" => scene_from_text(args),
         "scene_validate" => scene_validate(args),
         "scene_record" => scene_record(args),
+        "scene_sweep" => scene_sweep(args),
         "robot_check" => robot_check(args),
         "mesh_check" => mesh_check(args),
         "materials_search" => materials_search(args),
@@ -256,6 +265,57 @@ fn scene_record(args: &Value) -> Result<String, String> {
          Nothing is uploaded; the parser runs in the tab.",
     );
     Ok(r)
+}
+
+fn scene_sweep(args: &Value) -> Result<String, String> {
+    let text = arg(args, "scene")?;
+    let suite = ferroscope_scene::Suite::parse(text).map_err(|problems| {
+        let mut s = format!("{} problem(s) in this suite:\n", problems.len());
+        for p in &problems {
+            s.push_str(&format!("  {}: {}\n", p.path, p.message));
+        }
+        s.push_str("\nCall scene_schema for the scene format; cases and checks are described in scene_sweep's own schema.");
+        s
+    })?;
+    let results = suite.run(|p| std::fs::read_to_string(p).ok())?;
+    let failed = results.iter().filter(|r| !r.passed()).count();
+
+    let mut out = format!(
+        "{}\n  {} case(s), {} check(s) each\n\n",
+        suite.name,
+        results.len(),
+        suite.checks.len()
+    );
+    for (i, r) in results.iter().enumerate() {
+        out.push_str(&format!(
+            "  {:<26} {:>7} steps {:>9.2} J  {}\n",
+            r.label,
+            r.recorded.steps,
+            r.recorded.total_j,
+            if r.passed() { "pass" } else { "FAIL" }
+        ));
+        // The measured number on a pass as well as a failure: a column of "pass" with no numbers
+        // is a result nobody can sanity-check.
+        for (name, ok, why) in &r.checks {
+            out.push_str(&format!(
+                "      {} {name}: {why}\n",
+                if *ok { "ok  " } else { "FAIL" }
+            ));
+        }
+        if let Some(stem) = args.get("out").and_then(|x| x.as_str()) {
+            let file = format!("{}-{i}.mcap", stem.strip_suffix(".mcap").unwrap_or(stem));
+            std::fs::write(&file, &r.recorded.bytes)
+                .map_err(|e| format!("cannot write {file}: {e}"))?;
+        }
+    }
+    out.push_str(&format!(
+        "\n{} passed, {failed} failed.",
+        results.len() - failed
+    ));
+    if failed > 0 {
+        out.push_str(" The number beside each FAIL is what decided it.");
+    }
+    Ok(out)
 }
 
 fn robot_check(args: &Value) -> Result<String, String> {

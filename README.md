@@ -441,6 +441,46 @@ careful about ordering. That is what lets a described scene carry the same recei
 one. `fall` is the exception worth naming: it is a real ballistic arc that bounces and comes to
 rest, and it still has a closed form because each bounce is a fixed fraction of the last.
 
+### A scenario, not a single run
+
+One recording answers "what happened". A scenario answers "does it *still* hold, across the range
+I care about" — which is the question that decides whether something ships. Add `cases` and
+`checks` to any scene:
+
+```json
+{
+  "cases": { "drop_m": [0.5, 1.0, 2.0, 4.0], "bounce": [0.1, 0.6] },
+  "bodies": [
+    { "id": "crate", "shape": "box", "size": [0.3, 0.3, 0.3],
+      "motion": { "kind": "fall", "from": [0.8, 0, {"$": "drop_m"}],
+                  "restitution": {"$": "bounce"} } }
+  ],
+  "checks": [
+    { "name": "settles within 1.5 s", "measure": "settled_s", "of": "crate", "at_most": 1.5 }
+  ]
+}
+```
+
+```text
+$ ferroscope scene examples/scenes/drop-height.json out.mcap --sweep
+
+  drop_m=1, bounce=0.1           300     41.86  pass
+      ok   settles within 1.5 s: settled_s[crate] = 0.5000
+  drop_m=1, bounce=0.6           300     41.86  FAIL
+      FAIL settles within 1.5 s: settled_s[crate] = 1.6583, above 1.5
+
+  8 case(s), 5 passed, 3 failed          # and exit 1
+```
+
+Each case is its own recording with its own receipt, so a failure is a file you can open. The
+measured number prints on a pass as well as a failure — a column of "pass" with no numbers is a
+table nobody can sanity-check.
+
+**`of` is not optional detail.** Put a robot in the scene and the scene-wide minimum is the
+robot's, so a check named "the crate stays on the floor" quietly becomes a statement about the
+arm. Scoping it to a body is what makes it mean what it says, and a check naming a body that is
+not there **fails and lists the ids that are**, rather than passing on a number nobody measured.
+
 ### Or just say it
 
 You should not have to write JSON to see a crate fall.
@@ -482,6 +522,7 @@ the binary — no configuration, no network, no account:
 |---|---|
 | `scene_schema` | the format, with defaults and a worked example |
 | `scene_from_text` | an English phrase, with what it understood, assumed and ignored |
+| `scene_sweep` | a grid of cases, judged, with the number that decided each |
 | `scene_validate` | every problem at once, each with the JSON path that was wrong |
 | `scene_record` | records it, and returns the receipt, the joules and the clearance |
 | `robot_check` | is this URDF physically usable |
@@ -832,7 +873,7 @@ refusal, the determinism receipt and comparator, `verify` recomputing a receipt 
 the CLI's nine verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **175 tests, clean clippy, three platforms in CI plus
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **189 tests, clean clippy, three platforms in CI plus
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 
