@@ -488,6 +488,29 @@ Allow it when prompted and the live link works; mixed-content rules are not the 
 `ws://localhost` is exempt from those — and the viewer's error message says all of this instead
 of shrugging. A viewer served from `localhost` itself needs no permission at all.
 
+### Any file replays as a live stream
+
+```sh
+ferroscope live run.mcap            # WebSocket; waits for the first viewer, then plays
+ferroscope live run.mcap --wt       # WebTransport, with the one-click link printed
+```
+
+Until this verb, only a producer mid-run could stream; a finished recording could only be
+opened. `ferroscope live` serves an existing file over the same two transports, **whole records
+in file order, paced by the file's own log clock** (`--rate 2` plays it double speed). The
+invariant is untouched: the bytes a viewer accumulates are the bytes on disk, so at the seal it
+holds the byte-identical file, receipt and all. It waits for the first viewer before starting
+the clock — a replay exists to be seen, and a short file could otherwise stream out and exit
+inside the window a browser needs to connect (`--no-wait` starts immediately).
+
+Replay is also the honest reason recordings are chunked at 64 KiB rather than the writer's
+1 MiB default: a chunk is one record, a record is the unit a stream frames and a replay paces,
+and a megabyte batches half a run into a single burst. CI's adversarial case for all of this is
+five clients joining at staggered instants *mid-burst*: a record broadcast while a joiner
+snapshots history must reach it exactly once — the join paths hold one lock across
+extend-and-send so nothing lands between a snapshot and a subscription — and every joiner must
+end up `cmp`-identical.
+
 ## Real dynamics, same receipt
 
 `ferroscope-motion` closes the last gap between "described" and "simulated": ferromotion's
@@ -873,6 +896,8 @@ ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
 ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
                    [--abs <f>] [--rel <f>]
 ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
+ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
+                   [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
 ferroscope demo    <out.mcap>            write a synthetic run
                    [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
 ferroscope urdf    <robot.urdf> <out.mcap>   record YOUR robot from its description

@@ -254,3 +254,43 @@ fn a_corrupted_attachment_is_caught_by_its_own_crc() {
         Ok(_) => panic!("a corrupted attachment went unreported"),
     }
 }
+
+#[test]
+fn record_spans_tile_the_file_exactly() {
+    let bytes = sample();
+    let spans = ferroscope_mcap::record_spans(&bytes).expect("spans");
+    assert!(!spans.is_empty());
+    // magic + spans + magic reassembles the file byte for byte — the contract replay stands on.
+    let mut rebuilt = bytes[..8].to_vec();
+    let mut expect = 8;
+    for s in &spans {
+        assert_eq!(s.start, expect, "a gap or overlap between records");
+        rebuilt.extend_from_slice(&bytes[s.start..s.end]);
+        expect = s.end;
+    }
+    rebuilt.extend_from_slice(&bytes[bytes.len() - 8..]);
+    assert_eq!(rebuilt, bytes);
+}
+
+#[test]
+fn record_spans_carry_the_times_replay_paces_by() {
+    let bytes = sample();
+    let spans = ferroscope_mcap::record_spans(&bytes).expect("spans");
+    // The sample writer chunks, so the timed records are chunks carrying message_start_time.
+    let timed: Vec<u64> = spans.iter().filter_map(|s| s.log_time).collect();
+    assert!(!timed.is_empty(), "no record carried a time");
+    assert!(
+        timed.windows(2).all(|w| w[0] <= w[1]),
+        "record times went backwards: {timed:?}"
+    );
+    let log = read(&bytes).expect("read");
+    let (t0, _) = log.time_span().expect("span");
+    assert_eq!(timed[0], t0, "the first timed record is the first instant");
+}
+
+#[test]
+fn record_spans_refuse_a_torn_file() {
+    let bytes = sample();
+    assert!(ferroscope_mcap::record_spans(&bytes[..bytes.len() - 3]).is_err());
+    assert!(ferroscope_mcap::record_spans(&bytes[..40]).is_err());
+}

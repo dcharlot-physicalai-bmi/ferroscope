@@ -80,6 +80,71 @@ pub fn read(bytes: &[u8]) -> Result<Log> {
     read_inner(bytes, true)
 }
 
+/// One top-level record's byte range, with the simulation instant replay would pace it by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordSpan {
+    pub opcode: u8,
+    /// Absolute range in the file, including the record's own 9-byte opcode+length header.
+    pub start: usize,
+    pub end: usize,
+    /// A `Message`'s `log_time`, or a `Chunk`'s `message_start_time` — when this record
+    /// happened, for the records that happened at a simulation instant at all.
+    pub log_time: Option<u64>,
+}
+
+/// The byte range of every top-level record in a complete file, in file order.
+///
+/// The contract that makes replay possible: the spans tile the file exactly, so
+/// `magic + spans + magic` reassembles it byte for byte. Anything less — a gap, an overlap, a
+/// file that ends mid-record — is an error here rather than a silently different stream later.
+pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
+    if bytes.len() < 16 || bytes[..8] != MAGIC {
+        return Err(Error::BadMagic { at: "start" });
+    }
+    if bytes[bytes.len() - 8..] != MAGIC {
+        return Err(Error::BadMagic { at: "end" });
+    }
+    let body_end = bytes.len() - 8;
+    let mut spans = Vec::new();
+    let mut pos = 8;
+    while pos < body_end {
+        if body_end - pos < 9 {
+            return Err(Error::Truncated {
+                offset: pos,
+                want: 9,
+                have: body_end - pos,
+            });
+        }
+        let opcode = bytes[pos];
+        let len = u64::from_le_bytes(bytes[pos + 1..pos + 9].try_into().unwrap()) as usize;
+        if body_end - pos - 9 < len {
+            return Err(Error::Truncated {
+                offset: pos + 9,
+                want: len,
+                have: body_end - pos - 9,
+            });
+        }
+        let body = &bytes[pos + 9..pos + 9 + len];
+        let log_time = match opcode {
+            // Message: channel_id u16, sequence u32, then log_time.
+            op::MESSAGE if body.len() >= 14 => {
+                Some(u64::from_le_bytes(body[6..14].try_into().unwrap()))
+            }
+            // Chunk: message_start_time leads the record.
+            op::CHUNK if body.len() >= 8 => Some(u64::from_le_bytes(body[..8].try_into().unwrap())),
+            _ => None,
+        };
+        spans.push(RecordSpan {
+            opcode,
+            start: pos,
+            end: pos + 9 + len,
+            log_time,
+        });
+        pos += 9 + len;
+    }
+    Ok(spans)
+}
+
 /// Read a growing prefix of a recording, as a live viewer holds one.
 ///
 /// The same parser with two relaxations: the closing magic is not required, and parsing stops

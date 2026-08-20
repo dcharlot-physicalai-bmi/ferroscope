@@ -612,9 +612,10 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-cli"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "ferroscope-ledger",
+ "ferroscope-live",
  "ferroscope-mcap",
  "ferroscope-mesh",
  "ferroscope-phrase",
@@ -631,7 +632,7 @@ version = "0.1.0"
 
 [[package]]
 name = "ferroscope-live"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ferroscope-receipt",
  "ferroscope-schema",
@@ -641,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-mcap"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "mcap",
 ]
@@ -666,7 +667,7 @@ version = "0.1.0"
 
 [[package]]
 name = "ferroscope-motion"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ferromotion-core",
  "ferroscope-ledger",
@@ -716,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-schema"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",

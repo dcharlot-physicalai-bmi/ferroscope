@@ -108,10 +108,15 @@ impl WtServer {
                         let Ok(mut send) = opening.await else { return };
                         *sessions.lock().unwrap() += 1;
                         // Catch-up first: a viewer that joins mid-run needs the file's front
-                        // matter or it can draw nothing. Subscribe BEFORE snapshotting so no
-                        // record falls between the snapshot and the subscription.
-                        let mut rx = tx.subscribe();
-                        let snapshot = history.lock().unwrap().clone();
+                        // matter or it can draw nothing. Subscribe and snapshot under the
+                        // history lock — the lock every broadcast sends under — so a record is
+                        // either in the snapshot or in the subscription, exactly one of the
+                        // two. Subscribing first without the lock looked safe and was not: a
+                        // broadcast between the subscribe and the snapshot arrived twice.
+                        let (mut rx, snapshot) = {
+                            let history = history.lock().unwrap();
+                            (tx.subscribe(), history.clone())
+                        };
                         let mut ok = send.write_all(&snapshot).await.is_ok();
                         let mut finished = false;
                         while ok && !finished {
@@ -202,9 +207,18 @@ impl WtServer {
         &self.cert_hash_hex
     }
 
+    /// How many viewer sessions hold an open stream right now.
+    pub fn viewers(&self) -> usize {
+        *self.open_sessions.lock().unwrap()
+    }
+
     /// Send one complete record (or the magic) to every viewer, and keep it for late joiners.
     pub fn broadcast(&self, record: &[u8]) {
-        self.history.lock().unwrap().extend_from_slice(record);
+        // The send happens under the history lock, and a session subscribes and snapshots
+        // under the same lock: every record is therefore either in a joiner's snapshot or in
+        // its subscription, never both and never neither.
+        let mut history = self.history.lock().unwrap();
+        history.extend_from_slice(record);
         // No receivers is not an error: a run with no viewers still records.
         let _ = self.tx.send(record.to_vec());
     }
@@ -247,7 +261,10 @@ impl<W: std::io::Write> std::io::Write for WtTee<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.inner.write_all(buf)?;
         for record in self.framer.push(buf) {
-            self.history.lock().unwrap().extend_from_slice(&record);
+            // Send under the history lock, exactly as WtServer::broadcast does and for the
+            // same exactly-once reason.
+            let mut history = self.history.lock().unwrap();
+            history.extend_from_slice(&record);
             let _ = self.server_tx.send(record);
         }
         Ok(buf.len())

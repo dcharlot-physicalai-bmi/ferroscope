@@ -343,7 +343,12 @@ impl<W: Write> Recorder<W> {
         Recorder {
             w: Writer::new(
                 sink,
-                WriterOptions::new(PROFILE, concat!("ferroscope ", env!("CARGO_PKG_VERSION"))),
+                // 64 KiB chunks, not the writer's 1 MiB default: a chunk is one record, a
+                // record is the unit a live stream frames and a replay paces, and a megabyte
+                // batches half a run into a single burst. 64 KiB keeps the stream's pulse
+                // near a viewer's frame rate for ~1% of index overhead.
+                WriterOptions::new(PROFILE, concat!("ferroscope ", env!("CARGO_PKG_VERSION")))
+                    .chunk_target(64 << 10),
             ),
             schema_ids: BTreeMap::new(),
             channel_ids: BTreeMap::new(),

@@ -1,7 +1,7 @@
 [package]
 name = "ferroscope-live"
 description = "Stream a Ferroscope recording as it is written: a zero-dependency WebSocket server whose frames are MCAP records, so the stream IS the file and the client can verify the receipt the moment the producer seals."
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

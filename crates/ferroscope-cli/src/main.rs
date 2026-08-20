@@ -8,6 +8,7 @@
 //! ferroscope energy  run.mcap          E_task = E_compute + E_actuation
 //! ferroscope diff    a.mcap b.mcap     did the replay reproduce the run, and where not
 //! ferroscope export  run.mcap out.json a viewer bundle, for the browser
+//! ferroscope live    run.mcap          replay it as a live stream, on its own clock
 //! ferroscope demo    out.mcap          write a synthetic run to try the above on
 //! ```
 
@@ -16,6 +17,7 @@ use std::process::ExitCode;
 mod builtin;
 mod demo;
 mod glb;
+mod live;
 mod power;
 mod production;
 mod say;
@@ -43,6 +45,7 @@ fn main() -> ExitCode {
         ["energy", file] => run(cmd_energy(file)),
         ["diff", a, b, rest @ ..] => run(cmd_diff(a, b, rest)),
         ["export", file, out] => run(cmd_export(file, out)),
+        ["live", file, rest @ ..] => run(live::run(file, rest)),
         ["demo", rest @ ..] if !rest.is_empty() => {
             let (out, flags) = split_out(rest, "demo.mcap");
             run(demo::write_with(out, flags))
@@ -105,6 +108,8 @@ USAGE
   ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
                      [--abs <f>] [--rel <f>]
   ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
+  ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
+                     [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description

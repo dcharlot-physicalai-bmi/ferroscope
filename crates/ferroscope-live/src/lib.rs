@@ -67,11 +67,24 @@ impl LiveServer {
                     // Catch-up before live: the file's front matter is the only place schemas
                     // and channels live, and frames are records, so replaying history keeps the
                     // invariant that the client always holds a valid prefix.
+                    //
+                    // Two passes. The bulk goes out with no lock held, because sending
+                    // megabytes to a slow client must not stall the producer. Then whatever
+                    // arrived meanwhile goes out under the history lock — the same lock every
+                    // broadcast holds while framing — and the client joins the list before the
+                    // lock drops, so no record can fall between its snapshot and its
+                    // subscription, and none can reach it twice.
                     let past = accept_history.lock().unwrap().clone();
                     if !past.is_empty() && frame_to(&mut s, &past).is_err() {
                         continue;
                     }
+                    let history = accept_history.lock().unwrap();
+                    let delta = &history[past.len()..];
+                    if !delta.is_empty() && frame_to(&mut s, delta).is_err() {
+                        continue;
+                    }
                     accept_clients.lock().unwrap().push(s);
+                    drop(history);
                 }
             }
         });
@@ -98,7 +111,12 @@ impl LiveServer {
     /// A viewer that cannot be written to is dropped without ceremony: a stall in one browser
     /// tab must never back-pressure the simulation.
     pub fn broadcast(&self, record: &[u8]) {
-        self.history.lock().unwrap().extend_from_slice(record);
+        // The history lock is held across the framing, and the accept thread admits a client
+        // under the same lock: without that, a record could land in the history after a
+        // joiner's snapshot but be framed before the joiner is in the client list — a hole in
+        // that viewer's file that no later frame repairs.
+        let mut history = self.history.lock().unwrap();
+        history.extend_from_slice(record);
         let mut clients = self.clients.lock().unwrap();
         clients.retain_mut(|c| frame_to(c, record).is_ok());
     }
@@ -252,7 +270,10 @@ impl<W: Write> Write for Tee<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.inner.write_all(buf)?;
         for record in self.framer.push(buf) {
-            self.history.lock().unwrap().extend_from_slice(&record);
+            // Extend and frame under one hold of the history lock, for the same reason
+            // broadcast() does: a client joining mid-record must see it exactly once.
+            let mut history = self.history.lock().unwrap();
+            history.extend_from_slice(&record);
             let mut clients = self.clients.lock().unwrap();
             clients.retain_mut(|c| frame_to(c, &record).is_ok());
         }
