@@ -463,10 +463,15 @@ Transport is WebSocket rather than the WebTransport this README once promised, a
 are stated rather than papered over: WebTransport needs an HTTP/3 + TLS stack — a large
 dependency tree for a link whose client is a browser tab on the same desk — and its genuine
 advantages (unreliable datagrams, no head-of-line blocking) belong to lossy fleet telemetry, not
-a local viewer. Browsers treat `ws://localhost` as a secure context even from an https page,
-which is exactly how the hosted viewer reaches a local producer. The server is ~300 lines of
-`std`, SHA-1 included, checked against the RFC 6455 handshake vector every browser checks
-against.
+a local viewer. The server is ~300 lines of `std`, SHA-1 included, checked against the RFC 6455
+handshake vector every browser checks against.
+
+One permission stands between the hosted viewer and a local producer, and it is the browser's to
+grant, not ours to route around: Chrome's **Local Network Access** policy makes a public site ask
+before reaching `localhost` (the block surfaces as `ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`).
+Allow it when prompted and the live link works; mixed-content rules are not the obstacle —
+`ws://localhost` is exempt from those — and the viewer's error message says all of this instead
+of shrugging. A viewer served from `localhost` itself needs no permission at all.
 
 ## Real dynamics, same receipt
 

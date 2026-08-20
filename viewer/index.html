@@ -1200,8 +1200,10 @@ el('liveBtn').addEventListener('click', () => {
   };
   ws.onerror = () => {
     if (!LIVE.total) liveStop(
-      'live: nothing is listening on ws://localhost:8737 — start a producer, e.g. ' +
-      '`ferroscope-motion out.mcap --serve`');
+      'live: could not reach ws://localhost:8737. Two causes look identical from here: ' +
+      '(1) nothing is listening — start a producer, e.g. `ferroscope-motion out.mcap --serve`; ' +
+      '(2) the browser blocked local network access — Chrome asks permission for a public site ' +
+      'to reach localhost, so allow it when prompted, or check this site\'s permissions.');
   };
   ws.onclose = () => {
     const had = LIVE.total > 0;

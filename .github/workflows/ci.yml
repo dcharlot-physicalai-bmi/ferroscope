@@ -521,6 +521,11 @@ jobs:
             || { echo "the streamed bytes differ from the file"; exit 1; }
           ./target/release/ferroscope verify /tmp/streamed.mcap | grep -q VERIFIED \
             || { echo "the streamed file does not verify"; exit 1; }
+          # The viewer's failure message must keep teaching the Local Network Access
+          # permission: a public page reaching localhost is blocked until the user allows it,
+          # and a message that just says "failed" strands exactly the person it was for.
+          grep -q "local network access" viewer/index.html \
+            || { echo "the live error no longer explains the LNA permission"; exit 1; }
           echo "a WebSocket client holds the byte-identical, receipt-verified file"
 
   viewer:
