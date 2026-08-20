@@ -113,12 +113,25 @@ pub fn top_level_domains(names: &[String]) -> Vec<String> {
 }
 
 /// One domain's cumulative counter and its wrap point.
+///
+/// Two baselines, not one: `sample()` (watts) and [`Meter::sample_energy`] (joules) each
+/// difference against their own previous read. With a shared baseline, one `sample()` call for a
+/// live display between priming and harvesting silently consumed the accumulated energy — the
+/// production note then covered only the tail of the work while claiming all of it.
 #[derive(Clone, Debug)]
 struct Counter {
     name: String,
     path: PathBuf,
     max_uj: u64,
     last_uj: Option<u64>,
+    last_uj_energy: Option<u64>,
+}
+
+/// One baseline's wrap-aware reading: total and per-domain microjoules over the interval.
+struct RaplDelta {
+    total_uj: u64,
+    dt_s: f64,
+    by_domain_uj: Vec<(String, u64)>,
 }
 
 /// A power meter over whatever this machine exposes.
@@ -126,7 +139,12 @@ pub struct Meter {
     source: Source,
     counters: Vec<Counter>,
     last_at: Option<Instant>,
-    /// Per-domain watts from the most recent successful [`Meter::sample`].
+    last_at_energy: Option<Instant>,
+    /// Set when the powercap root came from `FERROSCOPE_POWERCAP` rather than the platform, so
+    /// the source string never claims "Linux RAPL" for a directory tree on some other machine.
+    override_root: Option<PathBuf>,
+    /// Per-domain watts from the most recent successful [`Meter::sample`]. Untouched by
+    /// [`Meter::sample_energy`], which keeps its own baseline and reports no per-domain split.
     last_by_domain: Vec<(String, f64)>,
 }
 
@@ -144,7 +162,12 @@ impl Meter {
     /// nobody in the loop owns is a code path nobody has run.
     pub fn open() -> Meter {
         if let Some(root) = std::env::var_os("FERROSCOPE_POWERCAP") {
-            return Meter::open_rapl_at(Path::new(&root));
+            let mut m = Meter::open_rapl_at(Path::new(&root));
+            // The description must not claim "Linux RAPL" for a directory tree that came from an
+            // environment variable on whatever machine this is: the source is part of the
+            // measurement's provenance, and a wrong provenance is worse than a missing one.
+            m.override_root = Some(PathBuf::from(&root));
+            return m;
         }
         if cfg!(target_os = "linux") {
             return Meter::open_rapl_at(Path::new("/sys/class/powercap"));
@@ -163,6 +186,8 @@ impl Meter {
             source: Source::Unavailable { why },
             counters: Vec::new(),
             last_at: None,
+            last_at_energy: None,
+            override_root: None,
             last_by_domain: Vec::new(),
         }
     }
@@ -208,6 +233,7 @@ impl Meter {
                 Some(_) => counters.push(Counter {
                     name: label,
                     path: energy,
+                    last_uj_energy: None,
                     // A domain that does not declare its range still wraps; u32 microjoules is
                     // the common register width, and assuming it is far better than assuming
                     // the counter is infinite.
@@ -238,6 +264,8 @@ impl Meter {
             source: Source::Rapl { domains },
             counters,
             last_at: None,
+            last_at_energy: None,
+            override_root: None,
             last_by_domain: Vec::new(),
         }
     }
@@ -256,6 +284,8 @@ impl Meter {
                 source: Source::Powermetrics,
                 counters: Vec::new(),
                 last_at: None,
+                last_at_energy: None,
+                override_root: None,
                 last_by_domain: Vec::new(),
             },
             Ok(out) => {
@@ -283,7 +313,19 @@ impl Meter {
 
     /// One line naming the source, for a run spec or a log.
     pub fn describe(&self) -> String {
-        self.source.to_string()
+        match (&self.source, &self.override_root) {
+            (Source::Rapl { domains }, Some(root)) => format!(
+                "powercap tree at {} (FERROSCOPE_POWERCAP), {} top-level domain(s): {}",
+                root.display(),
+                domains.len(),
+                domains
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            _ => self.source.to_string(),
+        }
     }
 
     /// Watts since the previous call, or `None` when there is not yet an interval to divide by.
@@ -309,7 +351,14 @@ impl Meter {
         &self.last_by_domain
     }
 
-    fn sample_rapl(&mut self) -> Result<Option<f64>, Error> {
+    /// The wrap-aware microjoule delta since the previous read on the chosen baseline.
+    ///
+    /// One routine rather than two, because the wraparound arithmetic is exactly the kind of
+    /// code that grows a subtle difference between copies: `sample` divides this into watts and
+    /// [`Meter::sample_energy`] reports it as joules, and both must agree about a rolled-over
+    /// register. The two callers keep separate baselines (see [`Counter`]), selected by
+    /// `energy_baseline`.
+    fn rapl_delta(&mut self, energy_baseline: bool) -> Result<Option<RaplDelta>, Error> {
         let now = Instant::now();
         let mut readings = Vec::with_capacity(self.counters.len());
         for c in &self.counters {
@@ -318,43 +367,197 @@ impl Meter {
             readings.push(uj);
         }
 
-        let Some(prev_at) = self.last_at else {
+        let prev_at = if energy_baseline {
+            &mut self.last_at_energy
+        } else {
+            &mut self.last_at
+        };
+        let Some(prev) = *prev_at else {
+            *prev_at = Some(now);
             for (c, uj) in self.counters.iter_mut().zip(readings) {
-                c.last_uj = Some(uj);
+                if energy_baseline {
+                    c.last_uj_energy = Some(uj);
+                } else {
+                    c.last_uj = Some(uj);
+                }
             }
-            self.last_at = Some(now);
             return Ok(None);
         };
 
-        let dt = now.duration_since(prev_at).as_secs_f64();
+        let dt = now.duration_since(prev).as_secs_f64();
         if dt <= 0.0 {
             // Two reads inside the clock's resolution divide to infinity. Better to say "not
             // yet" than to emit a number no interval supports.
             return Ok(None);
         }
 
-        let mut total_w = 0.0;
-        let mut by_domain = Vec::with_capacity(self.counters.len());
+        let mut total_uj = 0u64;
+        let mut by_domain_uj = Vec::with_capacity(self.counters.len());
         for (c, uj) in self.counters.iter_mut().zip(readings) {
-            let prev = c.last_uj.unwrap_or(uj);
+            let slot = if energy_baseline {
+                &mut c.last_uj_energy
+            } else {
+                &mut c.last_uj
+            };
+            let prev_uj = slot.unwrap_or(uj);
             // Unwrap the counter. A register that rolled over reads *lower* than last time; the
             // energy actually spent is the distance up to the wrap plus the distance since.
-            let delta_uj = if uj >= prev {
-                uj - prev
+            // This accounts for exactly ONE rollover — two reads k wraps apart collapse to the
+            // spend modulo the register's range — which is why production_note refuses any
+            // interval long enough for a second wrap to be possible.
+            let delta_uj = if uj >= prev_uj {
+                uj - prev_uj
             } else {
                 c.max_uj
-                    .saturating_sub(prev)
+                    .saturating_sub(prev_uj)
                     .saturating_add(uj)
                     .saturating_add(1)
             };
-            c.last_uj = Some(uj);
-            let w = delta_uj as f64 * 1e-6 / dt;
-            total_w += w;
-            by_domain.push((c.name.clone(), w));
+            *slot = Some(uj);
+            total_uj = total_uj.saturating_add(delta_uj);
+            by_domain_uj.push((c.name.clone(), delta_uj));
         }
-        self.last_at = Some(now);
-        self.last_by_domain = by_domain;
-        Ok(Some(total_w))
+        if energy_baseline {
+            self.last_at_energy = Some(now);
+        } else {
+            self.last_at = Some(now);
+        }
+        Ok(Some(RaplDelta {
+            total_uj,
+            dt_s: dt,
+            by_domain_uj,
+        }))
+    }
+
+    /// The longest interval over which a single counter delta can still be trusted.
+    ///
+    /// The unwrap above handles one rollover. If the interval is long enough that the package
+    /// could have spent more than the smallest domain's whole register range, a second rollover
+    /// becomes possible and the delta silently collapses to `spend mod range` — undercounting by
+    /// whole multiples of the range while still reading as a measurement. Bounding package power
+    /// at a deliberately generous 500 W: spend <= 500 * dt, so any dt below range/500 admits at
+    /// most one wrap and the delta is sound.
+    fn wrap_horizon_s(&self) -> f64 {
+        self.counters
+            .iter()
+            .map(|c| c.max_uj as f64 * 1e-6 / 500.0)
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    fn sample_rapl(&mut self) -> Result<Option<f64>, Error> {
+        match self.rapl_delta(false)? {
+            None => Ok(None),
+            Some(d) => {
+                let mut total_w = 0.0;
+                let by_domain: Vec<(String, f64)> = d
+                    .by_domain_uj
+                    .into_iter()
+                    .map(|(name, uj)| {
+                        let w = uj as f64 * 1e-6 / d.dt_s;
+                        total_w += w;
+                        (name, w)
+                    })
+                    .collect();
+                self.last_by_domain = by_domain;
+                Ok(Some(total_w))
+            }
+        }
+    }
+
+    /// Energy spent since the previous `sample_energy` call, in joules, with the interval.
+    ///
+    /// The first call primes and returns `Ok(None)`. The baseline is this method's own:
+    /// interleaving [`Meter::sample`] calls (a live watts display, say) neither consumes nor
+    /// extends the energy interval, on any source. On RAPL the joules are a true counter delta;
+    /// on powermetrics they are one instantaneous power sample multiplied by the wall clock,
+    /// and [`Meter::basis`] says which, because those are different claims and a reader
+    /// deciding whether to cite the number needs to know.
+    pub fn sample_energy(&mut self) -> Result<Option<(f64, f64)>, Error> {
+        match self.source {
+            Source::Unavailable { ref why } => Err(Error::Unavailable(why.clone())),
+            Source::Rapl { .. } => Ok(self
+                .rapl_delta(true)?
+                .map(|d| (d.total_uj as f64 * 1e-6, d.dt_s))),
+            Source::Powermetrics => {
+                let now = Instant::now();
+                let Some(prev) = self.last_at_energy else {
+                    self.last_at_energy = Some(now);
+                    return Ok(None);
+                };
+                let dt = now.duration_since(prev).as_secs_f64();
+                if dt <= 0.0 {
+                    return Ok(None);
+                }
+                let w = self.sample_powermetrics()?;
+                self.last_at_energy = Some(now);
+                Ok(Some((w * dt, dt)))
+            }
+        }
+    }
+
+    /// What [`Meter::sample_energy`]'s joules actually are.
+    pub fn basis(&self) -> &'static str {
+        match self.source {
+            Source::Rapl { .. } => "cumulative energy counter",
+            Source::Powermetrics => "instantaneous power sample x wall clock",
+            Source::Unavailable { .. } => "none",
+        }
+    }
+
+    /// Key-value pairs describing what producing something cost, ready for a recording's
+    /// production block: `joules`, `duration_s`, `source` and `basis` when the machine could
+    /// say, or a single `unavailable` naming why when it could not.
+    ///
+    /// Never writes `joules: 0` for an interval the counter could not resolve — a zero that
+    /// reads as a measurement is the exact failure this crate exists to refuse.
+    pub fn production_note(&mut self) -> Vec<(String, String)> {
+        let is_counter = matches!(self.source, Source::Rapl { .. });
+        match self.sample_energy() {
+            Err(Error::Unavailable(why)) | Err(Error::Read(why)) => {
+                vec![("unavailable".into(), why)]
+            }
+            Ok(None) => vec![(
+                "unavailable".into(),
+                // Ok(None) has two causes and this note cannot tell them apart, so it names both
+                // rather than asserting the wrong one.
+                "no measurable interval: the meter was not primed before the work, or both \
+                 reads landed inside one clock tick"
+                    .into(),
+            )],
+            // The unwrap arithmetic handles exactly one register rollover. Past this horizon a
+            // second rollover is possible and the delta silently collapses to spend-mod-range —
+            // an undercount that still reads as a measurement, which is the one output this
+            // crate must never produce.
+            Ok(Some((_, s))) if is_counter && s > self.wrap_horizon_s() => vec![(
+                "unavailable".into(),
+                format!(
+                    "the {s:.1} s interval exceeds the {:.1} s wrap horizon of the smallest \
+                     counter (its range at a 500 W bound), so a single delta could hide a \
+                     rollover; sample periodically instead",
+                    self.wrap_horizon_s()
+                ),
+            )],
+            Ok(Some((j, s))) if j <= 0.0 => vec![(
+                "unavailable".into(),
+                if is_counter {
+                    format!(
+                        "the counter did not advance over the {s:.4} s interval, which is too \
+                         short to resolve"
+                    )
+                } else {
+                    format!(
+                        "the instantaneous power sample read 0 W, so no energy can be \
+                         attributed to the {s:.4} s interval"
+                    )
+                },
+            )],
+            Ok(Some((j, s))) => vec![
+                ("joules".into(), format!("{j:.6}")),
+                ("duration_s".into(), format!("{s:.4}")),
+                ("source".into(), self.describe()),
+                ("basis".into(), self.basis().into()),
+            ],
+        }
     }
 
     fn sample_powermetrics(&self) -> Result<f64, Error> {
@@ -585,6 +788,137 @@ Combined Power (CPU + GPU + ANE): 1290 mW";
         let ordered = "Combined Power: 10000 mW\nCPU Power: 9000 mW";
         assert!((parse_powermetrics(ordered).unwrap() - 10.0).abs() < 1e-9);
         assert_eq!(parse_powermetrics("nothing to see here"), None);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn sample_energy_returns_the_counter_delta_in_joules() {
+        // The watts path divides by the interval; this one must NOT: 3,000,000 uJ spent is
+        // 3 J whether it took a millisecond or a minute.
+        let d = tmp("energy");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        assert_eq!(m.sample_energy(), Ok(None), "the first read primes");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(d.join("intel-rapl:0").join("energy_uj"), "3000000\n").unwrap();
+        let (j, dt) = m.sample_energy().unwrap().expect("a delta after two reads");
+        assert!(
+            (j - 3.0).abs() < 1e-9,
+            "3,000,000 uJ is 3 J exactly, got {j}"
+        );
+        assert!(
+            dt > 0.02,
+            "the interval must be the real wall time, got {dt}"
+        );
+        assert_eq!(m.basis(), "cumulative energy counter");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn a_production_note_carries_the_joules_or_says_why_not() {
+        let d = tmp("note");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        let _ = m.sample_energy(); // prime
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(d.join("intel-rapl:0").join("energy_uj"), "500000\n").unwrap();
+        let kv = m.production_note();
+        let get = |k: &str| kv.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone());
+        assert_eq!(get("joules").as_deref(), Some("0.500000"), "{kv:?}");
+        assert!(get("duration_s").is_some() && get("source").is_some() && get("basis").is_some());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn a_counter_that_did_not_advance_is_not_reported_as_zero_joules() {
+        // The crate's founding rule, applied to its own new surface: 0 J that reads as a
+        // measurement is the exact failure everything here exists to refuse.
+        let d = tmp("still");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 7, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        let _ = m.sample_energy();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let kv = m.production_note();
+        assert_eq!(kv.len(), 1, "{kv:?}");
+        assert_eq!(kv[0].0, "unavailable");
+        assert!(kv[0].1.contains("did not advance"), "{}", kv[0].1);
+        assert!(!kv.iter().any(|(k, _)| k == "joules"), "{kv:?}");
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn an_interval_past_the_wrap_horizon_is_refused_not_undercounted() {
+        // The unwrap handles ONE rollover; two reads k wraps apart collapse to spend mod range.
+        // A 1 J range has a 2 ms horizon at the 500 W bound, so a 30 ms interval must be refused
+        // even though the delta itself looks positive and plausible.
+        let d = tmp("horizon");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, 1_000_000)]);
+        let mut m = Meter::open_rapl_at(&d);
+        let _ = m.sample_energy();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(d.join("intel-rapl:0").join("energy_uj"), "400000\n").unwrap();
+        let kv = m.production_note();
+        assert_eq!(kv[0].0, "unavailable", "{kv:?}");
+        assert!(kv[0].1.contains("wrap horizon"), "{}", kv[0].1);
+        assert!(!kv.iter().any(|(k, _)| k == "joules"), "{kv:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn a_watts_sample_between_prime_and_harvest_does_not_eat_the_energy() {
+        // The defect this pins: with a shared baseline, one sample() call for a live display
+        // consumed the accumulated delta, and the production note then covered only the tail of
+        // the work while claiming all of it.
+        let d = tmp("interleave");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        let _ = m.sample_energy(); // prime the energy baseline
+        let _ = m.sample(); // prime the watts baseline
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::fs::write(d.join("intel-rapl:0").join("energy_uj"), "2000000\n").unwrap();
+        let _ = m.sample(); // a live watts display reads here — this must not reset the energy
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::fs::write(d.join("intel-rapl:0").join("energy_uj"), "3000000\n").unwrap();
+        let (j, _) = m.sample_energy().unwrap().expect("a delta");
+        assert!(
+            (j - 3.0).abs() < 1e-9,
+            "the note must cover the whole span (3 J), not the tail since sample(): got {j}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn an_override_tree_is_not_described_as_linux_rapl() {
+        // FERROSCOPE_POWERCAP points at a directory on whatever machine this is. Calling that
+        // "Linux RAPL" writes a false provenance into every production block it feeds.
+        let d = tmp("override-desc");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 0, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        m.override_root = Some(d.clone());
+        let desc = m.describe();
+        assert!(desc.contains("FERROSCOPE_POWERCAP"), "{desc}");
+        assert!(!desc.contains("Linux RAPL"), "{desc}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "a Windows path cannot contain a colon")]
+    fn an_unprimed_or_unavailable_note_names_the_reason() {
+        let mut none = Meter::open_rapl_at(Path::new("/definitely/not/here"));
+        let kv = none.production_note();
+        assert_eq!(kv[0].0, "unavailable");
+        assert!(kv[0].1.contains("not readable"), "{}", kv[0].1);
+        // A note taken with no prior prime names both possible causes, not the wrong one.
+        let d = tmp("unprimed-msg");
+        fake_sysfs(&d, &[("intel-rapl:0", "package-0", 5, u32::MAX as u64)]);
+        let mut m = Meter::open_rapl_at(&d);
+        let kv2 = m.production_note(); // never primed: this call IS the prime
+        assert!(kv2[0].1.contains("not primed"), "{}", kv2[0].1);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

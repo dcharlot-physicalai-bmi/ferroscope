@@ -26,3 +26,4 @@ ferroscope-receipt = { workspace = true }
 ferroscope-urdf = { workspace = true }
 ferroscope-mesh = { workspace = true }
 ferroscope-cad = { workspace = true }
+ferroscope-power = { workspace = true }

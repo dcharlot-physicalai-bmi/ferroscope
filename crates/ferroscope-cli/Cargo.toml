@@ -7,7 +7,7 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.3: the built-in demo carries a real glTF mesh as an attachment.
 # 0.1.4 adds the `urdf` verb: record YOUR robot from its own description.
 # 0.1.5 adds `urdf --check` and the collision and inertial layers.
-version = "0.1.8"
+version = "0.1.10"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

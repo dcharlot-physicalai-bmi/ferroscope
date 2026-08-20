@@ -149,6 +149,30 @@ export function open(bytes) {
 }
 
 /**
+ * Record one case of a scene's grid and hand back its MCAP bytes.
+ * @param {string} scene_json
+ * @param {number} index
+ * @param {string} robot_name
+ * @param {string} urdf
+ * @returns {Uint8Array}
+ */
+export function record_case(scene_json, index, robot_name, urdf) {
+    const ptr0 = passStringToWasm0(scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(robot_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(urdf, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.record_case(ptr0, len0, index, ptr1, len1, ptr2, len2);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
  * Record a scene, in the tab, and hand back the MCAP bytes.
  *
  * The same crate the CLI and the edge endpoint run, so a scene authored here produces the same
@@ -215,6 +239,37 @@ export function scene_from_text(text) {
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Run a scene's cases and return the verdict table, without the recordings.
+ *
+ * Returns `{ name, cases: [{ label, steps, joules, passed, checks: [{name, ok, why}] }] }`, or
+ * `{ error, problems }`. The bytes are left out on purpose: a grid of 256 cases is a lot of
+ * memory to hand a page that will look at one of them, so the caller records the case it wants
+ * with [`record_case`].
+ * @param {string} scene_json
+ * @param {string} robot_name
+ * @param {string} urdf
+ * @returns {string}
+ */
+export function sweep_scene(scene_json, robot_name, urdf) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(robot_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(urdf, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.sweep_scene(ptr0, len0, ptr1, len1, ptr2, len2);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
 }
 

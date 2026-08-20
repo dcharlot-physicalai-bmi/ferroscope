@@ -228,7 +228,16 @@ fn scene_validate(args: &Value) -> Result<String, String> {
 fn scene_record(args: &Value) -> Result<String, String> {
     let s = parse_scene(args)?;
     let out_path = arg(args, "out")?;
-    let rec = s.record(|p| std::fs::read_to_string(p).ok())?;
+    let mut meter = ferroscope_power::Meter::open();
+    let _ = meter.sample_energy(); // prime, so the note covers the whole recording
+    let mut note: Vec<(String, String)> = Vec::new();
+    let rec = s.record_with(
+        |p| std::fs::read_to_string(p).ok(),
+        || {
+            note = meter.production_note();
+            note.clone()
+        },
+    )?;
     std::fs::write(out_path, &rec.bytes).map_err(|e| format!("cannot write {out_path}: {e}"))?;
 
     let mut r = format!(
@@ -244,6 +253,17 @@ fn scene_record(args: &Value) -> Result<String, String> {
         rec.total_j,
         rec.compute_fraction * 100.0,
     );
+    {
+        let get = |k: &str| note.iter().find(|(a, _)| a == k).map(|(_, v)| v.as_str());
+        match (get("joules"), get("unavailable")) {
+            (Some(j), _) => r.push_str(&format!(
+                "\nPRODUCTION\n  this machine spent {j} J making the file ({})\n",
+                get("source").unwrap_or("?")
+            )),
+            (_, Some(why)) => r.push_str(&format!("\nPRODUCTION\n  not measured: {why}\n")),
+            _ => {}
+        }
+    }
     if let Some((z, who)) = &rec.lowest {
         r.push_str(&format!(
             "\nCLEARANCE\n  lowest point  {z:.4} m ({who}){}\n",
@@ -277,7 +297,11 @@ fn scene_sweep(args: &Value) -> Result<String, String> {
         s.push_str("\nCall scene_schema for the scene format; cases and checks are described in scene_sweep's own schema.");
         s
     })?;
-    let results = suite.run(|p| std::fs::read_to_string(p).ok())?;
+    let mut meter = ferroscope_power::Meter::open();
+    let _ = meter.sample_energy(); // prime: each case's note is the delta since the previous one
+    let results = suite.run_with(|p| std::fs::read_to_string(p).ok(), &mut || {
+        meter.production_note()
+    })?;
     let failed = results.iter().filter(|r| !r.passed()).count();
 
     let mut out = format!(
@@ -489,6 +513,12 @@ fn run_inspect(args: &Value) -> Result<String, String> {
     if rows.len() > 40 {
         r.push_str(&format!("  ... and {} more topics\n", rows.len() - 40));
     }
+    if let Some(kv) = log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK) {
+        r.push_str("\n  production\n");
+        for (k, v) in kv {
+            r.push_str(&format!("    {k:<22} {v}\n"));
+        }
+    }
     Ok(r)
 }
 
@@ -543,6 +573,15 @@ fn run_energy(args: &Value) -> Result<String, String> {
         ));
         for (rail, name, j) in q.by_source.iter().take(12) {
             r.push_str(&format!("  {rail:?}{:<4} {name:<18} {j:>12.3}\n", ""));
+        }
+    }
+    if let Some(kv) = ferroscope_schema::mcap::read(&bytes).ok().and_then(|log| {
+        log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+            .map(<[_]>::to_vec)
+    }) {
+        r.push_str("\n  PRODUCTION (what the producing machine spent making this file)\n");
+        for (k, v) in kv {
+            r.push_str(&format!("    {k:<22} {v}\n"));
         }
     }
     r.push_str(&format!("\n  coverage      {}\n", q.coverage));

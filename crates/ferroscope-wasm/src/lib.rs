@@ -310,6 +310,15 @@ pub fn scene_from_text(text: &str) -> String {
     }
 }
 
+fn wasm_note() -> Vec<(String, String)> {
+    // A browser tab and a Workers isolate expose no power interface at all, and the block
+    // exists so that every recording says either what it cost or why there is no number.
+    vec![(
+        "unavailable".into(),
+        "wasm32 has no power interface: the sandbox exposes no energy counters".into(),
+    )]
+}
+
 /// Record a scene, in the tab, and hand back the MCAP bytes.
 ///
 /// The same crate the CLI and the edge endpoint run, so a scene authored here produces the same
@@ -329,7 +338,9 @@ pub fn record_scene(scene_json: &str) -> Result<Vec<u8>, JsValue> {
     })?;
     // A browser has no filesystem, so a robot named in the scene is fetched by the page and
     // handed back through `record_scene_with`. Here, robots are skipped and noted.
-    let rec = scene.record(|_| None).map_err(|e| JsValue::from_str(&e))?;
+    let rec = scene
+        .record_with(|_| None, wasm_note)
+        .map_err(|e| JsValue::from_str(&e))?;
     Ok(rec.bytes)
 }
 
@@ -346,14 +357,112 @@ pub fn record_scene_with(
     let scene = ferroscope_scene::Scene::parse(scene_json)
         .map_err(|p| JsValue::from_str(&format!("{} problem(s) in the scene", p.len())))?;
     let rec = scene
-        .record(|want| {
-            let stem = want
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(want)
-                .trim_end_matches(".urdf");
-            (stem == robot_name).then(|| urdf.to_string())
-        })
+        .record_with(
+            |want| {
+                let stem = want
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(want)
+                    .trim_end_matches(".urdf");
+                (stem == robot_name).then(|| urdf.to_string())
+            },
+            wasm_note,
+        )
         .map_err(|e| JsValue::from_str(&e))?;
     Ok(rec.bytes)
+}
+
+/// Run a scene's cases and return the verdict table, without the recordings.
+///
+/// Returns `{ name, cases: [{ label, steps, joules, passed, checks: [{name, ok, why}] }] }`, or
+/// `{ error, problems }`. The bytes are left out on purpose: a grid of 256 cases is a lot of
+/// memory to hand a page that will look at one of them, so the caller records the case it wants
+/// with [`record_case`].
+#[wasm_bindgen]
+pub fn sweep_scene(scene_json: &str, robot_name: &str, urdf: &str) -> String {
+    use ferroscope_schema::json::Obj;
+    let suite = match ferroscope_scene::Suite::parse(scene_json) {
+        Ok(s) => s,
+        Err(problems) => {
+            return Obj::new()
+                .str("error", "invalid scene")
+                .strs(
+                    "problems",
+                    &problems
+                        .iter()
+                        .map(|p| format!("{}: {}", p.path, p.message))
+                        .collect::<Vec<_>>(),
+                )
+                .finish();
+        }
+    };
+    let results = match suite.run_with(|want| resolve(want, robot_name, urdf), &mut wasm_note) {
+        Ok(r) => r,
+        Err(e) => return Obj::new().str("error", &e).finish(),
+    };
+    let cases: Vec<String> = results
+        .iter()
+        .map(|r| {
+            let checks: Vec<String> = r
+                .checks
+                .iter()
+                .map(|(n, ok, why)| {
+                    format!(r#"{{"name":{},"ok":{ok},"why":{}}}"#, quote(n), quote(why))
+                })
+                .collect();
+            format!(
+                r#"{{"label":{},"steps":{},"joules":{:.4},"passed":{},"checks":[{}]}}"#,
+                quote(&r.label),
+                r.recorded.steps,
+                r.recorded.total_j,
+                r.passed(),
+                checks.join(",")
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"name":{},"passed":{},"failed":{},"cases":[{}]}}"#,
+        quote(&suite.name),
+        results.iter().filter(|r| r.passed()).count(),
+        results.iter().filter(|r| !r.passed()).count(),
+        cases.join(",")
+    )
+}
+
+/// Record one case of a scene's grid and hand back its MCAP bytes.
+#[wasm_bindgen]
+pub fn record_case(
+    scene_json: &str,
+    index: usize,
+    robot_name: &str,
+    urdf: &str,
+) -> Result<Vec<u8>, JsValue> {
+    let suite = ferroscope_scene::Suite::parse(scene_json)
+        .map_err(|p| JsValue::from_str(&format!("{} problem(s) in the scene", p.len())))?;
+    let scene = suite
+        .scene(index)
+        .map_err(|p| JsValue::from_str(&format!("case {index}: {} problem(s)", p.len())))?;
+    let rec = scene
+        .record_with(|want| resolve(want, robot_name, urdf), wasm_note)
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(rec.bytes)
+}
+
+/// Match a robot reference against the one description the page supplied.
+fn resolve(want: &str, name: &str, urdf: &str) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+    let stem = want
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(want)
+        .trim_end_matches(".urdf");
+    (stem == name).then(|| urdf.to_string())
+}
+
+fn quote(s: &str) -> String {
+    let mut out = String::new();
+    ferroscope_schema::json::write_string(&mut out, s);
+    out
 }

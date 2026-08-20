@@ -445,12 +445,28 @@ impl Suite {
     where
         F: Fn(&str) -> Option<String> + Copy,
     {
+        self.run_with(load_urdf, &mut || Vec::new())
+    }
+
+    /// [`Suite::run`], with a production note taken per case.
+    ///
+    /// `production` is called once at each case's seal. Against a cumulative energy counter
+    /// that is exactly right: each call's delta is that case's own cost, with nothing dropped
+    /// between cases and nothing counted twice.
+    pub fn run_with<F>(
+        &self,
+        load_urdf: F,
+        production: &mut dyn FnMut() -> Vec<(String, String)>,
+    ) -> Result<Vec<CaseResult>, String>
+    where
+        F: Fn(&str) -> Option<String> + Copy,
+    {
         let mut out = Vec::with_capacity(self.cases.len());
         for (i, (label, set)) in self.cases.iter().enumerate() {
             let scene = self
                 .scene(i)
                 .map_err(|p| format!("case {label}: {} problem(s)", p.len()))?;
-            let recorded = scene.record(load_urdf)?;
+            let recorded = scene.record_with(load_urdf, &mut *production)?;
             let checks = self
                 .checks
                 .iter()

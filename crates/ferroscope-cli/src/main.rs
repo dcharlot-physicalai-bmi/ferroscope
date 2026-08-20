@@ -17,6 +17,7 @@ mod builtin;
 mod demo;
 mod glb;
 mod power;
+mod production;
 mod say;
 mod scene;
 mod urdf;
@@ -196,6 +197,14 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
     } else {
         println!("\n  receipt     none: this recording makes no reproducibility claim");
     }
+    if let Some(kv) = log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK) {
+        // What making this copy of the file cost, on the machine that made it. Outside both
+        // digests on purpose: the same experiment on a busier machine costs more.
+        println!("\n  production");
+        for (k, v) in kv {
+            println!("    {k:<22} {v}");
+        }
+    }
     Ok(true)
 }
 
@@ -297,6 +306,13 @@ fn cmd_energy(path: &str) -> Result<bool, String> {
             };
             println!("  {r:<10} {name:<18} {j:>12.3}");
         }
+    }
+
+    if let Some(kv) = mcap::read(&bytes).ok().and_then(|log| {
+        log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+            .map(<[_]>::to_vec)
+    }) {
+        production::print(&kv);
     }
 
     println!("\n  coverage     {}", q.coverage);

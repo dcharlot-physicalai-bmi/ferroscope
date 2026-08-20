@@ -66,19 +66,28 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    let rec = scene.record(|p| {
-        // Relative to the scene file first, because that is what "arm.urdf" written next to it
-        // means; then the built-in names, so a hand-written scene may also just say "so101".
-        std::fs::read_to_string(base.join(p))
-            .ok()
-            .or_else(|| crate::builtin::load(p))
-    })?;
+    let mut meter = crate::production::start();
+    let mut note: Vec<(String, String)> = Vec::new();
+    let rec = scene.record_with(
+        |p| {
+            // Relative to the scene file first, because that is what "arm.urdf" written next to
+            // it means; then the built-in names, so a scene may also just say "so101".
+            std::fs::read_to_string(base.join(p))
+                .ok()
+                .or_else(|| crate::builtin::load(p))
+        },
+        || {
+            note = meter.production_note();
+            note.clone()
+        },
+    )?;
     std::fs::write(out, &rec.bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
 
     for n in &rec.notes {
         println!("  note         {n}");
     }
     println!("\nwrote {out} ({} bytes)", rec.bytes.len());
+    crate::production::print(&note);
     println!("  spec digest  {}", rec.receipt.spec_digest);
     println!("  trace digest {}", rec.receipt.trace_digest);
     println!(
@@ -132,7 +141,13 @@ fn sweep_cases(path: &str, text: &str, out: &str, check_only: bool) -> Result<bo
 
     // The output path becomes a stem: one recording per case, so a failing case can be opened.
     let stem = out.strip_suffix(".mcap").unwrap_or(out);
-    let results = suite.run(crate::builtin::load)?;
+    let mut meter = crate::production::start();
+    let mut case_notes: Vec<Vec<(String, String)>> = Vec::new();
+    let results = suite.run_with(crate::builtin::load, &mut || {
+        let n = meter.production_note();
+        case_notes.push(n.clone());
+        n
+    })?;
 
     // The measured value of every check is printed on a pass as well as a failure. A column of
     // "pass" with no numbers is a table nobody can sanity-check, and the one number a scene-wide
@@ -165,6 +180,38 @@ fn sweep_cases(path: &str, text: &str, out: &str, check_only: bool) -> Result<bo
         results.len() - failed,
         failed
     );
+    // Production across the sweep: each case's note is the counter delta since the previous
+    // one, so the honest total is their sum — and a single unmeasured case makes the total
+    // unquotable, because a sum with a hole in it reads as smaller than the truth.
+    let joules: Vec<f64> = case_notes
+        .iter()
+        .filter_map(|kv| kv.iter().find(|(k, _)| k == "joules"))
+        .filter_map(|(_, v)| v.parse().ok())
+        .collect();
+    if joules.len() == results.len() && !joules.is_empty() {
+        let all_counter = case_notes.iter().all(|kv| {
+            kv.iter()
+                .any(|(k, v)| k == "basis" && v == "cumulative energy counter")
+        });
+        println!(
+            "  production   {}{:.6} J {} across {} case(s)",
+            if all_counter { "" } else { "~" },
+            joules.iter().sum::<f64>(),
+            if all_counter {
+                "measured"
+            } else {
+                "approximated from instantaneous samples"
+            },
+            joules.len()
+        );
+    } else if let Some(kv) = case_notes
+        .iter()
+        .find(|kv| kv.iter().any(|(k, _)| k == "unavailable"))
+    {
+        // The total is refused because at least one case went unmeasured; the line worth
+        // printing is that hole, not the first case's own joules dressed up as a summary.
+        crate::production::print(kv);
+    }
     println!(
         "  wrote        {stem}-0.mcap .. {stem}-{}.mcap",
         results.len() - 1

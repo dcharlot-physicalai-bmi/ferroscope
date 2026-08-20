@@ -141,6 +141,7 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     }
 
     let mut worst_clearance: Option<(f64, String, u64)> = None;
+    let mut meter = crate::production::start();
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
     let t0 = Stamp::sim(0, 0);
     rec.geometry(
@@ -319,10 +320,17 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     }
 
     let platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
-    let (bytes, receipt, quote) = rec.seal(spec, &platform).map_err(|e| e.to_string())?;
+    let mut note: Vec<(String, String)> = Vec::new();
+    let (bytes, receipt, quote) = rec
+        .seal_with(spec, &platform, || {
+            note = meter.production_note();
+            note.clone()
+        })
+        .map_err(|e| e.to_string())?;
     std::fs::write(out, &bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
 
     println!("\nwrote {out} ({} bytes)", bytes.len());
+    crate::production::print(&note);
     println!("  spec digest  {}", receipt.spec_digest);
     println!("  trace digest {}", receipt.trace_digest);
     println!(

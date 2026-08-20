@@ -1,7 +1,7 @@
 [package]
 name = "ferroscope-power"
 description = "Read real power off the machine: Linux RAPL and macOS powermetrics, with the counter wraparound and the domain double-counting handled, and a clear refusal when the interface exists but this process cannot read it. No dependencies."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

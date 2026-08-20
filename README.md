@@ -154,6 +154,37 @@ every runner against a synthetic counter with a known right answer — a 20 W co
 as 20 W. A code path that only runs on hardware nobody in the loop owns is a code path nobody has
 run.
 
+#### Every recording now says what it cost to make
+
+Two different quantities share the word "compute", and conflating them would be a category error.
+The compute rail *inside* a described scene models the **robot** — an embedded SoC drawing ~8 W
+during the task — and stays clearly labelled an estimate. What the machine *producing* the file
+spent is a separate, measurable fact, and every recording now carries it in its own
+`ferroscope.production` metadata block:
+
+```text
+  production
+    joules                 0.616237
+    duration_s             0.0293
+    source                 Linux RAPL, 1 top-level domain(s): package-0
+    basis                  cumulative energy counter
+```
+
+When the machine will not say — no root, no counters — the block names the reason instead, and
+never writes `joules: 0`. A sweep sums per-case deltas off the cumulative counter, and refuses to
+print a total if any case went unmeasured, because a sum with a hole in it reads as smaller than
+the truth.
+
+The block lives **outside both digests**, deliberately: production cost varies run to run by
+nature — the same scene on a busier machine costs more — so it can never be part of the
+determinism claim. The receipt says *"this is the same experiment"*; the production block says
+*"and here is what making this copy of it cost"*. CI holds that as an invariant: a measured run
+and an unmeasured run of the same scene must agree digest for digest.
+
+This is also, concretely, the figure the platform column above lacks: a **per-run production cost**,
+measured, in the file, recomputable by nobody because it is not a claim — it is a receipt of spend.
+
+
 ### 3. The receipt is recomputable from the file
 
 Every run is sealed with a receipt stored in the recording's own metadata. It has two halves:
@@ -873,7 +904,7 @@ refusal, the determinism receipt and comparator, `verify` recomputing a receipt 
 the CLI's nine verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **189 tests, clean clippy, three platforms in CI plus
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **195 tests, clean clippy, three platforms in CI plus
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 

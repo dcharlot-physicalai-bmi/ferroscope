@@ -465,6 +465,19 @@ impl Scene {
     where
         F: Fn(&str) -> Option<String>,
     {
+        self.record_with(load_urdf, Vec::new)
+    }
+
+    /// [`Scene::record`], plus a production note for the recording's own file.
+    ///
+    /// `production` runs after the digests are fixed and just before the file closes, so a
+    /// meter stopped inside it covers the whole recording. This crate never opens a meter
+    /// itself — it stays wasm-clean — the caller that has one passes the closure.
+    pub fn record_with<F, P>(&self, load_urdf: F, production: P) -> Result<Recorded, String>
+    where
+        F: Fn(&str) -> Option<String>,
+        P: FnOnce() -> Vec<(String, String)>,
+    {
         let steps = self.steps();
         let dt_ns = (1e9 / self.rate_hz).round().max(1.0) as u64;
         let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
@@ -646,7 +659,9 @@ impl Scene {
         }
 
         let platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
-        let (bytes, receipt, quote) = rec.seal(spec, &platform).map_err(|e| e.to_string())?;
+        let (bytes, receipt, quote) = rec
+            .seal_with(spec, &platform, production)
+            .map_err(|e| e.to_string())?;
         Ok(Recorded {
             bytes,
             receipt,

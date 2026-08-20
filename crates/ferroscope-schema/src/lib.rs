@@ -64,6 +64,15 @@ pub use ferroscope_receipt as receipt;
 
 /// The metadata block name a Ferroscope receipt lives under.
 pub const RECEIPT_BLOCK: &str = "ferroscope.receipt";
+
+/// The metadata block naming what it cost to PRODUCE this recording, on the machine that
+/// produced it — measured, when that machine allowed it, or a stated reason it could not be.
+///
+/// Deliberately a separate block from the receipt, and deliberately outside both digests:
+/// production cost varies run to run by nature (the same scene on a busy machine costs more),
+/// so it can never be part of the determinism claim. The receipt says "this is the same
+/// experiment"; this block says "and here is what making this copy of it cost".
+pub const PRODUCTION_BLOCK: &str = "ferroscope.production";
 /// The MCAP profile string Ferroscope recordings declare.
 pub const PROFILE: &str = "ferroscope";
 
@@ -597,9 +606,28 @@ impl<W: Write> Recorder<W> {
     /// Close the recording: write the receipt into the file's metadata, finish the MCAP,
     /// and hand back the sink, the receipt, and the energy quote.
     pub fn seal(
+        self,
+        spec: RunSpec,
+        platform: &str,
+    ) -> ferroscope_mcap::Result<(W, Receipt, Quote)> {
+        self.seal_with(spec, platform, Vec::new)
+    }
+
+    /// [`Recorder::seal`], plus a production note.
+    ///
+    /// `production` is called after both digests are fixed and immediately before the block is
+    /// written. What its note covers is whatever interval the caller's meter was primed over —
+    /// prime before the work and the note spans the work; prime late and it does not. This
+    /// method cannot vouch for the caller's timing, only for the block's placement. Its pairs land in
+    /// [`PRODUCTION_BLOCK`]; an empty return writes no block at all. Because metadata records
+    /// are not messages, nothing here can move either digest — [`verify`] recomputes from
+    /// messages alone — and the test suite holds that as an invariant rather than trusting the
+    /// construction.
+    pub fn seal_with(
         mut self,
         spec: RunSpec,
         platform: &str,
+        production: impl FnOnce() -> Vec<(String, String)>,
     ) -> ferroscope_mcap::Result<(W, Receipt, Quote)> {
         let quote = self.ledger.quote();
         let receipt = spec.receipt(self.digest.clone(), platform);
@@ -614,6 +642,10 @@ impl<W: Write> Recorder<W> {
         kv.push(("energy.coverage".into(), quote.coverage.to_string()));
         kv.push(("clock.max_lag_ns".into(), self.max_lag_ns.to_string()));
         self.w.write_metadata(RECEIPT_BLOCK, &kv)?;
+        let note = production();
+        if !note.is_empty() {
+            self.w.write_metadata(PRODUCTION_BLOCK, &note)?;
+        }
         let sink = self.w.finish()?;
         Ok((sink, receipt, quote))
     }

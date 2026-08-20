@@ -348,10 +348,15 @@ jobs:
           printf '4294967295\n' > "$D/intel-rapl:0/max_energy_range_uj"
           # A counter driven from the wall clock, aiming at 20 W.
           python3 -c "
-          import time, sys
+          import os, time, sys
           p = sys.argv[1]; t0 = time.monotonic()
+          # Write-to-temp then rename: a truncate-then-write leaves a window where the reader
+          # sees an empty file, which reads as an unreadable counter and fails the run for the
+          # fixture's race rather than any product defect. A real sysfs node cannot be empty.
           while time.monotonic() - t0 < 6.0:
-              open(p, 'w').write(str(int((time.monotonic() - t0) * 20.0 * 1e6)) + chr(10))
+              tmp = p + '.tmp'
+              open(tmp, 'w').write(str(int((time.monotonic() - t0) * 20.0 * 1e6)) + chr(10))
+              os.replace(tmp, p)
               time.sleep(0.02)
           " "$E" &
           WRITER=$!
@@ -367,7 +372,7 @@ jobs:
           read -r E1 T1 <<< "$(cat "$E") $(python3 -c 'import time; print(time.time())')"
           kill "$WRITER" 2>/dev/null || true; wait "$WRITER" 2>/dev/null || true
 
-          grep -q "Linux RAPL" /tmp/m.txt || { echo "the override did not open the meter"; exit 1; }
+          grep -q "top-level domain" /tmp/m.txt || { echo "the override did not open the meter"; exit 1; }
           $B verify /tmp/m.mcap | grep -q VERIFIED || { echo "the measured run does not verify"; exit 1; }
           E0="$E0" E1="$E1" T0="$T0" T1="$T1" python3 - <<'PYCHK'
           import os, re, sys
@@ -392,6 +397,51 @@ jobs:
           print(f'meter {got} W vs counter {truth:.3f} W over the same window, {j} J')
           PYCHK
 
+      - name: what a recording cost to produce is in the file, and outside both digests
+        # The invariant: production cost is measured, varies run to run, and must never touch
+        # the determinism claim. A measured run and an unmeasured run of the same scene must
+        # agree digest for digest, and both must verify.
+        run: |
+          B=$PWD/target/release/ferroscope
+          D=$(mktemp -d)/powercap; mkdir -p "$D/intel-rapl:0"
+          printf 'package-0\n'  > "$D/intel-rapl:0/name"
+          printf '0\n'          > "$D/intel-rapl:0/energy_uj"
+          printf '4294967295\n' > "$D/intel-rapl:0/max_energy_range_uj"
+          python3 -c "
+          import os, time, sys
+          p = sys.argv[1]; t0 = time.monotonic()
+          # Atomic replace, not truncate-then-write: the reader must never see an empty file.
+          while time.monotonic() - t0 < 12.0:
+              tmp = p + '.tmp'
+              open(tmp, 'w').write(str(int((time.monotonic() - t0) * 20.0 * 1e6)) + chr(10))
+              os.replace(tmp, p)
+              time.sleep(0.01)
+          " "$D/intel-rapl:0/energy_uj" &
+          WRITER=$!
+          FERROSCOPE_POWERCAP="$D" $B scene examples/scenes/warehouse.json /tmp/measured.mcap > /tmp/m.txt 2>&1
+          E=$(mktemp -d)   # an empty powercap: definitively no meter
+          FERROSCOPE_POWERCAP="$E" $B scene examples/scenes/warehouse.json /tmp/plain.mcap > /dev/null 2>&1
+          kill "$WRITER" 2>/dev/null || true; wait "$WRITER" 2>/dev/null || true
+
+          grep -Eq "production   [0-9.]+ J measured" /tmp/m.txt \
+            || { echo "the measured run reported no production cost"; cat /tmp/m.txt; exit 1; }
+          $B inspect /tmp/measured.mcap > /tmp/mi.txt
+          grep -q "production" /tmp/mi.txt && grep -Eq "joules +[0-9.]+" /tmp/mi.txt \
+            || { echo "the production block is not in the file"; exit 1; }
+          # The unmeasured file must carry the REASON, and no joules figure at all.
+          $B inspect /tmp/plain.mcap > /tmp/pi.txt
+          grep -q "unavailable" /tmp/pi.txt || { echo "the unmeasured file does not say why"; exit 1; }
+          grep -Eq "joules +[0-9.]+" /tmp/pi.txt && { echo "an unmeasured file invented joules"; exit 1; }
+          # Both verify, and the digests are identical: the measurement never touches the claim.
+          $B verify /tmp/measured.mcap | grep -q VERIFIED || { echo "measured run does not verify"; exit 1; }
+          $B verify /tmp/plain.mcap    | grep -q VERIFIED || { echo "plain run does not verify"; exit 1; }
+          for which in 'trace digest' 'spec digest'; do
+            A=$($B verify /tmp/measured.mcap | grep "$which" | awk '{print $3}')
+            C=$($B verify /tmp/plain.mcap    | grep "$which" | awk '{print $3}')
+            test -n "$A" || { echo "no $which found"; exit 1; }
+            test "$A" = "$C" || { echo "the production note moved the $which: $A vs $C"; exit 1; }
+          done
+          echo "production cost is in the file, said honestly, and outside both digests"
       - name: the subdomain trap stays shut
         run: |
           B=$PWD/target/release/ferroscope

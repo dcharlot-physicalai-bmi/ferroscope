@@ -77,7 +77,12 @@ pub fn run(phrase: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         return Ok(true);
     }
 
-    let rec = scene.record(crate::builtin::load)?;
+    let mut meter = crate::production::start();
+    let mut note: Vec<(String, String)> = Vec::new();
+    let rec = scene.record_with(crate::builtin::load, || {
+        note = meter.production_note();
+        note.clone()
+    })?;
     std::fs::write(out, &rec.bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
     for n in &rec.notes {
         println!("  note         {n}");
@@ -87,6 +92,7 @@ pub fn run(phrase: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         rec.bytes.len(),
         rec.steps
     );
+    crate::production::print(&note);
     println!("  trace digest {}", rec.receipt.trace_digest);
     println!(
         "  energy       {:.2} J estimated ({:.1} % compute)",

@@ -77,6 +77,8 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
 
     const DT_NS: u64 = 1_000_000; // 1 kHz control
 
+    let mut meter = crate::production::start();
+
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
     let mut rng = Lcg(seed);
     let mut wall = 0u64;
@@ -256,10 +258,17 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
         .config("body_mass_kg", "12")
         .build(concat!("ferroscope ", env!("CARGO_PKG_VERSION")));
 
-    let (bytes, receipt, quote) = rec.seal(spec, &platform).map_err(|e| e.to_string())?;
+    let mut note: Vec<(String, String)> = Vec::new();
+    let (bytes, receipt, quote) = rec
+        .seal_with(spec, &platform, || {
+            note = meter.production_note();
+            note.clone()
+        })
+        .map_err(|e| e.to_string())?;
     std::fs::write(out, &bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
 
     println!("wrote {out} ({} bytes)", bytes.len());
+    crate::production::print(&note);
     println!("  spec digest   {}", receipt.spec_digest);
     println!("  trace digest  {}", receipt.trace_digest);
     println!("  precision     {}", receipt.precision);

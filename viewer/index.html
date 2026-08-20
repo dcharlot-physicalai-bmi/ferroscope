@@ -155,6 +155,10 @@
   #sayOut{grid-column:1/-1;font-family:var(--mono);font-size:11px;line-height:1.65;padding:0 12px 8px;
     color:var(--dim);background:var(--panel);border-bottom:1px solid var(--line);max-height:19vh;overflow:auto}
   #sayOut:empty{display:none}
+  #sayOut table.cases{border-collapse:collapse;margin:6px 0 0;font-size:11px;width:auto}
+  #sayOut table.cases td{border:0;padding:2px 10px 2px 0;white-space:nowrap;color:var(--dim)}
+  #sayOut table.cases button{padding:2px 8px;font-size:10.5px;min-height:24px}
+  #sayOut table.cases .v-pass{color:var(--teal)} #sayOut table.cases .v-fail{color:var(--red)}
   #sayOut .ok{color:var(--teal)} #sayOut .warn{color:var(--gold)} #sayOut .bad{color:var(--red)}
   #sayOut b{color:var(--ink);font-weight:600}
   #sayOut pre{margin:6px 0 0;padding:8px 10px;background:var(--sunk);border:1px solid var(--line2);
@@ -305,7 +309,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import init, { open as fsOpen, diff as fsDiff, divergence_curve, attachment, version,
-               scene_from_text, record_scene, record_scene_with }
+               scene_from_text, record_scene, record_scene_with, sweep_scene, record_case }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -1141,6 +1145,16 @@ const EXAMPLES = [
   'two cylinders sliding back and forth and a robot arm',
   'drop a ball on the moon for 8 seconds',
   'a gold pillar oscillating every 2 s and five balls falling',
+  // A scenario rather than a sentence: cases, checks, and a verdict per case.
+  JSON.stringify({
+    name: 'how high can a crate fall',
+    duration_s: 2.5, rate_hz: 120,
+    cases: { drop_m: [0.5, 1, 2, 4], bounce: [0.1, 0.6] },
+    bodies: [{ id: 'crate', shape: 'box', size: [0.3, 0.3, 0.3], color: '#a0703c',
+               motion: { kind: 'fall', from: [0, 0, { $: 'drop_m' }],
+                         restitution: { $: 'bounce' } } }],
+    checks: [{ name: 'settles within 1.5 s', measure: 'settled_s', of: 'crate', at_most: 1.5 }],
+  }),
 ];
 let egAt = 0;
 el('sayEg').addEventListener('click', () => {
@@ -1149,7 +1163,6 @@ el('sayEg').addEventListener('click', () => {
 });
 
 function sayReport(r) {
-  const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   let h = '';
   for (const u of r.understood || []) h += `<div class="ok">understood &nbsp;${esc(u)}</div>`;
   for (const a of r.assumed || [])    h += `<div>assumed &nbsp;&nbsp;&nbsp;&nbsp;${esc(a)}</div>`;
@@ -1160,17 +1173,78 @@ function sayReport(r) {
   return h;
 }
 
+/* A robot named in a scene needs its description. The page can fetch; the wasm cannot. */
+async function robotFor(sceneJson) {
+  const m = /"urdf"\s*:\s*"([^"]+)"/.exec(sceneJson);
+  if (!m) return ['', ''];
+  const name = m[1].replace(/\.urdf$/, '').split('/').pop();
+  try {
+    const res = await fetch(`robots/${name}.urdf`);
+    if (res.ok) return [name, await res.text()];
+  } catch { /* offline, or no such robot: recorded without it, and said so below */ }
+  return [name, ''];
+}
+
+/* A scenario's verdict table. Each row loads that case, so a failure is one click from the 3D. */
+function caseTable(sweep, sceneJson, name, urdf) {
+  const rows = sweep.cases.map((c, i) => `
+    <tr>
+      <td><button type="button" data-case="${i}">open</button></td>
+      <td class="${c.passed ? 'v-pass' : 'v-fail'}">${c.passed ? 'pass' : 'FAIL'}</td>
+      <td><b>${esc(c.label)}</b></td>
+      <td>${c.steps} steps</td>
+      <td>${c.joules.toFixed(2)} J</td>
+      <td>${c.checks.map((k) => esc(k.why)).join(' · ')}</td>
+    </tr>`).join('');
+  return `<div class="${sweep.failed ? 'warn' : 'ok'}">${esc(sweep.name)}: `
+       + `${sweep.passed} passed, ${sweep.failed} failed</div>`
+       + `<table class="cases">${rows}</table>`;
+}
+
 async function sayGo() {
   const text = el('say').value.trim();
   const out = el('sayOut');
   if (!text) { out.innerHTML = ''; return; }
   if (!wasmReady) { out.innerHTML = '<div class="bad">the WebAssembly module is still loading</div>'; return; }
   out.innerHTML = '<div>reading…</div>';
+
+  // A document pasted in is taken as a scene; anything else is read as English. Guessing by the
+  // first character rather than a mode switch: nobody starts a sentence with a brace.
+  if (text.startsWith('{')) {
+    const [name, urdf] = await robotFor(text);
+    let sweep;
+    try {
+      sweep = JSON.parse(sweep_scene(text, name, urdf));
+    } catch (e) { out.innerHTML = `<div class="bad">${esc(e.message || e)}</div>`; return; }
+    if (sweep.error) {
+      out.innerHTML = `<div class="bad">${esc(sweep.error)}</div>`
+        + (sweep.problems || []).map((p) => `<div>${esc(p)}</div>`).join('');
+      return;
+    }
+    out.innerHTML = caseTable(sweep, text, name, urdf);
+    out.querySelectorAll('button[data-case]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        try {
+          const bytes = record_case(text, Number(b.dataset.case), name, urdf);
+          await accept('A', new File([bytes], `case-${b.dataset.case}.mcap`));
+        } catch (e) { out.innerHTML += `<div class="bad">${esc(e.message || e)}</div>`; }
+      });
+    });
+    // The first case is loaded so the 3D is never empty behind a table of verdicts.
+    if (sweep.cases.length) {
+      try {
+        const bytes = record_case(text, 0, name, urdf);
+        await accept('A', new File([bytes], 'case-0.mcap'));
+      } catch { /* the table is still the answer; the row buttons remain */ }
+    }
+    return;
+  }
+
   let r;
   try {
     r = JSON.parse(scene_from_text(text));
   } catch (e) {
-    out.innerHTML = `<div class="bad">${e.message || e}</div>`;
+    out.innerHTML = `<div class="bad">${esc(e.message || e)}</div>`;
     return;
   }
   if (r.error) {
@@ -1181,19 +1255,12 @@ async function sayGo() {
   out.innerHTML = sayReport(r) + `<pre tabindex="0">${r.scene.replace(/[&<>]/g,
     (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</pre>`;
 
-  // A robot named in the scene needs its description. The page can fetch; the wasm cannot.
   let bytes;
   try {
-    const m = /"urdf"\s*:\s*"([^"]+)"/.exec(r.scene);
-    if (m) {
-      const name = m[1].replace(/\.urdf$/, '').split('/').pop();
-      const res = await fetch(`robots/${name}.urdf`);
-      bytes = res.ok
-        ? record_scene_with(r.scene, name, await res.text())
-        : record_scene(r.scene);
-      if (!res.ok) out.innerHTML += `<div class="warn">robots/${name}.urdf did not load, so the robot is not in this recording</div>`;
-    } else {
-      bytes = record_scene(r.scene);
+    const [name, urdf] = await robotFor(r.scene);
+    bytes = name && urdf ? record_scene_with(r.scene, name, urdf) : record_scene(r.scene);
+    if (name && !urdf) {
+      out.innerHTML += `<div class="warn">robots/${esc(name)}.urdf did not load, so the robot is not in this recording</div>`;
     }
   } catch (e) {
     out.innerHTML += `<div class="bad">${e.message || e}</div>`;

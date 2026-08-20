@@ -12,7 +12,11 @@ use ferroscope_schema::{
 };
 
 /// A short deterministic run: a mass on a spring, sampled at 1 kHz.
-fn record(seed: u64, perturb_at: Option<u64>) -> Vec<u8> {
+fn record_with_production(
+    seed: u64,
+    perturb_at: Option<u64>,
+    production: impl FnOnce() -> Vec<(String, String)>,
+) -> Vec<u8> {
     let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
     let mut x = 0.2f64;
     let mut v = 0.0f64;
@@ -75,7 +79,12 @@ fn record(seed: u64, perturb_at: Option<u64>) -> Vec<u8> {
         .integrator("semi-implicit-euler")
         .solver("none")
         .build("integration-test");
-    rec.seal(spec, "test-platform").unwrap().0
+    rec.seal_with(spec, "test-platform", production).unwrap().0
+}
+
+/// The same run, sealed the plain way.
+fn record(seed: u64, perturb_at: Option<u64>) -> Vec<u8> {
+    record_with_production(seed, perturb_at, Vec::new)
 }
 
 #[test]
@@ -93,6 +102,64 @@ fn a_sealed_recording_verifies_from_its_own_bytes() {
 fn count_contacts(bytes: &[u8]) -> usize {
     let log = mcap::read(bytes).unwrap();
     log.messages_on("/contacts").count()
+}
+
+#[test]
+fn a_production_block_moves_neither_digest() {
+    // The invariant everything rests on: what producing a file COST is measured, varies run to
+    // run, and must therefore never touch the determinism claim. Two identical runs, one sealed
+    // plain and one carrying a production note, must agree digest for digest — and both must
+    // still verify from their own bytes.
+    let plain = record(7, None);
+    let noted = record_with_production(7, None, || {
+        vec![
+            ("joules".into(), "12.345678".into()),
+            ("duration_s".into(), "1.9".into()),
+            ("source".into(), "test counter".into()),
+            ("basis".into(), "cumulative energy counter".into()),
+        ]
+    });
+
+    let (vp, vn) = (verify(&plain).unwrap(), verify(&noted).unwrap());
+    assert!(vp.ok() && vn.ok(), "both must stand behind their receipts");
+    assert_eq!(
+        vp.receipt.trace_digest, vn.receipt.trace_digest,
+        "a production note moved the trace digest: the measurement leaked into the claim"
+    );
+    assert_eq!(
+        vp.receipt.spec_digest, vn.receipt.spec_digest,
+        "a production note moved the spec digest"
+    );
+
+    // And the note is genuinely in the file, readable by name.
+    let log = mcap::read(&noted).unwrap();
+    let kv = log
+        .metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+        .expect("the production block must be present");
+    assert_eq!(
+        kv.iter()
+            .find(|(k, _)| k == "joules")
+            .map(|(_, v)| v.as_str()),
+        Some("12.345678")
+    );
+    assert!(
+        mcap::read(&plain)
+            .unwrap()
+            .metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+            .is_none(),
+        "a plain seal must not invent a block"
+    );
+}
+
+#[test]
+fn an_empty_production_note_writes_no_block() {
+    // "Nothing to say" and "a block full of nothing" are different files; the reader that
+    // checks for the block's presence must be able to trust it.
+    let bytes = record_with_production(3, None, Vec::new);
+    assert!(mcap::read(&bytes)
+        .unwrap()
+        .metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+        .is_none());
 }
 
 #[test]
