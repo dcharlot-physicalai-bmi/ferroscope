@@ -64,6 +64,7 @@ fn run() -> Result<bool, String> {
     let mut out = "motion.mcap".to_string();
     let mut passive = false;
     let mut serve: Option<u16> = None;
+    let mut serve_wt: Option<u16> = None;
     let mut duration_s = 4.0f64;
     let mut rate_hz = 120.0f64;
     let mut i = 0;
@@ -73,6 +74,16 @@ fn run() -> Result<bool, String> {
                 passive = true;
                 i += 1;
             }
+            "--serve-wt" => match args.get(i + 1).and_then(|s| s.parse().ok()) {
+                Some(p) => {
+                    serve_wt = Some(p);
+                    i += 2;
+                }
+                None => {
+                    serve_wt = Some(4433);
+                    i += 1;
+                }
+            },
             "--serve" => {
                 // A port may follow; without one, the viewer's default.
                 match args.get(i + 1).and_then(|s| s.parse().ok()) {
@@ -168,12 +179,32 @@ fn run() -> Result<bool, String> {
         }
         None => None,
     };
+    let wt_server = match serve_wt {
+        Some(port) => {
+            let srv = ferroscope_live::WtServer::bind(port)
+                .map_err(|e| format!("cannot bind WebTransport on 127.0.0.1:{port}: {e}"))?;
+            println!("  webtransport https://127.0.0.1:{}", srv.port());
+            // The whole connection story in one clickable line: the viewer reads the url and
+            // the certificate hash from its query string and connects on load.
+            println!(
+                "               https://ferroscope.physicalai-bmi.org/viewer?wt=https://127.0.0.1:{}&hash={}",
+                srv.port(),
+                srv.cert_hash_hex()
+            );
+            Some(srv)
+        }
+        None => None,
+    };
+    let pacing = server.is_some() || wt_server.is_some();
     // The bytes land in a shared buffer either way, recovered after seal without caring
     // whether a tee sat in front of it.
     let out_bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
-    let sink: Box<dyn std::io::Write> = match &server {
-        Some(srv) => Box::new(srv.tee(SharedVec(std::sync::Arc::clone(&out_bytes)))),
-        None => Box::new(SharedVec(std::sync::Arc::clone(&out_bytes))),
+    let sink: Box<dyn std::io::Write> = match (&server, &wt_server) {
+        // Both transports at once would need a fan-in tee; one at a time covers every real use.
+        (Some(_), Some(_)) => return Err("--serve and --serve-wt are one or the other".into()),
+        (Some(srv), None) => Box::new(srv.tee(SharedVec(std::sync::Arc::clone(&out_bytes)))),
+        (None, Some(srv)) => Box::new(srv.tee(SharedVec(std::sync::Arc::clone(&out_bytes)))),
+        (None, None) => Box::new(SharedVec(std::sync::Arc::clone(&out_bytes))),
     };
     let mut rec = Recorder::new(sink, Precision::Quantized { drop_bits: 12 });
     let t0 = Stamp::sim(0, 0);
@@ -237,7 +268,7 @@ fn run() -> Result<bool, String> {
 
         // Live means live: pace each frame to the wall clock so a viewer watches the run
         // happen rather than receiving it as a lump.
-        if server.is_some() {
+        if pacing {
             let due = start_wall + std::time::Duration::from_nanos(frame * dt_frame_ns);
             if let Some(wait) = due.checked_duration_since(std::time::Instant::now()) {
                 std::thread::sleep(wait);
@@ -329,12 +360,16 @@ fn run() -> Result<bool, String> {
 
     let platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
     let mut note: Vec<(String, String)> = Vec::new();
-    let (_sink, receipt, quote) = rec
+    let (sink, receipt, quote) = rec
         .seal_with(spec, &platform, || {
             note = meter.production_note();
             note.clone()
         })
         .map_err(|e| e.to_string())?;
+    // The sink holds a clone of the broadcast sender; the channel only closes — and the
+    // viewers' streams only FIN — once every sender is gone. Without this drop, finish() below
+    // waits its whole timeout and the process exit tears the last records out of the stream.
+    drop(sink);
     let bytes = out_bytes.lock().unwrap().clone();
     std::fs::write(&out, &bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
     if let Some(srv) = &server {
@@ -342,6 +377,11 @@ fn run() -> Result<bool, String> {
             "  streamed to  {} viewer(s); the stream is the file they now hold",
             srv.viewers()
         );
+    }
+    if let Some(srv) = wt_server {
+        // FIN every stream and let the last bytes leave before the process does.
+        srv.finish(std::time::Duration::from_secs(3));
+        println!("  webtransport streams finished; the stream is the file they now hold");
     }
 
     println!("\nwrote {out} ({} bytes, {} frames)", bytes.len(), frames);

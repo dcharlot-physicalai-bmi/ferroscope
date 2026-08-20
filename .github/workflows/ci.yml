@@ -527,6 +527,27 @@ jobs:
           grep -q "local network access" viewer/index.html \
             || { echo "the live error no longer explains the LNA permission"; exit 1; }
           echo "a WebSocket client holds the byte-identical, receipt-verified file"
+      - name: the stream is the file, over QUIC too
+        # Same invariant, second transport: one unidirectional WebTransport stream carries the
+        # raw recording bytes, FIN at seal. The probe is wtransport's own client with cert
+        # validation off — the browser holds the same trust through the printed hash instead.
+        run: |
+          cargo build --release -p ferroscope-live --features webtransport --examples
+          ./target/release/ferroscope-motion /tmp/wt-served.mcap --serve-wt 0 --duration 2 > /tmp/wt.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 100); do grep -q "webtransport https://" /tmp/wt.log && break; sleep 0.1; done
+          URL=$(grep -o "https://127.0.0.1:[0-9]*" /tmp/wt.log | head -1)
+          test -n "$URL" || { echo "no WebTransport url announced"; cat /tmp/wt.log; exit 1; }
+          timeout 30 ./target/release/examples/wt-probe "$URL" /tmp/wt-streamed.mcap
+          wait "$SRV"
+          cmp /tmp/wt-served.mcap /tmp/wt-streamed.mcap \
+            || { echo "the QUIC stream differs from the file"; exit 1; }
+          ./target/release/ferroscope verify /tmp/wt-streamed.mcap | grep -q VERIFIED \
+            || { echo "the streamed file does not verify"; exit 1; }
+          # The producer must print the clickable viewer link with the certificate hash.
+          grep -Eq "viewer\?wt=https://127.0.0.1:[0-9]+&hash=[0-9a-f]{64}" /tmp/wt.log \
+            || { echo "no connectable viewer link printed"; exit 1; }
+          echo "a WebTransport client holds the byte-identical, receipt-verified file"
 
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
@@ -583,7 +604,7 @@ jobs:
       - name: core crates have no runtime dependencies
         run: |
           for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt ferroscope-mesh \
-                   ferroscope-power; do
+                   ferroscope-power ferroscope-live; do
             n=$(cargo tree -p $c --edges normal --prefix none | grep -v '^$' | sort -u | wc -l)
             echo "$c: $n crate(s) in the runtime graph"
             [ "$n" -eq 1 ] || { cargo tree -p $c --edges normal; exit 1; }

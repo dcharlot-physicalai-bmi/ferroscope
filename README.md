@@ -459,12 +459,27 @@ A viewer that connects mid-run is caught up first — schemas and channels live 
 stream, and a client that missed them could draw nothing. A viewer that stalls is dropped without
 ceremony: a browser tab must never back-pressure a simulation.
 
-Transport is WebSocket rather than the WebTransport this README once promised, and the reasons
-are stated rather than papered over: WebTransport needs an HTTP/3 + TLS stack — a large
-dependency tree for a link whose client is a browser tab on the same desk — and its genuine
-advantages (unreliable datagrams, no head-of-line blocking) belong to lossy fleet telemetry, not
-a local viewer. The server is ~300 lines of `std`, SHA-1 included, checked against the RFC 6455
-handshake vector every browser checks against.
+Two transports, one invariant. The default is WebSocket — ~300 lines of `std`, SHA-1 included,
+checked against the RFC 6455 handshake vector every browser checks against, zero dependencies.
+**WebTransport (HTTP/3 over QUIC) is the `webtransport` feature**: each viewer gets one
+unidirectional QUIC stream carrying the raw recording bytes in file order — no framing layer at
+all — FIN when the recording seals. TLS is mandatory even on localhost, and the designed answer
+for local tooling is a fresh self-signed certificate the browser accepts through
+`serverCertificateHashes`; the producer prints the whole connection story as one clickable link:
+
+```text
+ferroscope-motion out.mcap --serve-wt
+  webtransport https://127.0.0.1:4433
+               https://ferroscope.physicalai-bmi.org/viewer?wt=https://127.0.0.1:4433&hash=9f2c…
+```
+
+The QUIC stack (wtransport, quinn, rustls) is real weight, which is why it is opt-in and the
+default build of `ferroscope-live` keeps the zero-dependency claim CI measures it by. Two
+QUIC-specific lessons are pinned in the code: UDP has no lingering socket, so a session must
+outlive its own FIN until the peer closes or unacked packets die with the process; and a
+`Notify::notify_waiters` wakes only *current* waiters, so the seal signal is a flag checked after
+creating the notified future — the first version delivered every byte and no FIN, and every
+stream died at the QUIC idle timeout.
 
 One permission stands between the hosted viewer and a local producer, and it is the browser's to
 grant, not ours to route around: Chrome's **Local Network Access** policy makes a public site ask

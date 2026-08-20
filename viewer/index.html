@@ -864,6 +864,21 @@ function paintInspector(){
     h += row('peak', e.peak_w.toFixed(1)+' W · '+esc(e.peak_source));
     h += row('coverage', esc(e.coverage), e.quotable?'good':'bad');
   }
+  // What making this file cost the machine that made it: a different quantity from the task's
+  // energy above, and the file says which it is.
+  const pr=b.production;
+  if(pr){
+    h += '<h3>Production</h3>';
+    if(pr.joules){
+      const counter = pr.basis==='cumulative energy counter';
+      h += row('spent', (counter?'':'~')+Number(pr.joules).toFixed(4)+' J', counter?'good':'warn');
+      h += row('over', Number(pr.duration_s).toFixed(3)+' s');
+      h += row('source', esc(pr.source||'?'));
+      h += row('basis', esc(pr.basis||'?'), counter?'':'warn');
+    } else if(pr.unavailable){
+      h += row('not measured', esc(pr.unavailable), 'warn');
+    }
+  }
   h += `<h3>At t = ${S.t.toFixed(3)} s</h3>`;
   for(const [topic,rows] of Object.entries(b.poses||{})){
     const s=sampleAt(rows,S.t); if(!s) continue;
@@ -1182,6 +1197,58 @@ function liveStop(msg){
   el('liveBtn').setAttribute('aria-pressed', 'false');
   el('liveBtn').textContent = 'live';
   if (msg) fail(msg);
+}
+
+/* WebTransport: the producer prints a link carrying its url and certificate hash, and this
+   page connects on load. One unidirectional QUIC stream carries the raw recording bytes in
+   file order — no framing layer at all — FIN when the recording seals. */
+async function liveConnectWt(url, hashHex) {
+  if (!('WebTransport' in window)) {
+    return fail('live: this browser has no WebTransport; use the WebSocket path instead');
+  }
+  clearFail();
+  LIVE.chunks = []; LIVE.total = 0; LIVE.fitted = false;
+  el('liveBtn').setAttribute('aria-pressed', 'true');
+  el('liveBtn').textContent = 'live ●';
+  let wt;
+  try {
+    const value = new Uint8Array(hashHex.match(/.{2}/g).map((h) => parseInt(h, 16)));
+    wt = new WebTransport(url, { serverCertificateHashes: [{ algorithm: 'sha-256', value }] });
+    await wt.ready;
+  } catch (e) {
+    return liveStop('live: WebTransport to ' + url + ' failed: ' + (e.message || e) +
+      ' — is the producer still running? The browser may also ask permission for local ' +
+      'network access; allow it.');
+  }
+  LIVE.timer = setInterval(() => liveRefresh(false), 500);
+  try {
+    const streams = wt.incomingUnidirectionalStreams.getReader();
+    const { value: stream } = await streams.read();
+    const reader = stream.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break; // FIN: the recording sealed, and this tab holds the file
+      LIVE.chunks.push(value);
+      LIVE.total += value.length;
+    }
+  } catch (e) {
+    if (!LIVE.total) return liveStop('live: the stream failed: ' + (e.message || e));
+  }
+  if (LIVE.timer) { clearInterval(LIVE.timer); LIVE.timer = 0; }
+  if (LIVE.total) liveRefresh(true);
+  el('liveBtn').setAttribute('aria-pressed', 'false');
+  el('liveBtn').textContent = 'live';
+  try { wt.close(); } catch {}
+}
+
+// A producer's printed link lands here: ?wt=https://127.0.0.1:4433&hash=<sha-256 hex>.
+{
+  const q = new URLSearchParams(location.search);
+  const wtUrl = q.get('wt');
+  const wtHash = q.get('hash');
+  if (wtUrl && wtHash && /^[0-9a-f]{64}$/i.test(wtHash) && wtUrl.startsWith('https://')) {
+    liveConnectWt(wtUrl, wtHash);
+  }
 }
 
 el('liveBtn').addEventListener('click', () => {

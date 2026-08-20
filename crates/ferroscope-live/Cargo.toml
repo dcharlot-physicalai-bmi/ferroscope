@@ -1,7 +1,7 @@
 [package]
 name = "ferroscope-live"
 description = "Stream a Ferroscope recording as it is written: a zero-dependency WebSocket server whose frames are MCAP records, so the stream IS the file and the client can verify the receipt the moment the producer seals."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,6 +12,19 @@ keywords = ["websocket", "streaming", "mcap", "robotics", "live"]
 categories = ["network-programming", "science::robotics"]
 
 [dependencies]
+# WebTransport is OPT-IN and everything it needs stays behind the feature: the default build of
+# this crate keeps the zero-dependency claim the rest of the repository is measured by.
+wtransport = { version = "0.7", optional = true, features = ["self-signed", "dangerous-configuration"] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[features]
+## The WebTransport (HTTP/3 over QUIC) transport. Same invariant as the default WebSocket one:
+## the stream is the file. Pulls quinn + rustls + tokio, which is why it is not the default.
+webtransport = ["dep:wtransport", "dep:tokio"]
+
+[[example]]
+name = "wt-probe"
+required-features = ["webtransport"]
 
 [dev-dependencies]
 # The tee test records a real run and verifies the streamed bytes with the real verifier.

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::json::{Obj, Value};
-use crate::{mcap, verify, RECEIPT_BLOCK};
+use crate::{mcap, verify, PRODUCTION_BLOCK, RECEIPT_BLOCK};
 
 /// Series longer than this are strided down. A 1080 px lane cannot show more.
 const MAX_POINTS: usize = 4_000;
@@ -280,6 +280,16 @@ fn bundle_log(log: mcap::Log, v: Option<crate::Verification>) -> Option<String> 
         );
     } else if log.metadata_block(RECEIPT_BLOCK).is_none() {
         out.push_str(",\"receipt\":null");
+    }
+
+    // What producing the file cost, when the file says. The viewer is where people actually
+    // look, so this is the one surface the block must not be missing from.
+    if let Some(kv) = log.metadata_block(PRODUCTION_BLOCK) {
+        let mut o = Obj::new();
+        for (k, v) in kv {
+            o = o.str(k, v);
+        }
+        let _ = write!(out, ",\"production\":{}", o.finish());
     }
 
     out.push('}');

@@ -38,7 +38,7 @@ ferroscope-receipt = { version = "0.1.0", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
 ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
 ferroscope-power = { version = "0.1.1", path = "crates/ferroscope-power" }
-ferroscope-live = { version = "0.1.0", path = "crates/ferroscope-live" }
+ferroscope-live = { version = "0.1.1", path = "crates/ferroscope-live" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
 ferroscope-scene = { version = "0.1.2", path = "crates/ferroscope-scene" }
 ferroscope-phrase = { version = "0.1.0", path = "crates/ferroscope-phrase" }

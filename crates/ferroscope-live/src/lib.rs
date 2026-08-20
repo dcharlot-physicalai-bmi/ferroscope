@@ -28,6 +28,10 @@
 #![forbid(unsafe_code)]
 
 mod sha1;
+#[cfg(feature = "webtransport")]
+mod wt;
+#[cfg(feature = "webtransport")]
+pub use wt::{WtServer, WtTee};
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
