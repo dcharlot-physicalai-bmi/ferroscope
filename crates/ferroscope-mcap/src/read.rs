@@ -77,6 +77,19 @@ impl Log {
 
 /// Parse a complete MCAP file.
 pub fn read(bytes: &[u8]) -> Result<Log> {
+    read_inner(bytes, true)
+}
+
+/// Read a growing prefix of a recording, as a live viewer holds one.
+///
+/// The same parser with two relaxations: the closing magic is not required, and parsing stops
+/// cleanly at the end of whatever has arrived. A buffer that ends mid-record is still refused —
+/// a live stream frames whole records, so a torn record is corruption, not patience.
+pub fn read_prefix(bytes: &[u8]) -> Result<Log> {
+    read_inner(bytes, false)
+}
+
+fn read_inner(bytes: &[u8], require_end_magic: bool) -> Result<Log> {
     // Split the version byte out of the magic check so a future MCAP 1 file gets told what
     // is wrong with it instead of "not an MCAP file".
     if bytes.len() < 16 || bytes[..5] != MAGIC[..5] || bytes[6..8] != MAGIC[6..8] {
@@ -85,7 +98,7 @@ pub fn read(bytes: &[u8]) -> Result<Log> {
     if bytes[5] != MAGIC[5] {
         return Err(Error::UnsupportedVersion(bytes[5].saturating_sub(b'0')));
     }
-    if bytes[bytes.len() - 8..] != MAGIC {
+    if require_end_magic && bytes[bytes.len() - 8..] != MAGIC {
         return Err(Error::BadMagic { at: "end" });
     }
 

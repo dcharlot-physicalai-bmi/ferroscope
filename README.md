@@ -440,6 +440,34 @@ for step in 0..steps {
 
 ---
 
+## Watch it live — the stream is the file
+
+```sh
+ferroscope-motion out.mcap --serve       # then press  live  in the viewer
+```
+
+`ferroscope-live` streams a recording as it is written: a zero-dependency WebSocket server whose
+every frame is **one MCAP record, in file order, starting with the magic**. A client that appends
+what it receives holds, at every instant, a valid prefix of the recording — the viewer opens the
+prefix live, message counts climbing, with the receipt honestly reading `none` — and the moment
+the producer seals, the tab holds the **byte-identical complete file** and verifies its receipt
+with the same code that verifies one read from disk. Live viewing and archived evidence are not
+two formats; they are one format at two moments, and CI holds the two moments equal over a real
+socket: `cmp` says identical, `verify` says VERIFIED.
+
+A viewer that connects mid-run is caught up first — schemas and channels live at the front of the
+stream, and a client that missed them could draw nothing. A viewer that stalls is dropped without
+ceremony: a browser tab must never back-pressure a simulation.
+
+Transport is WebSocket rather than the WebTransport this README once promised, and the reasons
+are stated rather than papered over: WebTransport needs an HTTP/3 + TLS stack — a large
+dependency tree for a link whose client is a browser tab on the same desk — and its genuine
+advantages (unreliable datagrams, no head-of-line blocking) belong to lossy fleet telemetry, not
+a local viewer. Browsers treat `ws://localhost` as a secure context even from an https page,
+which is exactly how the hosted viewer reaches a local producer. The server is ~300 lines of
+`std`, SHA-1 included, checked against the RFC 6455 handshake vector every browser checks
+against.
+
 ## Real dynamics, same receipt
 
 `ferroscope-motion` closes the last gap between "described" and "simulated": ferromotion's
@@ -936,11 +964,11 @@ refusal, the determinism receipt and comparator, `verify` recomputing a receipt 
 the CLI's nine verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **195 tests, clean clippy, three platforms in CI plus
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **204 tests, clean clippy, three platforms in CI plus
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 
-**Next, in the open, on the same repository:** live streaming over WebTransport.
+**The original "next" list is now empty.**
 
 Nothing here is feature-gated, and nothing here will be.
 

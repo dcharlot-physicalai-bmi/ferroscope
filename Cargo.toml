@@ -11,6 +11,7 @@ members = [
     "crates/ferroscope-mesh",
     "crates/ferroscope-power",
     "crates/ferroscope-motion",
+    "crates/ferroscope-live",
     "crates/ferroscope-cad",
     "crates/ferroscope-scene",
     "crates/ferroscope-phrase",
@@ -30,13 +31,14 @@ keywords = ["robotics", "mcap", "observability", "simulation", "energy"]
 categories = ["science::robotics", "visualization", "wasm"]
 
 [workspace.dependencies]
-ferroscope-mcap = { version = "0.1.2", path = "crates/ferroscope-mcap" }
-ferroscope-schema = { version = "0.1.6", path = "crates/ferroscope-schema" }
+ferroscope-mcap = { version = "0.1.3", path = "crates/ferroscope-mcap" }
+ferroscope-schema = { version = "0.1.7", path = "crates/ferroscope-schema" }
 ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
 ferroscope-receipt = { version = "0.1.0", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
 ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
 ferroscope-power = { version = "0.1.1", path = "crates/ferroscope-power" }
+ferroscope-live = { version = "0.1.0", path = "crates/ferroscope-live" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
 ferroscope-scene = { version = "0.1.2", path = "crates/ferroscope-scene" }
 ferroscope-phrase = { version = "0.1.0", path = "crates/ferroscope-phrase" }

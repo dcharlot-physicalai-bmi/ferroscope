@@ -498,6 +498,31 @@ jobs:
             || { echo "the peak is not attributed to a joint"; exit 1; }
           echo "identical digests, computed actuation, attributed peak"
 
+  live:
+    # The streaming invariant, over a real socket: every WebSocket frame is one MCAP record, so
+    # a client that appends what it receives holds the byte-identical file — and the moment the
+    # producer seals, that file verifies. Live viewing and archived evidence are one format at
+    # two moments, and this job holds the two moments equal.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-motion -p ferroscope-cli
+      - name: the stream is the file
+        run: |
+          ./target/release/ferroscope-motion /tmp/served.mcap --serve 0 --duration 2 > /tmp/serve.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 100); do grep -q "ws://localhost:" /tmp/serve.log && break; sleep 0.1; done
+          PORT=$(grep -o "ws://localhost:[0-9]*" /tmp/serve.log | grep -o "[0-9]*$")
+          test -n "$PORT" || { echo "the producer never announced a port"; cat /tmp/serve.log; exit 1; }
+          python3 ci/wsclient.py 127.0.0.1 "$PORT" /tmp/streamed.mcap
+          wait "$SRV"
+          cmp /tmp/served.mcap /tmp/streamed.mcap \
+            || { echo "the streamed bytes differ from the file"; exit 1; }
+          ./target/release/ferroscope verify /tmp/streamed.mcap | grep -q VERIFIED \
+            || { echo "the streamed file does not verify"; exit 1; }
+          echo "a WebSocket client holds the byte-identical, receipt-verified file"
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.

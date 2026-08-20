@@ -18,8 +18,18 @@ const MAX_POINTS: usize = 4_000;
 /// MCAP file or a payload will not parse.
 pub fn bundle(bytes: &[u8]) -> Option<String> {
     let log = mcap::read(bytes).ok()?;
-    let v = verify(bytes);
+    bundle_log(log, verify(bytes))
+}
 
+/// [`bundle`] for a growing live prefix: no closing magic required, no receipt expected yet.
+/// The moment the producer seals, the same buffer becomes a complete file and [`bundle`]
+/// takes over, receipt and all.
+pub fn bundle_prefix(bytes: &[u8]) -> Option<String> {
+    let log = mcap::read_prefix(bytes).ok()?;
+    bundle_log(log, None)
+}
+
+fn bundle_log(log: mcap::Log, v: Option<crate::Verification>) -> Option<String> {
     let mut poses: BTreeMap<String, Vec<[f64; 8]>> = BTreeMap::new();
     let mut scalars: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();
     let mut power: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();

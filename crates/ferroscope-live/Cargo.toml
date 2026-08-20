@@ -1,0 +1,19 @@
+[package]
+name = "ferroscope-live"
+description = "Stream a Ferroscope recording as it is written: a zero-dependency WebSocket server whose frames are MCAP records, so the stream IS the file and the client can verify the receipt the moment the producer seals."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["websocket", "streaming", "mcap", "robotics", "live"]
+categories = ["network-programming", "science::robotics"]
+
+[dependencies]
+
+[dev-dependencies]
+# The tee test records a real run and verifies the streamed bytes with the real verifier.
+ferroscope-schema = { workspace = true }
+ferroscope-receipt = { workspace = true }

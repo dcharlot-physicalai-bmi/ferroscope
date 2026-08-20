@@ -57,7 +57,7 @@ use ferroscope_ledger::{Ledger, Quote, Rail};
 use ferroscope_mcap::{read, Log, Writer, WriterOptions};
 use ferroscope_receipt::{Precision, Receipt, RunSpec, Trace, TraceDigest};
 
-pub use bundle::bundle;
+pub use bundle::{bundle, bundle_prefix};
 pub use ferroscope_ledger as ledger;
 pub use ferroscope_mcap as mcap;
 pub use ferroscope_receipt as receipt;

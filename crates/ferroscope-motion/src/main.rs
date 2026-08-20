@@ -63,6 +63,7 @@ fn run() -> Result<bool, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut out = "motion.mcap".to_string();
     let mut passive = false;
+    let mut serve: Option<u16> = None;
     let mut duration_s = 4.0f64;
     let mut rate_hz = 120.0f64;
     let mut i = 0;
@@ -71,6 +72,19 @@ fn run() -> Result<bool, String> {
             "--passive" => {
                 passive = true;
                 i += 1;
+            }
+            "--serve" => {
+                // A port may follow; without one, the viewer's default.
+                match args.get(i + 1).and_then(|s| s.parse().ok()) {
+                    Some(p) => {
+                        serve = Some(p);
+                        i += 2;
+                    }
+                    None => {
+                        serve = Some(8737);
+                        i += 1;
+                    }
+                }
             }
             "--duration" => {
                 duration_s = args
@@ -140,7 +154,28 @@ fn run() -> Result<bool, String> {
     let mut meter = ferroscope_power::Meter::open();
     let _ = meter.sample_energy();
 
-    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    // When serving, every record fans out to connected viewers as it is written, and the run is
+    // paced to the wall clock so what they see is happening now, not a file replayed at once.
+    let server = match serve {
+        Some(port) => {
+            let srv = ferroscope_live::LiveServer::bind(port)
+                .map_err(|e| format!("cannot bind 127.0.0.1:{port}: {e}"))?;
+            println!("  live         ws://localhost:{}", srv.port());
+            println!(
+                "               open https://ferroscope.physicalai-bmi.org/viewer and press live"
+            );
+            Some(srv)
+        }
+        None => None,
+    };
+    // The bytes land in a shared buffer either way, recovered after seal without caring
+    // whether a tee sat in front of it.
+    let out_bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+    let sink: Box<dyn std::io::Write> = match &server {
+        Some(srv) => Box::new(srv.tee(SharedVec(std::sync::Arc::clone(&out_bytes)))),
+        None => Box::new(SharedVec(std::sync::Arc::clone(&out_bytes))),
+    };
+    let mut rec = Recorder::new(sink, Precision::Quantized { drop_bits: 12 });
     let t0 = Stamp::sim(0, 0);
     rec.geometry(
         "/scene/ground",
@@ -162,6 +197,7 @@ fn run() -> Result<bool, String> {
     let substeps = ((1.0 / rate_hz) / DT).round().max(1.0) as usize;
     let dt_frame_ns = (1e9 / rate_hz).round() as u64;
 
+    let start_wall = std::time::Instant::now();
     let e0 = total_energy(&robot, &inertia, &q, &qd);
     let mut e_min = e0;
     let mut e_max = e0;
@@ -199,6 +235,14 @@ fn run() -> Result<bool, String> {
             }
         }
 
+        // Live means live: pace each frame to the wall clock so a viewer watches the run
+        // happen rather than receiving it as a lump.
+        if server.is_some() {
+            let due = start_wall + std::time::Duration::from_nanos(frame * dt_frame_ns);
+            if let Some(wait) = due.checked_duration_since(std::time::Instant::now()) {
+                std::thread::sleep(wait);
+            }
+        }
         let t = Stamp::sim(frame * dt_frame_ns, frame);
 
         // Poses for every chain link, from the dynamics' own kinematics.
@@ -285,13 +329,20 @@ fn run() -> Result<bool, String> {
 
     let platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
     let mut note: Vec<(String, String)> = Vec::new();
-    let (bytes, receipt, quote) = rec
+    let (_sink, receipt, quote) = rec
         .seal_with(spec, &platform, || {
             note = meter.production_note();
             note.clone()
         })
         .map_err(|e| e.to_string())?;
+    let bytes = out_bytes.lock().unwrap().clone();
     std::fs::write(&out, &bytes).map_err(|e| format!("cannot write {out}: {e}"))?;
+    if let Some(srv) = &server {
+        println!(
+            "  streamed to  {} viewer(s); the stream is the file they now hold",
+            srv.viewers()
+        );
+    }
 
     println!("\nwrote {out} ({} bytes, {} frames)", bytes.len(), frames);
     println!("  trace digest {}", receipt.trace_digest);
@@ -404,4 +455,19 @@ fn potential_energy(robot: &Robot, inertia: &[LinkInertia], q: &[f64]) -> f64 {
 
 fn total_energy(robot: &Robot, inertia: &[LinkInertia], q: &[f64], qd: &[f64]) -> f64 {
     kinetic_energy(robot, inertia, q, qd) + potential_energy(robot, inertia, q)
+}
+
+/// A `Write` into a buffer the caller keeps a handle to, so the sealed bytes are recoverable
+/// even when the recorder's sink is a boxed tee.
+#[derive(Default)]
+struct SharedVec(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedVec {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

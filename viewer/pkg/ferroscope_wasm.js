@@ -149,6 +149,36 @@ export function open(bytes) {
 }
 
 /**
+ * Open a growing live prefix of a recording — the bytes a WebSocket has delivered so far.
+ *
+ * Same bundle as [`open`], with no closing magic required and no receipt expected yet: the
+ * moment the producer seals, the same buffer is a complete file and [`open`] takes over,
+ * receipt and all.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function open_prefix(bytes) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.open_prefix(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Record one case of a scene's grid and hand back its MCAP bytes.
  * @param {string} scene_json
  * @param {number} index

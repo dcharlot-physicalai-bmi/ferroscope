@@ -216,6 +216,7 @@
     <button id="so101Btn" type="button" title="The LeRobot SO-101: real calibrated kinematics and inertials">SO-101</button>
     <button id="sceneBtn" type="button" title="A described scene: bodies, motions and a robot, authored as JSON">scene</button>
     <button id="dynBtn" type="button" title="The SO-101 under real dynamics: ferromotion torques, an energy-checked integrator, and an actuation rail computed from them">dynamics</button>
+    <button id="liveBtn" type="button" aria-pressed="false" title="Watch a run as it happens: connect to a local producer at ws://localhost:8737 (e.g. `ferroscope-motion --serve`). The stream is the file — when the producer seals, this tab holds the complete recording and verifies its receipt.">live</button>
     </span>
   </div>
   <span class="grow"></span>
@@ -309,8 +310,9 @@ import { Line2 } from 'three/addons/lines/webgpu/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import init, { open as fsOpen, diff as fsDiff, divergence_curve, attachment, version,
-               scene_from_text, record_scene, record_scene_with, sweep_scene, record_case }
+import init, { open as fsOpen, open_prefix, diff as fsDiff, divergence_curve, attachment,
+               version, scene_from_text, record_scene, record_scene_with, sweep_scene,
+               record_case }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -1139,6 +1141,80 @@ el('armBtn2').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('so101Btn').addEventListener('click', () => loadDemo('A','so101.mcap'));
 el('sceneBtn').addEventListener('click', () => loadDemo('A','warehouse.mcap'));
 el('dynBtn').addEventListener('click', () => loadDemo('A','dynamics.mcap'));
+
+/* ---------------- live ---------------- */
+const LIVE = { ws: null, chunks: [], total: 0, timer: 0, fitted: false, done: false };
+
+function liveBuffer(){
+  const buf = new Uint8Array(LIVE.total);
+  let o = 0;
+  for (const c of LIVE.chunks){ buf.set(c, o); o += c.length; }
+  return buf;
+}
+
+function liveRefresh(final){
+  const bytes = liveBuffer();
+  if (!bytes.length) return;
+  let json;
+  try {
+    // A sealed stream is a complete file: the strict path takes over, receipt and all.
+    json = final ? fsOpen(bytes) : open_prefix(bytes);
+  } catch (e) {
+    if (final) fail('live: ' + (e.message || e));
+    return; // a prefix can be momentarily unbundleable; the next frames complete it
+  }
+  S.A = { name: final ? 'live (sealed)' : 'live', bytes };
+  S.bundle = JSON.parse(json);
+  S.span = S.bundle.span || [0, 1];
+  el('slotA').classList.add('loaded');
+  el('nmA').textContent = `${S.A.name} · ${S.bundle.messages.toLocaleString()} msgs`;
+  el('empty').style.display = 'none';
+  paintTree(); buildLanes();
+  if (!LIVE.fitted){ fitView(); LIVE.fitted = true; }
+  // Follow: pin the clock to the newest frame while data still arrives.
+  setT(final ? S.span[0] : S.span[1]);
+  if (final) compare();
+}
+
+function liveStop(msg){
+  if (LIVE.timer) { clearInterval(LIVE.timer); LIVE.timer = 0; }
+  if (LIVE.ws) { try { LIVE.ws.close(); } catch {} LIVE.ws = null; }
+  el('liveBtn').setAttribute('aria-pressed', 'false');
+  el('liveBtn').textContent = 'live';
+  if (msg) fail(msg);
+}
+
+el('liveBtn').addEventListener('click', () => {
+  if (LIVE.ws) { liveStop(); return; }
+  clearFail();
+  LIVE.chunks = []; LIVE.total = 0; LIVE.fitted = false; LIVE.done = false;
+  let ws;
+  try { ws = new WebSocket('ws://localhost:8737'); } catch (e) { return fail('live: ' + e.message); }
+  ws.binaryType = 'arraybuffer';
+  LIVE.ws = ws;
+  el('liveBtn').setAttribute('aria-pressed', 'true');
+  el('liveBtn').textContent = 'live ●';
+  ws.onmessage = (ev) => {
+    LIVE.chunks.push(new Uint8Array(ev.data));
+    LIVE.total += ev.data.byteLength;
+  };
+  ws.onerror = () => {
+    if (!LIVE.total) liveStop(
+      'live: nothing is listening on ws://localhost:8737 — start a producer, e.g. ' +
+      '`ferroscope-motion out.mcap --serve`');
+  };
+  ws.onclose = () => {
+    const had = LIVE.total > 0;
+    if (LIVE.timer) { clearInterval(LIVE.timer); LIVE.timer = 0; }
+    if (had) liveRefresh(true); // the producer sealed: verify the complete file
+    LIVE.ws = null;
+    el('liveBtn').setAttribute('aria-pressed', 'false');
+    el('liveBtn').textContent = 'live';
+  };
+  // Re-bundle the growing prefix a couple of times a second; the parser does megabytes in
+  // tens of milliseconds, so this stays far below one frame of budget.
+  LIVE.timer = setInterval(() => liveRefresh(false), 500);
+});
 
 /* ---------------- say what you want ---------------- */
 const EXAMPLES = [

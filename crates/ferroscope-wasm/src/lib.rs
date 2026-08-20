@@ -50,6 +50,24 @@ pub fn open(bytes: &[u8]) -> Result<String, JsValue> {
     })
 }
 
+/// Open a growing live prefix of a recording — the bytes a WebSocket has delivered so far.
+///
+/// Same bundle as [`open`], with no closing magic required and no receipt expected yet: the
+/// moment the producer seals, the same buffer is a complete file and [`open`] takes over,
+/// receipt and all.
+#[wasm_bindgen]
+pub fn open_prefix(bytes: &[u8]) -> Result<String, JsValue> {
+    ferroscope_schema::bundle_prefix(bytes).ok_or_else(|| {
+        let msg = match ferroscope_schema::mcap::read_prefix(bytes) {
+            Err(e) => format!("not a readable MCAP prefix: {e}"),
+            Ok(_) => "the prefix parses, but a message payload is not JSON this build \
+                      understands"
+                .to_string(),
+        };
+        JsValue::from_str(&msg)
+    })
+}
+
 /// Verify one recording against its own receipt. Returns JSON:
 /// `{ verified, spec_matches, trace_matches, stored, recomputed, messages, non_finite }`.
 #[wasm_bindgen]
