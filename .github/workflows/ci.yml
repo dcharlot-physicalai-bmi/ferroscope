@@ -456,6 +456,48 @@ jobs:
             || { echo "subdomains were counted as their own domains"; cat /tmp/nest.txt; exit 1; }
           echo "nested RAPL domains are not double-counted"
 
+  motion:
+    # Real dynamics under the receipt: ferromotion drives the SO-101's calibrated inertials and
+    # the recording carries an actuation rail computed from the applied torques. Two gates:
+    # the integrator must hold energy in a passive drop, and two identical runs must produce
+    # identical digests — the determinism claim, on an actual simulator rather than closed form.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-motion -p ferroscope-cli
+      - name: the embedded description matches the repository's
+        run: |
+          cmp examples/robots/so101.urdf crates/ferroscope-motion/robots/so101.urdf \
+            || { echo "the motion crate's so101.urdf has drifted"; exit 1; }
+      - name: gravity cannot mint energy
+        # The binary itself enforces the 5 % drift bound and exits 1 past it. The first version
+        # of this crate failed this gate at 12.31 % — the missing armature — so it has already
+        # caught one real physics bug.
+        run: |
+          ./target/release/ferroscope-motion /tmp/passive.mcap --passive --duration 3 | tee /tmp/p.txt
+          grep -q "holds energy within" /tmp/p.txt || { echo "no verdict printed"; exit 1; }
+          ./target/release/ferroscope verify /tmp/passive.mcap | grep -q VERIFIED \
+            || { echo "the passive run does not verify"; exit 1; }
+          # Passive means passive: an unactuated fall must cost zero shaft work.
+          ./target/release/ferroscope energy /tmp/passive.mcap | grep -Eq "actuation +0\.000 J" \
+            || { echo "an unactuated run reported actuation energy"; exit 1; }
+      - name: the same experiment twice is the same digest
+        run: |
+          B=./target/release/ferroscope
+          ./target/release/ferroscope-motion /tmp/r1.mcap --duration 2 > /dev/null
+          ./target/release/ferroscope-motion /tmp/r2.mcap --duration 2 > /dev/null
+          A=$($B verify /tmp/r1.mcap | grep 'trace digest' | awk '{print $3}')
+          C=$($B verify /tmp/r2.mcap | grep 'trace digest' | awk '{print $3}')
+          test -n "$A" && test "$A" = "$C" \
+            || { echo "real dynamics diverged between identical runs: $A vs $C"; exit 1; }
+          # And the ledger's actuation is computed, non-zero, and attributed to a joint.
+          $B energy /tmp/r1.mcap | tee /tmp/e.txt
+          grep -Eq "actuation +[0-9]+\.[0-9]+ J" /tmp/e.txt || { echo "no actuation figure"; exit 1; }
+          grep -Eq "peak +[0-9.]+ W +actuation/(shoulder|elbow|wrist)" /tmp/e.txt \
+            || { echo "the peak is not attributed to a joint"; exit 1; }
+          echo "identical digests, computed actuation, attributed peak"
+
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never
     # loads a stale build of a since-changed comparator.

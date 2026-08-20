@@ -10,6 +10,7 @@ members = [
     "crates/ferroscope-urdf",
     "crates/ferroscope-mesh",
     "crates/ferroscope-power",
+    "crates/ferroscope-motion",
     "crates/ferroscope-cad",
     "crates/ferroscope-scene",
     "crates/ferroscope-phrase",

@@ -440,6 +440,38 @@ for step in 0..steps {
 
 ---
 
+## Real dynamics, same receipt
+
+`ferroscope-motion` closes the last gap between "described" and "simulated": ferromotion's
+recursive Newton-Euler dynamics drive the SO-101's calibrated inertials through a PD reach, and
+every step lands in a recording with the same receipt as everything else here — **the run is
+produced and certified by the same stack that renders it.**
+
+```sh
+cargo install ferroscope-motion
+ferroscope-motion reach.mcap                # PD reach under real dynamics
+ferroscope-motion drop.mcap --passive      # gravity only; exit 1 if energy drifts > 5 %
+```
+
+Two things are real here that are models everywhere else:
+
+- the **actuation rail is computed**, per joint, as mechanical shaft power `|τ · ω|` from the
+  torques the controller actually applied — stated as mechanical, because electrical would need
+  a motor model this crate does not have;
+- the **physics is gated**: `--passive` drops the arm under gravity alone and fails past 5 %
+  total-energy drift, and CI runs the same experiment twice and requires identical digests —
+  the determinism claim on an actual integrator, not a closed form.
+
+The gate has already caught one real bug: the first build omitted the **armature** — a geared
+servo's reflected rotor inertia, which dominates palm-sized links — and reported 12.31 % drift
+and 597 J of "actuation" for a desk arm. With the armature on the mass-matrix diagonal the drift
+is 0.31 % and the reach costs 1.875 J, which is what a small arm actually spends.
+
+And the ledger then says something worth hearing: on this arm, an 8 W SoC model out-spends the
+measured mechanics **17 to 1**. For palm-sized robots, thinking costs more than moving.
+
+The **dynamics** button in the viewer is this recording.
+
 ## Describe the scene you want
 
 Everything above reads a file some simulator produced. This goes the other way.
@@ -908,10 +940,7 @@ bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `fer
 wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
 scene format and the MCP protocol surface.
 
-**Next, in the open, on the same repository:** live streaming over WebTransport, a
-scenario runner that executes a spec rather than only describing one, and coupling to
-[Ferromotion](https://crates.io/crates/ferromotion) so a run can be produced and certified by the
-same stack that renders it.
+**Next, in the open, on the same repository:** live streaming over WebTransport.
 
 Nothing here is feature-gated, and nothing here will be.
 

@@ -1,0 +1,25 @@
+[package]
+name = "ferroscope-motion"
+description = "The SO-101 under real dynamics: a ferromotion rollout recorded with a determinism receipt, an actuation rail computed from joint torques, and a production note. The run is produced and certified by the same stack that renders it."
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["robotics", "dynamics", "simulation", "energy", "mcap"]
+categories = ["science::robotics", "simulation"]
+
+[[bin]]
+name = "ferroscope-motion"
+path = "src/main.rs"
+
+[dependencies]
+ferromotion-core = "0.58"
+ferroscope-schema = { workspace = true }
+ferroscope-receipt = { workspace = true }
+ferroscope-ledger = { workspace = true }
+ferroscope-urdf = { workspace = true }
+ferroscope-power = { workspace = true }
+nalgebra = "0.35"

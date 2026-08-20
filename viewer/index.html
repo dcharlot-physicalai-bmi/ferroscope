@@ -215,6 +215,7 @@
     <button id="armBtn" type="button" title="A robot arm built from its own URDF">arm</button>
     <button id="so101Btn" type="button" title="The LeRobot SO-101: real calibrated kinematics and inertials">SO-101</button>
     <button id="sceneBtn" type="button" title="A described scene: bodies, motions and a robot, authored as JSON">scene</button>
+    <button id="dynBtn" type="button" title="The SO-101 under real dynamics: ferromotion torques, an energy-checked integrator, and an actuation rail computed from them">dynamics</button>
     </span>
   </div>
   <span class="grow"></span>
@@ -1137,6 +1138,7 @@ el('armBtn').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('armBtn2').addEventListener('click', () => loadDemo('A','arm.mcap'));
 el('so101Btn').addEventListener('click', () => loadDemo('A','so101.mcap'));
 el('sceneBtn').addEventListener('click', () => loadDemo('A','warehouse.mcap'));
+el('dynBtn').addEventListener('click', () => loadDemo('A','dynamics.mcap'));
 
 /* ---------------- say what you want ---------------- */
 const EXAMPLES = [

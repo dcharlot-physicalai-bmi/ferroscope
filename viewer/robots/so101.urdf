@@ -9,7 +9,7 @@
 
   What is NOT verbatim: the upstream visuals are STL meshes of the printed parts, which are
   separate binary files under their own licence. This file substitutes boxes sized to the
-  real link extents. So the arm moves exactly like an SO-101 and does not look like one --
+  real link extents. So the arm moves exactly like an SO-101 and does not look like one -
   the shapes are stand-ins, and are labelled here rather than left for you to discover.
   Point ferroscope at the upstream description with its meshes to draw the real parts.
 -->
