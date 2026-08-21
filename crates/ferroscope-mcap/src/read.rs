@@ -116,7 +116,22 @@ pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
             });
         }
         let opcode = bytes[pos];
-        let len = u64::from_le_bytes(bytes[pos + 1..pos + 9].try_into().unwrap()) as usize;
+        // try_from, not `as`: on wasm32 — where this crate runs, on bytes a page was handed —
+        // `u64 as usize` keeps the low 32 bits, so a declared length of exactly 2^32 becomes 0
+        // and the parser walks into a record's payload as though it were top-level records.
+        // The same file would then tile one way natively and another way in the browser.
+        let len = match usize::try_from(u64::from_le_bytes(
+            bytes[pos + 1..pos + 9].try_into().unwrap(),
+        )) {
+            Ok(n) => n,
+            Err(_) => {
+                return Err(Error::Truncated {
+                    offset: pos + 9,
+                    want: usize::MAX,
+                    have: body_end - pos - 9,
+                })
+            }
+        };
         if body_end - pos - 9 < len {
             return Err(Error::Truncated {
                 offset: pos + 9,

@@ -3,7 +3,7 @@ name = "ferroscope-mcap"
 description = "MCAP v0 reader and writer with zero runtime dependencies — pure std, no C, builds for wasm32 unchanged."
 # 0.1.1 adds Attachment records: write, read, index and CRC-check.
 # 0.1.2 adds Error::SchemaConflict, so one topic cannot silently carry two schemas.
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

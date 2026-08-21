@@ -110,6 +110,7 @@ USAGE
   ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
   ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
                      [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
+                     port 8737 by default, which is the port the viewer's live button dials
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description

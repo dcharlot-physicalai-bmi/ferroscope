@@ -36,6 +36,19 @@ pub use wt::{WtServer, WtTee};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// How long a connection may take to finish its opening handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a single write to one viewer may block before that viewer is abandoned.
+///
+/// This is what makes "a stalled viewer never back-pressures the simulation" true rather than
+/// aspirational. A blocking `write_all` on a socket whose peer stopped reading blocks forever
+/// once the kernel buffers fill, and the producer holds a lock while it writes — so one paused
+/// browser tab froze the whole run. With a timeout the worst case is bounded and the viewer is
+/// dropped, which is the documented behaviour.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A WebSocket broadcast server bound to localhost.
 pub struct LiveServer {
@@ -63,6 +76,13 @@ impl LiveServer {
         let accept_history = Arc::clone(&history);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
+                // Bounded from the first byte. A connection that opens and then says nothing
+                // used to wedge this loop forever — it is single-threaded, and the handshake
+                // reads a byte at a time — so no later viewer could connect either. The
+                // comment here once claimed "the read timeout a caller may have set"; no
+                // caller ever set one, which is the shape of the lie a timeout fixes.
+                let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
                 if let Ok(mut s) = handshake(stream) {
                     // Catch-up before live: the file's front matter is the only place schemas
                     // and channels live, and frames are records, so replaying history keeps the

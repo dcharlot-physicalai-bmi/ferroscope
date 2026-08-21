@@ -552,6 +552,32 @@ jobs:
           ./target/release/ferroscope verify /tmp/replay-3.mcap | grep -q VERIFIED \
             || { echo "a replayed stream does not verify"; exit 1; }
           echo "five mid-burst joiners each hold the byte-identical, receipt-verified file"
+      - name: a stalled viewer never freezes the producer
+        # The promise "a browser tab must never back-pressure a simulation" was aspirational:
+        # a blocking write to a peer that stopped reading blocks forever, and the single accept
+        # thread does the catch-up write, so one paused tab wedged every later viewer too.
+        # A viewer that completes the handshake and then reads NOTHING must be dropped while a
+        # healthy viewer still receives the whole file.
+        run: |
+          ./target/release/ferroscope live /tmp/replay-src.mcap --port 0 --rate 8 --no-wait --hold 4 > /tmp/stall.log 2>&1 &
+          PROD=$!
+          for i in $(seq 1 100); do grep -q "ws://localhost:" /tmp/stall.log && break; sleep 0.1; done
+          PORT=$(grep -o "ws://localhost:[0-9]*" /tmp/stall.log | grep -o "[0-9]*$")
+          test -n "$PORT" || { echo "no port announced"; cat /tmp/stall.log; exit 1; }
+          python3 ci/stallclient.py 127.0.0.1 "$PORT" 120 > /tmp/stall-client.log 2>&1 &
+          STALLER=$!
+          sleep 1
+          rc=0
+          timeout 180 python3 ci/wsclient.py 127.0.0.1 "$PORT" /tmp/stall-good.mcap > /dev/null 2>&1 || rc=$?
+          test "$rc" = 0 \
+            || { echo "the healthy viewer could not complete (rc=$rc) — the producer is wedged"; cat /tmp/stall.log; exit 1; }
+          wait "$PROD" || true
+          kill "$STALLER" 2>/dev/null || true
+          cmp /tmp/replay-src.mcap /tmp/stall-good.mcap \
+            || { echo "the healthy viewer's file differs while a peer was stalled"; exit 1; }
+          grep -q "streamed to  1 viewer" /tmp/stall.log \
+            || { echo "the producer did not drop the stalled viewer"; cat /tmp/stall.log; exit 1; }
+          echo "a stalled viewer was dropped; the healthy one holds the byte-identical file"
       - name: the stream is the file, over QUIC too
         # Same invariant, second transport: one unidirectional WebTransport stream carries the
         # raw recording bytes, FIN at seal. The probe is wtransport's own client with cert
@@ -590,6 +616,32 @@ jobs:
           grep -Eq "viewer\?wt=https://127.0.0.1:[0-9]+&hash=[0-9a-f]{64}" /tmp/replay-wt.log \
             || { echo "the replay printed no connectable viewer link"; exit 1; }
           echo "a QUIC replay client holds the byte-identical file"
+      - name: a QUIC viewer that falls behind is caught up, not truncated
+        # The sharpest bug this transport has had: on QUIC, dropping a send stream is a
+        # graceful FIN, and FIN is how this protocol says "sealed, what you hold is the file".
+        # A session that gave up on a lagging viewer therefore handed it a valid PREFIX wearing
+        # the seal's own signal, and both sides reported success. Replaying a large file at a
+        # rate that outruns the channel is the reproduction; it must now be byte-identical
+        # every time, because a lagging session re-reads what it missed from history.
+        run: |
+          ./target/release/ferroscope demo /tmp/lag-src.mcap --steps 40000 > /dev/null
+          for run in 1 2 3; do
+            ./target/release/ferroscope live /tmp/lag-src.mcap --wt --rate 200 > /tmp/lag-$run.log 2>&1 &
+            LAGPROD=$!
+            for i in $(seq 1 200); do grep -q "webtransport https://" /tmp/lag-$run.log && break; sleep 0.1; done
+            URL=$(grep -o "https://127.0.0.1:[0-9]*" /tmp/lag-$run.log | head -1)
+            test -n "$URL" || { echo "no url announced"; cat /tmp/lag-$run.log; exit 1; }
+            prc=0
+            timeout 120 ./target/release/examples/wt-probe "$URL" /tmp/lag-$run.mcap > /tmp/lag-probe-$run.log 2>&1 || prc=$?
+            rc=0; wait "$LAGPROD" || rc=$?
+            test "$prc" = 0 \
+              || { echo "run $run: the viewer's stream did not end at the seal (probe rc=$prc)"; cat /tmp/lag-probe-$run.log; cat /tmp/lag-$run.log; exit 1; }
+            test "$rc" = 0 \
+              || { echo "run $run: the producer reports a viewer without the sealed file (rc=$rc)"; cat /tmp/lag-$run.log; exit 1; }
+            cmp /tmp/lag-src.mcap /tmp/lag-$run.mcap \
+              || { echo "run $run: a lagging QUIC viewer was handed a truncated file"; cat /tmp/lag-$run.log; exit 1; }
+          done
+          echo "three fast QUIC replays, every viewer byte-identical, none abandoned"
 
   viewer:
     # The committed wasm bundle must still be the one this source produces, so a visitor never

@@ -505,11 +505,36 @@ inside the window a browser needs to connect (`--no-wait` starts immediately).
 
 Replay is also the honest reason recordings are chunked at 64 KiB rather than the writer's
 1 MiB default: a chunk is one record, a record is the unit a stream frames and a replay paces,
-and a megabyte batches half a run into a single burst. CI's adversarial case for all of this is
-five clients joining at staggered instants *mid-burst*: a record broadcast while a joiner
-snapshots history must reach it exactly once — the join paths hold one lock across
-extend-and-send so nothing lands between a snapshot and a subscription — and every joiner must
-end up `cmp`-identical.
+and a megabyte batches half a run into a single burst. Pacing is still bounded by that
+granularity, and the verb says so rather than promising otherwise — a recording whose messages
+all fit one chunk has a single pacing instant and streams in one burst, and that is what it
+prints.
+
+Three failure modes here are worth naming, because an adversarial audit found all three in
+shipped code and each is now held by its own gate:
+
+- **A lagging QUIC viewer used to be handed a truncated file that looked sealed.** On QUIC,
+  *dropping* a send stream is a graceful FIN — and FIN is exactly how this protocol says "the
+  recording sealed, what you hold is the file". A session that gave up on a viewer 1024 records
+  behind therefore delivered a structurally valid prefix wearing the seal's own signal, while
+  producer and viewer both reported success. A session that falls behind now re-reads what it
+  missed straight from history (the server holds every byte it ever sent, so recovery is exact),
+  and any session that must be abandoned **resets** its stream so a partial transfer can never
+  be mistaken for the recording.
+- **A stalled viewer used to freeze the producer.** "A browser tab must never back-pressure a
+  simulation" was aspirational: a blocking write to a peer that stopped reading blocks forever,
+  and the single accept thread does the catch-up write, so one paused tab wedged every later
+  viewer too. Sockets now carry write and handshake timeouts, which is what makes the sentence
+  true. CI runs a viewer that completes the handshake and then reads nothing, and requires a
+  healthy viewer to still finish `cmp`-identical.
+- **The producer used to claim the invariant over an audience of nobody.** Both transports now
+  report what actually happened — how many viewers received the sealed file, how many were
+  abandoned — and a replay whose viewers did not all receive it exits non-zero.
+
+CI's adversarial case for the join paths is five clients joining at staggered instants
+*mid-burst*: a record broadcast while a joiner snapshots history must reach it exactly once —
+the join paths hold one lock across extend-and-send so nothing lands between a snapshot and a
+subscription — and every joiner must end up `cmp`-identical.
 
 ## Real dynamics, same receipt
 
@@ -898,6 +923,7 @@ ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
 ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
 ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
                    [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
+                   binds 8737, the port the viewer's live button dials
 ferroscope demo    <out.mcap>            write a synthetic run
                    [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
 ferroscope urdf    <robot.urdf> <out.mcap>   record YOUR robot from its description

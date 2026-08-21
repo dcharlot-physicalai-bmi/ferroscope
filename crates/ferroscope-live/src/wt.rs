@@ -10,8 +10,37 @@
 //! via `serverCertificateHashes` — no CA, no trust store edits. [`WtServer::cert_hash_hex`] is
 //! that hash; the producer prints it inside a clickable viewer link.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use wtransport::{Endpoint, Identity, ServerConfig};
+use wtransport::{Endpoint, Identity, ServerConfig, VarInt};
+
+/// The stream error code a viewer sees when its transfer was abandoned rather than sealed.
+///
+/// This exists because of the sharpest bug this transport has had: on QUIC, **dropping a send
+/// stream is a graceful FIN**, and FIN is precisely how this protocol says "the recording
+/// sealed, what you hold is the file". A session that gave up therefore handed the viewer a
+/// structurally valid *prefix* carrying the seal's own signal, and both sides reported success.
+/// Every abnormal end now resets the stream instead, so a truncated transfer is unmistakable.
+pub const ABANDONED: u32 = 1;
+
+/// What [`WtServer::finish`] observed: viewers that received the sealed file, and viewers that
+/// did not. A producer that streamed to nobody successfully should not print that it did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FinishReport {
+    /// Sessions that received every byte through the seal and were FINed.
+    pub sealed: usize,
+    /// Sessions abandoned before the seal — reset, never FINed.
+    pub abandoned: usize,
+    /// Sessions still in flight when the timeout expired.
+    pub timed_out: usize,
+}
+
+impl FinishReport {
+    /// `true` when every viewer that ever connected left holding the complete file.
+    pub fn all_sealed(&self) -> bool {
+        self.abandoned == 0 && self.timed_out == 0
+    }
+}
 
 /// A WebTransport broadcast server on localhost.
 pub struct WtServer {
@@ -22,6 +51,14 @@ pub struct WtServer {
     runtime: tokio::runtime::Handle,
     /// Sessions in flight, so [`WtServer::finish`] can wait for their last bytes to leave.
     open_sessions: Arc<Mutex<usize>>,
+    /// Sessions that have not yet reached a verdict — neither FINed nor reset.
+    ///
+    /// Distinct from `open_sessions` on purpose: a session that has sealed still lingers in
+    /// `conn.closed()` so its FIN cannot die with the process, and counting that as "still
+    /// open at the deadline" reported a healthy transfer as a failure.
+    undecided: Arc<AtomicUsize>,
+    sealed_count: Arc<AtomicUsize>,
+    abandoned_count: Arc<AtomicUsize>,
     /// The explicit end-of-recording signal. Sender-counting cannot carry it: the accept loop
     /// must hold a Sender forever to subscribe new sessions, so the channel never closes on its
     /// own — the first version waited on exactly that, and every stream died at the QUIC idle
@@ -68,12 +105,19 @@ impl WtServer {
             .with_identity(identity)
             .build();
 
+        let sealed_count = Arc::new(AtomicUsize::new(0));
+        let abandoned_count = Arc::new(AtomicUsize::new(0));
+        let undecided = Arc::new(AtomicUsize::new(0));
+
         let (port_tx, port_rx) = std::sync::mpsc::channel();
         let accept_tx = tx.clone();
         let accept_history = Arc::clone(&history);
         let accept_sessions = Arc::clone(&open_sessions);
         let accept_done = Arc::clone(&done);
         let accept_notify = Arc::clone(&notify);
+        let accept_sealed = Arc::clone(&sealed_count);
+        let accept_abandoned = Arc::clone(&abandoned_count);
+        let accept_undecided = Arc::clone(&undecided);
         std::thread::spawn(move || {
             runtime.block_on(async move {
                 let server = match Endpoint::server(config) {
@@ -96,6 +140,9 @@ impl WtServer {
                     let sessions = Arc::clone(&accept_sessions);
                     let done = Arc::clone(&accept_done);
                     let notify = Arc::clone(&accept_notify);
+                    let sealed_n = Arc::clone(&accept_sealed);
+                    let abandoned_n = Arc::clone(&accept_abandoned);
+                    let undecided_n = Arc::clone(&accept_undecided);
                     tokio::spawn(async move {
                         let Ok(request) = incoming.await else { return };
                         let Ok(conn) = request.accept().await else {
@@ -107,6 +154,7 @@ impl WtServer {
                         };
                         let Ok(mut send) = opening.await else { return };
                         *sessions.lock().unwrap() += 1;
+                        undecided_n.fetch_add(1, Ordering::SeqCst);
                         // Catch-up first: a viewer that joins mid-run needs the file's front
                         // matter or it can draw nothing. Subscribe and snapshot under the
                         // history lock — the lock every broadcast sends under — so a record is
@@ -117,7 +165,15 @@ impl WtServer {
                             let history = history.lock().unwrap();
                             (tx.subscribe(), history.clone())
                         };
+                        // Bytes this session has written. Because every broadcast appends to
+                        // history in the same order it is sent, what a session has written is
+                        // always a PREFIX of history — which is what makes the two recoveries
+                        // below exact rather than approximate.
+                        let mut sent = 0usize;
                         let mut ok = send.write_all(&snapshot).await.is_ok();
+                        if ok {
+                            sent = snapshot.len();
+                        }
                         let mut finished = false;
                         while ok && !finished {
                             // The lost-wake-up race, closed the way the Notify docs demand:
@@ -128,38 +184,41 @@ impl WtServer {
                             let sealed = notify.notified();
                             tokio::pin!(sealed);
                             if done.load(std::sync::atomic::Ordering::SeqCst) {
-                                // Sealed already (or the flag flipped between iterations):
-                                // drain what is queued — the seal's own records are usually in
-                                // here — then FIN.
-                                while let Ok(bytes) = rx.try_recv() {
-                                    if send.write_all(&bytes).await.is_err() {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
+                                ok = flush_tail(&mut send, &history, &mut sent).await;
                                 finished = true;
                                 break;
                             }
                             tokio::select! {
                                 r = rx.recv() => match r {
-                                    Ok(bytes) => ok = send.write_all(&bytes).await.is_ok(),
+                                    Ok(bytes) => {
+                                        ok = send.write_all(&bytes).await.is_ok();
+                                        if ok { sent += bytes.len(); }
+                                    }
                                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                         finished = true;
                                     }
                                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                        // A viewer 1024 records behind cannot be caught up
-                                        // coherently mid-stream; drop it rather than hand it a
-                                        // file with a hole in the middle.
-                                        ok = false;
+                                        // A viewer that fell behind the channel is NOT dropped:
+                                        // the server still holds every byte it has broadcast, so
+                                        // the session re-reads the tail it missed straight from
+                                        // history and carries on. Resubscribing and snapshotting
+                                        // under the history lock makes the new subscription start
+                                        // exactly where the snapshot ends, the same way a fresh
+                                        // join does. Dropping here is what used to hand a viewer
+                                        // a truncated file, and on QUIC that looked like a seal.
+                                        let (again, snap) = {
+                                            let h = history.lock().unwrap();
+                                            (tx.subscribe(), h.clone())
+                                        };
+                                        rx = again;
+                                        if snap.len() > sent {
+                                            ok = send.write_all(&snap[sent..]).await.is_ok();
+                                            if ok { sent = snap.len(); }
+                                        }
                                     }
                                 },
                                 _ = &mut sealed => {
-                                    while let Ok(bytes) = rx.try_recv() {
-                                        if send.write_all(&bytes).await.is_err() {
-                                            ok = false;
-                                            break;
-                                        }
-                                    }
+                                    ok = flush_tail(&mut send, &history, &mut sent).await;
                                     finished = true;
                                 }
                             }
@@ -168,6 +227,8 @@ impl WtServer {
                             // The FIN is the file's own end: the client's read loop ends at
                             // exactly the last byte the producer sealed.
                             let _ = send.finish().await;
+                            sealed_n.fetch_add(1, Ordering::SeqCst);
+                            undecided_n.fetch_sub(1, Ordering::SeqCst);
                             // UDP has no lingering socket: when this process exits, unacked
                             // packets — the FIN very much included — die with it, and the
                             // client hangs to the QUIC idle timeout with every byte delivered
@@ -175,6 +236,13 @@ impl WtServer {
                             // closes (a probe exits at once; a browser tab makes the producer's
                             // finish() spend its timeout, which is what the timeout is for).
                             let _ = conn.closed().await;
+                        } else {
+                            // Never let a failure wear the seal's clothes. Dropping the stream
+                            // would FIN it — quinn's Drop calls finish() — and the viewer would
+                            // keep a truncated prefix believing the recording ended there.
+                            let _ = send.reset(VarInt::from_u32(ABANDONED));
+                            abandoned_n.fetch_add(1, Ordering::SeqCst);
+                            undecided_n.fetch_sub(1, Ordering::SeqCst);
                         }
                         *sessions.lock().unwrap() -= 1;
                     });
@@ -193,6 +261,9 @@ impl WtServer {
             cert_hash_hex,
             runtime: handle,
             open_sessions,
+            undecided,
+            sealed_count,
+            abandoned_count,
             done,
             notify,
         })
@@ -236,7 +307,11 @@ impl WtServer {
     /// Declare the recording finished: FIN every viewer's stream and wait for the bytes to
     /// leave, up to the timeout. Without this, a producer that exits right after sealing races
     /// its own last records out of existence.
-    pub fn finish(self, timeout: std::time::Duration) {
+    ///
+    /// The report says how many viewers actually left holding the sealed file. A caller that
+    /// prints "the stream is the file they now hold" is only entitled to say so when
+    /// [`FinishReport::all_sealed`] agrees.
+    pub fn finish(self, timeout: std::time::Duration) -> FinishReport {
         self.done.store(true, std::sync::atomic::Ordering::SeqCst);
         self.notify.notify_waiters();
         drop(self.tx);
@@ -244,8 +319,44 @@ impl WtServer {
         while *self.open_sessions.lock().unwrap() > 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        let timed_out = self.undecided.load(Ordering::SeqCst);
         // The runtime thread parks on accept() forever; the process ending reaps it.
         let _ = self.runtime;
+        FinishReport {
+            sealed: self.sealed_count.load(Ordering::SeqCst),
+            abandoned: self.abandoned_count.load(Ordering::SeqCst),
+            timed_out,
+        }
+    }
+}
+
+/// Write everything in history that this session has not sent yet.
+///
+/// Used at the seal and whenever a session falls behind. It replaced draining the broadcast
+/// channel with `try_recv`, which had the same silent-truncation flaw as the Lagged arm: a
+/// `try_recv` that returns `Lagged` ends a `while let Ok(..)` loop quietly, so the tail was
+/// dropped and the stream FINed anyway. History is the whole file by then; it cannot lag.
+async fn flush_tail(
+    send: &mut wtransport::SendStream,
+    history: &Arc<Mutex<Vec<u8>>>,
+    sent: &mut usize,
+) -> bool {
+    let tail = {
+        let h = history.lock().unwrap();
+        if *sent >= h.len() {
+            Vec::new()
+        } else {
+            h[*sent..].to_vec()
+        }
+    };
+    if tail.is_empty() {
+        return true;
+    }
+    if send.write_all(&tail).await.is_ok() {
+        *sent += tail.len();
+        true
+    } else {
+        false
     }
 }
 

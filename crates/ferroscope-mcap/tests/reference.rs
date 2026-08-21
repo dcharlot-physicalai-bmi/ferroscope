@@ -291,6 +291,51 @@ fn record_spans_carry_the_times_replay_paces_by() {
 #[test]
 fn record_spans_refuse_a_torn_file() {
     let bytes = sample();
+    // Both of these are refused by the closing-magic check, which is the cheap half.
     assert!(ferroscope_mcap::record_spans(&bytes[..bytes.len() - 3]).is_err());
     assert!(ferroscope_mcap::record_spans(&bytes[..40]).is_err());
+
+    // The half that matters, and that the two cases above never reached: magic at BOTH ends
+    // with a record inside whose declared length runs past the data section. Without the
+    // Truncated guard this is a slice-index panic, so a test that never enters the parse loop
+    // is asserting nothing about the only code standing between a hostile file and a crash.
+    let mut torn = ferroscope_mcap::MAGIC.to_vec();
+    torn.push(ferroscope_mcap::op::MESSAGE);
+    torn.extend_from_slice(&(4096u64).to_le_bytes());
+    torn.extend_from_slice(b"only a few bytes, not 4096");
+    torn.extend_from_slice(&ferroscope_mcap::MAGIC);
+    match ferroscope_mcap::record_spans(&torn) {
+        Err(ferroscope_mcap::Error::Truncated { want, have, .. }) => {
+            assert_eq!(want, 4096);
+            assert!(have < want);
+        }
+        other => panic!("a record running past the end was not refused: {other:?}"),
+    }
+
+    // A header that cannot even hold a length, inside otherwise valid magic.
+    let mut stub = ferroscope_mcap::MAGIC.to_vec();
+    stub.extend_from_slice(&[0x05, 0x01, 0x02]);
+    stub.extend_from_slice(&ferroscope_mcap::MAGIC);
+    assert!(matches!(
+        ferroscope_mcap::record_spans(&stub),
+        Err(ferroscope_mcap::Error::Truncated { want: 9, .. })
+    ));
+}
+
+#[test]
+fn record_spans_refuse_a_length_no_machine_could_hold() {
+    // u64::MAX as usize silently becomes usize::MAX on 64-bit and 0xFFFF_FFFF on 32-bit; a
+    // length of exactly 2^32 becomes ZERO there, which is the dangerous one — the guard passes
+    // and the parser re-reads the payload as records. Neither may be accepted anywhere.
+    for declared in [u64::MAX, 1u64 << 32, (1u64 << 32) + 9] {
+        let mut hostile = ferroscope_mcap::MAGIC.to_vec();
+        hostile.push(ferroscope_mcap::op::MESSAGE);
+        hostile.extend_from_slice(&declared.to_le_bytes());
+        hostile.extend_from_slice(&[0u8; 64]);
+        hostile.extend_from_slice(&ferroscope_mcap::MAGIC);
+        assert!(
+            ferroscope_mcap::record_spans(&hostile).is_err(),
+            "a record declaring {declared} bytes was accepted"
+        );
+    }
 }
