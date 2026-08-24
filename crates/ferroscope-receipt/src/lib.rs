@@ -40,7 +40,13 @@
 
 #![forbid(unsafe_code)]
 
+mod profile;
 mod sha256;
+
+pub use profile::{
+    declared_fields, profile, spec_differences, ChannelDivergence, FieldDiff, Profile, Shape,
+    Structural,
+};
 pub use sha256::{hex, sha256, Sha256};
 
 use std::fmt;
@@ -467,11 +473,19 @@ pub enum Verdict {
     /// Identical once quantized to the declared precision — the digests agree.
     IdenticalAtPrecision { precision: Precision },
     /// Different bits, but no value ever exceeded the tolerance. The worst case is named.
+    ///
+    /// The two worsts are tracked and located **separately**. They were not: `max_rel` used to
+    /// be assigned only inside the `abs > max_abs` branch, so it reported the relative
+    /// difference *at* the largest absolute one. On a trace where one channel is off by 1e-4
+    /// absolute (rel 1e-7) and another by a third, it printed `max_rel 1.000e-7` — a number
+    /// with an authoritative name and the wrong value.
     WithinTolerance {
         max_abs: f64,
-        max_rel: f64,
         at_step: u64,
         channel: String,
+        max_rel: f64,
+        rel_step: u64,
+        rel_channel: String,
     },
     /// The first value that exceeded tolerance, with both numbers.
     Diverged {
@@ -515,13 +529,21 @@ impl fmt::Display for Verdict {
             }
             Verdict::WithinTolerance {
                 max_abs,
-                max_rel,
                 at_step,
                 channel,
-            } => write!(
-                f,
-                "within tolerance: worst |Δ| {max_abs:.3e} (rel {max_rel:.3e}) at step {at_step} on {channel}"
-            ),
+                max_rel,
+                rel_step,
+                rel_channel,
+            } => {
+                write!(f, "within tolerance: worst |Δ| {max_abs:.3e} at step {at_step} on {channel}")?;
+                // Only spell out the relative worst separately when it is somewhere else;
+                // naming one location for two statistics is what made the old line wrong.
+                if rel_step == at_step && rel_channel == channel {
+                    write!(f, ", rel {max_rel:.3e}")
+                } else {
+                    write!(f, "; worst rel {max_rel:.3e} at step {rel_step} on {rel_channel}")
+                }
+            }
             Verdict::Diverged {
                 step,
                 channel,
@@ -565,10 +587,13 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
     }
 
     let mut any_bit_difference = false;
+    let mut first_bit_diff: Option<(u64, String)> = None;
     let mut max_abs = 0.0f64;
-    let mut max_rel = 0.0f64;
     let mut worst_step = 0u64;
     let mut worst_channel = String::new();
+    let mut max_rel = 0.0f64;
+    let mut rel_step = 0u64;
+    let mut rel_channel = String::new();
 
     for (sa, sb) in a.samples.iter().zip(&b.samples) {
         if sa.step != sb.step || sa.channel != sb.channel {
@@ -589,6 +614,12 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
                 ),
             };
         }
+        // The worst crossing IN THIS SAMPLE, not the first one in file order. Emit order is an
+        // artifact of how the recorder happened to pack a payload, and reporting by it pointed
+        // readers at downstream symptoms thousands of times smaller than the cause: on the
+        // demo pair it named a hip velocity at rel 3.7e-8 while the injected perturbation —
+        // the contact force, in the same message — differed at rel 1e-4.
+        let mut crossing: Option<(usize, f64, f64, f64, f64)> = None;
         for (i, (&x, &y)) in sa.values.iter().zip(&sb.values).enumerate() {
             if !x.is_finite() || !y.is_finite() {
                 return Verdict::NonFinite {
@@ -600,6 +631,11 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
             }
             if x.to_bits() != y.to_bits() {
                 any_bit_difference = true;
+                // Bits can differ while the subtraction is exactly zero (+0.0 against -0.0),
+                // and that case used to leave the worst-channel name empty in the verdict.
+                if first_bit_diff.is_none() {
+                    first_bit_diff = Some((sa.step, sa.channel.clone()));
+                }
             }
             let abs = (x - y).abs();
             if abs == 0.0 {
@@ -607,34 +643,56 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
             }
             let denom = x.abs().max(y.abs());
             let rel = if denom > 0.0 { abs / denom } else { 0.0 };
-            if abs > tol.abs && rel > tol.rel {
-                return Verdict::Diverged {
-                    step: sa.step,
-                    channel: sa.channel.clone(),
-                    index: i,
-                    a: x,
-                    b: y,
-                    abs,
-                    rel,
-                };
+            if abs > tol.abs && rel > tol.rel && crossing.is_none_or(|(_, _, _, _, r)| rel > r) {
+                crossing = Some((i, x, y, abs, rel));
             }
             if abs > max_abs {
                 max_abs = abs;
-                max_rel = rel;
                 worst_step = sa.step;
                 worst_channel = sa.channel.clone();
             }
+            if rel > max_rel {
+                max_rel = rel;
+                rel_step = sa.step;
+                rel_channel = sa.channel.clone();
+            }
+        }
+        if let Some((index, a, b, abs, rel)) = crossing {
+            return Verdict::Diverged {
+                step: sa.step,
+                channel: sa.channel.clone(),
+                index,
+                a,
+                b,
+                abs,
+                rel,
+            };
         }
     }
 
     if !any_bit_difference {
         Verdict::BitExact
     } else {
+        // A difference that is real but subtracts to zero still has a location.
+        if worst_channel.is_empty() {
+            if let Some((step, ch)) = first_bit_diff {
+                worst_step = step;
+                worst_channel = ch.clone();
+                rel_step = step;
+                rel_channel = ch;
+            }
+        }
+        if rel_channel.is_empty() {
+            rel_step = worst_step;
+            rel_channel = worst_channel.clone();
+        }
         Verdict::WithinTolerance {
             max_abs,
-            max_rel,
             at_step: worst_step,
             channel: worst_channel,
+            max_rel,
+            rel_step,
+            rel_channel,
         }
     }
 }

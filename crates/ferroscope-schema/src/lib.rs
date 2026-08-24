@@ -818,3 +818,92 @@ fn digest_values(schema: &str, v: &json::Value) -> Vec<f64> {
         }
     }
 }
+
+/// Human names for the components a channel contributes to the digest, per topic.
+///
+/// The comparator reports `channel[4]`, and `[4]` is not a name. The layouts are known — this
+/// module packs them in [`digest_values`] — and `JointState` carries the joint names in its own
+/// payload, so `effort[hip]` is available wherever `[4]` was printed. A reader chasing a
+/// divergence should be told which quantity moved, not which array slot.
+pub fn channel_labels(bytes: &[u8]) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let Ok(log) = read(bytes) else { return out };
+    for ch in &log.channels {
+        let schema = log
+            .schema(ch.schema_id)
+            .map(|s| s.name.as_str())
+            .unwrap_or("");
+        // Joint names live in the payload, so the first message on the topic is the source.
+        let names: Vec<String> = if schema == "ferroscope.JointState" {
+            log.messages_on(&ch.topic)
+                .next()
+                .and_then(|m| json::parse(std::str::from_utf8(&m.data).ok()?))
+                .and_then(|v| {
+                    v.get("names").and_then(|x| x.as_array()).map(|a| {
+                        a.iter()
+                            .map(|e| e.as_str().unwrap_or("?").to_string())
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let labels = component_labels(schema, &names);
+        if !labels.is_empty() {
+            out.insert(ch.topic.clone(), labels);
+        }
+    }
+    out
+}
+
+/// The component names for one schema, in the order [`digest_values`] packs them.
+///
+/// Mirrors that function exactly; a layout change on one side without the other shows up as a
+/// label that names the wrong quantity, which is why the round-trip test covers both.
+pub fn component_labels(schema: &str, joint_names: &[String]) -> Vec<String> {
+    let per = |prefix: &str| -> Vec<String> {
+        if joint_names.is_empty() {
+            Vec::new()
+        } else {
+            joint_names
+                .iter()
+                .map(|n| format!("{prefix}[{n}]"))
+                .collect()
+        }
+    };
+    match schema {
+        "ferroscope.Transform" => ["tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "ferroscope.JointState" => {
+            let mut v = per("position");
+            v.extend(per("velocity"));
+            v.extend(per("effort"));
+            v
+        }
+        "ferroscope.Contact" => [
+            "point.x",
+            "point.y",
+            "point.z",
+            "normal.x",
+            "normal.y",
+            "normal.z",
+            "force_n",
+            "penetration_m",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        "ferroscope.Geometry" => [
+            "size.x", "size.y", "size.z", "tx", "ty", "tz", "qx", "qy", "qz", "qw",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        "ferroscope.EnergySample" => vec!["watts".into()],
+        "ferroscope.Scalar" => vec!["value".into()],
+        _ => Vec::new(),
+    }
+}

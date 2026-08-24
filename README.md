@@ -15,19 +15,49 @@ ferroscope diff   a.mcap b.mcap
 ```
 
 ```
-  digests differ, comparing step by step
-  diverged at step 392, /robot/joints[2]: 3.88603112635621584e-1 vs 3.88603098094233157e-1
-                                          (|Δ| 1.454e-8, rel 3.742e-8)
-  → the runs agreed for 39.2 % of the trajectory, then did not.
+A  a.mcap
+   3bfe5cc7d194f408  on aarch64-macos  VERIFIED (receipt recomputed from the file)
+B  b.mcap
+   3bfe5cc7d194f408  on x86_64-linux / vulkan  VERIFIED (receipt recomputed from the file)
+
+  diverged at step 392, /robot/joints[5]: 1.11677862853056808e0 vs 1.11689030639342102e0
+                                          (|Δ| 1.117e-4, rel 9.999e-5)
+  that is       /robot/joints effort[knee]
+
+  onset        step 392 on /control/height_error — where the bits first parted
+  crossing     step 392 — where a value first exceeded abs 1.0e-9 / rel 1.0e-9
+               (this step moves when the tolerance moves; the onset does not)
+  shape        growing: the relative difference ends 6.967e1x where it started, e-folding
+               about every 614 steps — sensitivity, so no tolerance makes this reproducible
+  extent       6 channel(s) differ, ranked by relative difference — they are not independent,
+               so this is a ranking and not a count of separate faults:
+    /control/height_error  rel 2.878e-2 at step 2195   value          -0.000000066768 vs -0.000000068747
+    /robot/joints          rel 3.156e-3 at step 2195   velocity[hip]  -0.000039893826 vs -0.000039767935
+    /energy/actuation/leg  rel 2.865e-3 at step 2431   watts           0.020079697055 vs  0.020022165866
+    /robot/contacts        rel 2.865e-3 at step 2431   force_n         0.057866189648 vs  0.057700417129
+
+  energy       A 109.700 J    B 109.700 J    Δ -0.000000 J
+               total -3.587e-7 J (below 0.01 %)   compute identical   actuation -3.587e-7 J
 ```
 
 That is the whole idea. Two machines ran the same declared experiment. One of them drifted.
-The tool does not say "results differ". It says **which step, which channel, which index, and
-both numbers**.
+The tool does not say "results differ". It says **which step, which channel, which quantity by
+name, both numbers, how the difference behaved over time, and what each run cost in joules**.
 
-And look at the size of it: `1.454e-8`. In this demo the perturbation never explodes. It settles
-into a persistent offset around 10⁻⁹ m that no plot can show and no eye can catch. Plotted against
-each other, the two runs are the same picture. That is the whole reason the digest exists.
+Four of those lines exist because a design review took the old output apart. It used to name
+the first value in *recorder emit order* that crossed the threshold — a hip velocity at
+rel 3.7e-8 — while the injected perturbation, four thousand times larger, sat two slots away in
+the same message. It reported one step where there are two different ones worth knowing: the
+**onset**, where the bits first parted, which is causal, and the **crossing**, which moves
+whenever you move the tolerance flag. And it printed "the runs agreed for 39.2 % of the
+trajectory", a number that measures run length rather than agreement — the same injected fault
+reports 60.3 %, 2.6 % and 0.4 % at 200, 3000 and 20000 steps. That line is gone.
+
+And look at the size of it. The perturbation enters at `1.1e-4` on one joint effort and is still
+under `3e-2` relative three thousand steps later — a difference no plot shows and no eye catches.
+Plotted against each other, the two runs are the same picture. That is the whole reason the digest
+exists, and the `shape` line is what tells you whether to raise the tolerance and move on or stop
+claiming the scenario is reproducible at all.
 
 ---
 

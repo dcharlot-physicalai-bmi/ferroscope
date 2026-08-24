@@ -1105,7 +1105,6 @@ function compare(){
   let x = `<b>${esc(S.A.name)}</b> vs <b>${esc(S.B.name)}</b>`;
   if(v.platform_a) x += ` · ${esc(v.platform_a)} vs ${esc(v.platform_b)}`;
   x += ` · ${esc(v.text)}`;
-  if(v.kind==='diverged' && v.steps) x += ` · agreed for ${(v.step/v.steps*100).toFixed(1)}% of the trajectory`;
   strip.innerHTML = x;
 
   const ch = (v.kind==='diverged'||v.kind==='within-tolerance'||v.kind==='non-finite')

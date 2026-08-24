@@ -139,9 +139,10 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         ),
         Verdict::WithinTolerance {
             max_abs,
-            max_rel,
             at_step,
             channel,
+            max_rel,
+            ..
         } => (
             "within-tolerance",
             *at_step as i64,

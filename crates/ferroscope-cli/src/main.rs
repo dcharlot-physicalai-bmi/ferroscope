@@ -25,7 +25,7 @@ mod scene;
 mod urdf;
 
 use ferroscope_ledger::Rail;
-use ferroscope_receipt::{compare, digests_agree, Tolerance, Verdict};
+use ferroscope_receipt::{Tolerance, Verdict};
 use ferroscope_schema::{bundle, mcap, trace_from, verify};
 
 fn main() -> ExitCode {
@@ -351,56 +351,250 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         }
     }
 
-    let (ra, ta) = trace_from(&slurp(a_path)?).ok_or_else(|| format!("cannot read {a_path}"))?;
-    let (rb, tb) = trace_from(&slurp(b_path)?).ok_or_else(|| format!("cannot read {b_path}"))?;
+    let bytes_a = slurp(a_path)?;
+    let bytes_b = slurp(b_path)?;
+    let (ra, ta) = trace_from(&bytes_a).ok_or_else(|| format!("cannot read {a_path}"))?;
+    let (rb, tb) = trace_from(&bytes_b).ok_or_else(|| format!("cannot read {b_path}"))?;
 
-    println!("A  {a_path}");
-    if let Some(r) = &ra {
-        println!("   {}  on {}", &r.spec_digest[..16], r.platform);
+    // Recompute both receipts BEFORE comparing anything. This used to be skipped entirely: the
+    // fast path compared two digest strings read straight out of metadata, so two files whose
+    // blocks were edited to carry the same trace_digest passed with exit 0 whatever their
+    // messages held. A green diff meant two metadata blocks agreed, not that two runs
+    // reproduced — and the receipt is the product's whole claim.
+    let va = verify(&bytes_a);
+    let vb = verify(&bytes_b);
+    let mut trustworthy = true;
+    for (label, path, v, r) in [("A", a_path, &va, &ra), ("B", b_path, &vb, &rb)] {
+        println!("{label}  {path}");
+        match v {
+            Some(v) if v.ok() => println!(
+                "   {}  on {}  VERIFIED (receipt recomputed from the file)",
+                &v.receipt.spec_digest[..16],
+                v.receipt.platform
+            ),
+            Some(v) => {
+                trustworthy = false;
+                println!(
+                    "   {}  on {}  DOES NOT VERIFY — {}",
+                    &v.receipt.spec_digest[..16],
+                    v.receipt.platform,
+                    if v.trace_matches {
+                        "the spec digest does not match its own fields"
+                    } else {
+                        "the recomputed trace digest does not match the stored one"
+                    }
+                );
+            }
+            None => {
+                trustworthy = false;
+                let d = r
+                    .as_ref()
+                    .map(|r| r.spec_digest[..16].to_string())
+                    .unwrap_or_else(|| "(no receipt)".into());
+                println!("   {d}  carries no recomputable receipt");
+            }
+        }
     }
-    println!("B  {b_path}");
-    if let Some(r) = &rb {
-        println!("   {}  on {}", &r.spec_digest[..16], r.platform);
+    if !trustworthy {
+        println!(
+            "\n  one of these files does not stand behind its own receipt, so whatever follows \
+             compares bytes, not evidence."
+        );
     }
     println!();
 
-    // The cheap path first. A digest match is proof; a mismatch is only a question, and the
-    // comparator below is what answers it.
+    // When the specs differ these are not two runs of the same experiment, and saying which
+    // field moved is the whole answer — the fields are already parsed.
+    let mut specs_differ = false;
     if let (Some(a), Some(b)) = (&ra, &rb) {
-        if let Some(v) = digests_agree(a, b) {
-            println!("  {v}");
-            if let Verdict::Incomparable { .. } = v {
-                return Ok(false);
+        let diffs = ferroscope_receipt::spec_differences(&a.spec, &b.spec);
+        if !diffs.is_empty() {
+            specs_differ = true;
+            println!("  the specs differ, so these are not two runs of the same experiment:");
+            for d in &diffs {
+                println!("    {:<22} {}  →  {}", d.field, d.a, d.b);
+                println!("    {:22} {}", "", d.means);
             }
-            println!("  (digests alone; no per-step comparison was needed)");
-            return Ok(v.reproduced());
+            println!(
+                "    ({} declared fields compared; a spec declaring few fields is a weak \
+                 comparability claim)",
+                ferroscope_receipt::declared_fields(&a.spec)
+            );
+            // "Did these reproduce?" has no yes available when the two runs did not ask the
+            // same question, so the exit code stays 1 however well the numbers line up. When
+            // only the toolchain moved, the trace comparison below is still worth reading, and
+            // saying so is the difference between a useful red and a baffling one.
+            if diffs.len() == 1 && diffs[0].field == "build" {
+                println!(
+                    "    only the build differs, so the comparison below is still physically \
+                     meaningful — but this is not a reproduction of the same declared run."
+                );
+            }
+            println!();
+        } else if a.trace_digest == b.trace_digest && trustworthy {
+            // A digest match is proof, and now it is proof of RECOMPUTED digests.
+            println!(
+                "  {}",
+                Verdict::IdenticalAtPrecision {
+                    precision: a.precision
+                }
+            );
+            println!(
+                "  (both receipts recomputed from their files and agree; no per-step comparison \
+                 was needed)"
+            );
+            return Ok(true);
         }
-        println!("  digests differ, comparing step by step");
     }
 
-    let verdict = compare(&ta, &tb, tol);
-    println!("  {verdict}");
-    match &verdict {
-        Verdict::Diverged { step, .. } => {
-            let span = ta.samples.iter().map(|s| s.step).max().unwrap_or(0);
+    let p = ferroscope_receipt::profile(&ta, &tb, tol);
+    let labels = ferroscope_schema::channel_labels(&bytes_a);
+    println!("  {}", p.verdict);
+    // The verdict names an array slot; the recording knows what lives in that slot.
+    if let Verdict::Diverged { channel, index, .. } = &p.verdict {
+        if let Some(name) = labels.get(channel).and_then(|l| l.get(*index)) {
+            println!("  that is       {channel} {name}");
+        }
+    }
+
+    if let Some(s) = &p.structural {
+        println!("\n  the runs did not record the same things:");
+        if s.a_last_step != s.b_last_step {
             println!(
-                "  → the runs agreed for {:.1} % of the trajectory, then did not.",
-                if span > 0 {
-                    *step as f64 / span as f64 * 100.0
+                "    extent       A ends at step {}, B at step {} — {} stopped first",
+                s.a_last_step,
+                s.b_last_step,
+                if s.a_last_step < s.b_last_step {
+                    "A"
                 } else {
-                    0.0
+                    "B"
                 }
             );
         }
-        Verdict::WithinTolerance { .. } => {
+        for (name, only) in [("only in A", &s.only_in_a), ("only in B", &s.only_in_b)] {
+            if !only.is_empty() {
+                println!("    {name:<12} {}", only.join(", "));
+            }
+        }
+        for (ch, first, n, side) in s.gaps.iter().take(6) {
             println!(
-                "  → tolerance was abs {:.1e} / rel {:.1e}; nothing exceeded both.",
-                tol.abs, tol.rel
+                "    gap          {ch} — {n} step(s) present on one side only, first at step \
+                 {first} (missing from {side})"
             );
         }
-        _ => {}
+        println!(
+            "    coverage     the verdict above covers the {} sample(s) both runs recorded; \
+             {} were excluded and it says nothing about them",
+            s.shared_samples, s.excluded_samples
+        );
     }
-    Ok(verdict.reproduced())
+
+    if !p.channels.is_empty() {
+        if let Some((ch, step)) = &p.onset {
+            println!("\n  onset        step {step} on {ch} — where the bits first parted");
+        }
+        match p.crossing {
+            Some(c) => println!(
+                "  crossing     step {c} — where a value first exceeded abs {:.1e} / rel {:.1e} \
+                 (this step moves when the tolerance moves; the onset does not)",
+                tol.abs, tol.rel
+            ),
+            None => println!(
+                "  crossing     none — nothing exceeded abs {:.1e} / rel {:.1e}",
+                tol.abs, tol.rel
+            ),
+        }
+        if let Some(d) = p.dominant() {
+            println!("  shape        {}", d.shape);
+        }
+        println!(
+            "  extent       {} channel(s) differ, ranked by relative difference — they are not \
+             independent, so this is a ranking and not a count of separate faults:",
+            p.channels.len()
+        );
+        for d in p.channels.iter().take(6) {
+            let name = labels
+                .get(&d.channel)
+                .and_then(|l| l.get(d.worst_index))
+                .cloned()
+                .unwrap_or_else(|| format!("[{}]", d.worst_index));
+            println!(
+                "    {:<22} rel {:.3e} at step {:<7} {name}  {:.12} vs {:.12}",
+                d.channel, d.worst_rel, d.worst_rel_step, d.a_at_worst, d.b_at_worst
+            );
+        }
+        if p.channels.len() > 6 {
+            println!("    … and {} more", p.channels.len() - 6);
+        }
+    }
+
+    // The joules axis, which this tool has always had and diff has never shown. Two runs can
+    // reproduce trajectory-for-trajectory and cost measurably different energy, and which RAIL
+    // moved says where to look.
+    if let (Some(x), Some(y)) = (&va, &vb) {
+        print_energy_delta(&x.quote, &y.quote);
+    }
+
+    if let Verdict::WithinTolerance { .. } = &p.verdict {
+        if let Some(r) = &ra {
+            println!(
+                "  → tolerance was abs {:.1e} / rel {:.1e}; nothing exceeded both. The digest \
+                 itself cannot see below {:.1e} relative.",
+                tol.abs,
+                tol.rel,
+                r.precision.relative_resolution()
+            );
+        }
+    }
+    Ok(p.verdict.reproduced() && trustworthy && !specs_differ)
+}
+
+/// Report what the two runs cost, per rail, and refuse the comparison when either quote is not
+/// admissible rather than printing a difference of two numbers that do not mean the same thing.
+fn print_energy_delta(a: &ferroscope_ledger::Quote, b: &ferroscope_ledger::Quote) {
+    if a.total_j == 0.0 && b.total_j == 0.0 {
+        return;
+    }
+    println!(
+        "\n  energy       A {:.3} J    B {:.3} J    Δ {:+.6} J",
+        a.total_j,
+        b.total_j,
+        b.total_j - a.total_j
+    );
+    if !a.quotable || !b.quotable {
+        println!(
+            "               NOT comparable: coverage is {} for A and {} for B, and a gap can \
+             hide the entire difference",
+            a.coverage, b.coverage
+        );
+        return;
+    }
+    let rail = |name: &str, x: f64, y: f64| -> String {
+        let d = y - x;
+        if d == 0.0 {
+            format!("{name} identical")
+        } else if x != 0.0 && (d / x).abs() < 1e-4 {
+            format!("{name} {d:+.3e} J (below 0.01 %)")
+        } else if x == 0.0 {
+            format!("{name} {d:+.6} J")
+        } else {
+            format!("{name} {:+.2} %", d / x * 100.0)
+        }
+    };
+    println!(
+        "               {}   {}   {}",
+        rail("total", a.total_j, b.total_j),
+        rail("compute", a.compute_j, b.compute_j),
+        rail("actuation", a.actuation_j, b.actuation_j)
+    );
+    // A rail that did not move localises the fault for free — but only as well as the labels
+    // the recorder chose, which is a declaration and not a measurement.
+    if (a.compute_j - b.compute_j).abs() < 1e-6 && (a.actuation_j - b.actuation_j).abs() >= 1e-6 {
+        println!(
+            "               the compute rail is unchanged and the actuation rail is not: the \
+             control schedule held and the physics moved (rails are the recorder's own labels)"
+        );
+    }
 }
 
 fn cmd_export(path: &str, out: &str) -> Result<bool, String> {

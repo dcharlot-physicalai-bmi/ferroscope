@@ -1,7 +1,10 @@
 [package]
 name = "ferroscope-receipt"
 description = "Determinism receipts for physics runs: a canonical run digest, a tunable-precision trace digest, and a comparator that names the step a replay diverged at."
-version.workspace = true
+# 0.1.1: the comparator reports independent absolute/relative worsts, names the largest
+# difference in a diverging sample rather than the first in emit order, and gains profile():
+# onset, shape, ranked extent, structural localisation, and spec field differences.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

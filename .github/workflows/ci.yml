@@ -723,3 +723,32 @@ jobs:
           $B diff a.mcap b.mcap                 # exit 0: same spec, two platforms, one answer
           rc=0; $B diff a.mcap c.mcap > /dev/null || rc=$?   # exit 1: located divergence
           test "$rc" -eq 1 || { echo "a diverged pair must exit 1, got $rc"; exit 1; }
+      - name: diff recomputes both receipts instead of trusting metadata
+        # The hole this closes: diff used to compare two STORED digest strings read out of
+        # metadata and return exit 0 on a match. A file whose block was edited to carry
+        # another run's trace_digest therefore passed with arbitrarily different messages, so
+        # a green diff proved that two metadata blocks agreed — not that two runs reproduced.
+        # Verified against the previous release, which exits 0 on the file this step forges.
+        run: |
+          B=target/release/ferroscope
+          python3 - <<'EOF'
+          import re
+          a = open('a.mcap','rb').read()
+          c = open('c.mcap','rb').read()
+          def stored(buf):
+              i = buf.find(b'trace_digest')
+              return re.search(rb'[0-9a-f]{64}', buf[i:i+200]).group(0)
+          forged = c.replace(stored(c), stored(a), 1)
+          assert len(forged) == len(c), "the forgery must not change the file length"
+          assert forged != c, "the forgery did not change anything"
+          open('forged.mcap','wb').write(forged)
+          EOF
+          rc=0; $B diff a.mcap forged.mcap > /tmp/forged.log 2>&1 || rc=$?
+          test "$rc" -ne 0 \
+            || { echo "a file carrying another run's stored digest passed diff"; cat /tmp/forged.log; exit 1; }
+          grep -q "DOES NOT VERIFY" /tmp/forged.log \
+            || { echo "diff did not report that the forged file fails its own receipt"; cat /tmp/forged.log; exit 1; }
+          # And the honest file must still pass, or the check above proves nothing.
+          $B diff a.mcap b.mcap > /dev/null \
+            || { echo "an honest pair no longer passes"; exit 1; }
+          echo "diff recomputes both receipts: a forged digest is caught, an honest pair passes"
