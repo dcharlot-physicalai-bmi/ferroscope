@@ -44,6 +44,12 @@ That is the whole idea. Two machines ran the same declared experiment. One of th
 The tool does not say "results differ". It says **which step, which channel, which quantity by
 name, both numbers, how the difference behaved over time, and what each run cost in joules**.
 
+The browser viewer shows the same profile, from the same Rust compiled to wasm — onset, shape,
+the ranked channels, the structural differences and the joules delta, on a page that uploads
+nothing. Both surfaces re-verify each file before comparing: the page had the identical hole
+the CLI did, and told a reader that a file carrying another run's edited digest was "identical
+at quantized", on a green strip.
+
 Four of those lines exist because a design review took the old output apart. It used to name
 the first value in *recorder emit order* that crossed the threshold — a hip velocity at
 rel 3.7e-8 — while the injected perturbation, four thousand times larger, sat two slots away in

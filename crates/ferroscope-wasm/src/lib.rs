@@ -21,7 +21,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use ferroscope_receipt::{compare, digests_agree, Tolerance, Verdict};
+use ferroscope_receipt::{Tolerance, Verdict};
 use ferroscope_schema::{bundle, trace_from, verify};
 
 /// The crate version, so a page can report which build produced what it is showing.
@@ -110,22 +110,21 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         rel: if rel > 0.0 { rel } else { 1e-9 },
     };
 
-    // The cheap path first, exactly as the CLI does it: a digest match is proof, a digest
-    // mismatch is only a question, and `compare` is what answers it.
-    let mut by_digest = false;
-    let verdict = match (&ra, &rb) {
-        (Some(x), Some(y)) => match digests_agree(x, y) {
-            Some(v) => {
-                by_digest = true;
-                v
-            }
-            None => compare(&ta, &tb, tol),
-        },
-        _ => compare(&ta, &tb, tol),
-    };
+    // Recompute both receipts before comparing anything. The old fast path here was the same
+    // one the CLI had: `digests_agree` on two STORED digest strings, which returns "identical"
+    // for a file whose metadata block was edited to carry another run's digest, whatever its
+    // messages hold. A page that says "reproduced" has to have checked.
+    let va = verify(a);
+    let vb = verify(b);
+    let a_ok = va.as_ref().is_some_and(|v| v.ok());
+    let b_ok = vb.as_ref().is_some_and(|v| v.ok());
+    let trustworthy = a_ok && b_ok;
+
+    let p = ferroscope_receipt::profile(&ta, &tb, tol);
+    let verdict = &p.verdict;
 
     let steps = ta.samples.iter().map(|s| s.step).max().unwrap_or(0);
-    let (kind, step, channel, index, va, vb, absd, reld) = match &verdict {
+    let (kind, step, channel, index, xa, xb, absd, reld) = match verdict {
         Verdict::BitExact => ("bit-exact", -1i64, String::new(), -1i64, 0.0, 0.0, 0.0, 0.0),
         Verdict::IdenticalAtPrecision { .. } => (
             "identical-at-precision",
@@ -191,18 +190,116 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         }
     };
 
+    let labels = ferroscope_schema::channel_labels(a);
+    let name_of = |ch: &str, i: usize| -> String {
+        labels
+            .get(ch)
+            .and_then(|l| l.get(i))
+            .cloned()
+            .unwrap_or_else(|| format!("[{i}]"))
+    };
+
+    // The ranked extent, each channel with the quantity that moved most named in the payload's
+    // own terms. Capped: a viewer strip is not a report, and the CLI prints the whole list.
+    let mut chans = String::from("[");
+    for (i, d) in p.channels.iter().take(8).enumerate() {
+        if i > 0 {
+            chans.push(',');
+        }
+        chans.push_str(&format!(
+            "{{\"channel\":\"{}\",\"name\":\"{}\",\"onset\":{},\"rel\":{},\"step\":{},\
+              \"a\":{},\"b\":{},\"shape\":\"{}\"}}",
+            esc(&d.channel),
+            esc(&name_of(&d.channel, d.worst_index)),
+            d.onset_step,
+            fin(d.worst_rel),
+            d.worst_rel_step,
+            fin(d.a_at_worst),
+            fin(d.b_at_worst),
+            esc(&d.shape.to_string()),
+        ));
+    }
+    chans.push(']');
+
+    let structural = match &p.structural {
+        None => "null".to_string(),
+        Some(st) => format!(
+            "{{\"a_last_step\":{},\"b_last_step\":{},\"only_in_a\":{},\"only_in_b\":{},\
+              \"shared\":{},\"excluded\":{}}}",
+            st.a_last_step,
+            st.b_last_step,
+            json_strings(&st.only_in_a),
+            json_strings(&st.only_in_b),
+            st.shared_samples,
+            st.excluded_samples,
+        ),
+    };
+
+    // What each run cost, from the recomputed ledgers, and only when both are admissible.
+    let energy = match (&va, &vb) {
+        (Some(x), Some(y)) if x.quote.quotable && y.quote.quotable => format!(
+            "{{\"a_j\":{},\"b_j\":{},\"a_compute_j\":{},\"b_compute_j\":{},\
+              \"a_actuation_j\":{},\"b_actuation_j\":{}}}",
+            fin(x.quote.total_j),
+            fin(y.quote.total_j),
+            fin(x.quote.compute_j),
+            fin(y.quote.compute_j),
+            fin(x.quote.actuation_j),
+            fin(y.quote.actuation_j),
+        ),
+        _ => "null".to_string(),
+    };
+
+    let spec_diffs = match (&ra, &rb) {
+        (Some(x), Some(y)) => {
+            let d = ferroscope_receipt::spec_differences(&x.spec, &y.spec);
+            let mut out = String::from("[");
+            for (i, f) in d.iter().take(8).enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "{{\"field\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"means\":\"{}\"}}",
+                    esc(&f.field),
+                    esc(&f.a),
+                    esc(&f.b),
+                    esc(f.means)
+                ));
+            }
+            out.push(']');
+            out
+        }
+        _ => "[]".to_string(),
+    };
+
     Ok(format!(
-        "{{\"kind\":\"{kind}\",\"reproduced\":{},\"by_digest\":{by_digest},\"text\":\"{}\",\
+        "{{\"kind\":\"{kind}\",\"reproduced\":{},\"verified_a\":{a_ok},\"verified_b\":{b_ok},\
+          \"trustworthy\":{trustworthy},\"text\":\"{}\",\
           \"step\":{step},\"steps\":{steps},\"channel\":\"{}\",\"index\":{index},\
-          \"a\":{},\"b\":{},\"abs\":{},\"rel\":{},\
+          \"name\":\"{}\",\"a\":{},\"b\":{},\"abs\":{},\"rel\":{},\
+          \"onset_step\":{},\"onset_channel\":\"{}\",\"crossing_step\":{},\"shape\":\"{}\",\
+          \"channels\":{chans},\"structural\":{structural},\"energy\":{energy},\
+          \"spec_diffs\":{spec_diffs},\
           \"platform_a\":\"{}\",\"platform_b\":\"{}\",\"same_spec\":{}}}",
-        verdict.reproduced(),
+        verdict.reproduced() && trustworthy,
         esc(&verdict.to_string()),
         esc(&channel),
-        fin(va),
-        fin(vb),
+        esc(&if index >= 0 {
+            name_of(&channel, index as usize)
+        } else {
+            String::new()
+        }),
+        fin(xa),
+        fin(xb),
         fin(absd),
         fin(reld),
+        p.onset.as_ref().map(|(_, s)| *s as i64).unwrap_or(-1),
+        esc(p.onset.as_ref().map(|(c, _)| c.as_str()).unwrap_or("")),
+        p.crossing.map(|s| s as i64).unwrap_or(-1),
+        esc(&p
+            .dominant()
+            .map(|d| d.shape.to_string())
+            .unwrap_or_default()),
         esc(ra.as_ref().map(|r| r.platform.as_str()).unwrap_or("")),
         esc(rb.as_ref().map(|r| r.platform.as_str()).unwrap_or("")),
         match (&ra, &rb) {
@@ -210,6 +307,18 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
             _ => false,
         },
     ))
+}
+
+fn json_strings(v: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, s) in v.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("\"{}\"", esc(s)));
+    }
+    out.push(']');
+    out
 }
 
 /// Compute the per-step divergence curve between two recordings on one channel, so a viewer

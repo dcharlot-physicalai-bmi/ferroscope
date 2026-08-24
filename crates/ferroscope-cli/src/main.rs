@@ -449,7 +449,14 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
 
     let p = ferroscope_receipt::profile(&ta, &tb, tol);
     let labels = ferroscope_schema::channel_labels(&bytes_a);
-    println!("  {}", p.verdict);
+    // Qualify the headline whenever it does not cover both runs whole. "bit-exact" printed
+    // over a pair where one run stopped at a third of the way reads as a pass, and it is a
+    // pass only on the part they share.
+    if p.structural.is_some() {
+        println!("  on what both runs recorded: {}", p.verdict);
+    } else {
+        println!("  {}", p.verdict);
+    }
     // The verdict names an array slot; the recording knows what lives in that slot.
     if let Verdict::Diverged { channel, index, .. } = &p.verdict {
         if let Some(name) = labels.get(channel).and_then(|l| l.get(*index)) {

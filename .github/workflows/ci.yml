@@ -29,6 +29,27 @@ jobs:
           cargo build --target wasm32-unknown-unknown
           -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
           -p ferroscope-wasm
+      - name: the browser comparator recomputes receipts too
+        # The page had the same hole the CLI did: `diff` compared two STORED digest strings, so
+        # a file whose metadata block was edited to carry another run's digest showed as
+        # "identical at quantized" on a green strip. Verified against the shipped bundle before
+        # the fix. The browser path is a separate implementation surface from the CLI, so it
+        # needs its own gate or it regresses on its own schedule.
+        run: |
+          grep -q "let va = verify(a);" crates/ferroscope-wasm/src/lib.rs \
+            || { echo "wasm diff no longer verifies recording A"; exit 1; }
+          grep -q "let vb = verify(b);" crates/ferroscope-wasm/src/lib.rs \
+            || { echo "wasm diff no longer verifies recording B"; exit 1; }
+          if grep -n "digests_agree(" crates/ferroscope-wasm/src/lib.rs | grep -qv "^[0-9]*: *//"; then
+            echo "wasm diff is back to trusting stored digests"; exit 1
+          fi
+          # reproduced must be conjoined with trustworthiness, not reported on its own.
+          grep -q "verdict.reproduced() && trustworthy" crates/ferroscope-wasm/src/lib.rs \
+            || { echo "the browser can report reproduced for a file that does not verify"; exit 1; }
+          # And the page must surface it rather than swallowing the flag.
+          grep -q "does not verify against its own receipt" viewer/index.html \
+            || { echo "the viewer no longer tells the reader a file failed its receipt"; exit 1; }
+          echo "the browser comparator verifies both files and says so"
 
   harness:
     # The scenario harness end to end: discover, run a suite, query history, and compare two

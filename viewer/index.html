@@ -179,6 +179,13 @@
   #strip.bad{background:rgba(255,106,106,.12);border-bottom-color:var(--red)}
   #strip.good{background:rgba(70,198,176,.1);border-bottom-color:var(--teal)}
   #strip b{color:var(--ink)}
+  #strip .why{display:block;margin-top:5px;color:var(--dim);font-size:10.5px}
+  #strip .why i{font-style:normal;color:var(--ink)}
+  #strip table{border-collapse:collapse;margin-top:5px;font-size:10.5px}
+  #strip td{padding:1px 10px 1px 0;white-space:nowrap;color:var(--dim)}
+  #strip td.k{color:var(--ink)}
+  #strip .warn{color:var(--red)}
+  #strip .more{color:var(--dim)}
   #err{display:none;margin:6px 12px;padding:9px 12px;border:1px solid var(--red);border-radius:7px;
     background:rgba(255,106,106,.1);font-family:var(--mono);font-size:11.5px;line-height:1.55}
   #empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
@@ -1104,7 +1111,65 @@ function compare(){
   strip.className = v.kind==='incomparable' ? '' : (v.reproduced ? 'good' : 'bad');
   let x = `<b>${esc(S.A.name)}</b> vs <b>${esc(S.B.name)}</b>`;
   if(v.platform_a) x += ` · ${esc(v.platform_a)} vs ${esc(v.platform_b)}`;
-  x += ` · ${esc(v.text)}`;
+  // The verdict covers only what both runs recorded when they did not record the same things,
+  // and a bare "bit-exact" over a pair where one run stopped early reads as a clean pass.
+  x += v.structural ? ` · on what both runs recorded: ${esc(v.text)}` : ` · ${esc(v.text)}`;
+  if(v.name) x += ` · <b>${esc(v.name)}</b>`;
+
+  // A file that does not stand behind its own receipt cannot support any verdict drawn from
+  // it, and the page says so before it says anything else.
+  if(v.verified_a === false || v.verified_b === false){
+    const who = v.verified_a === false ? (v.verified_b === false ? 'neither file' : esc(S.A.name)) : esc(S.B.name);
+    x += `<span class="why warn">${who} does not verify against its own receipt \u2014 what follows compares bytes, not evidence.</span>`;
+  }
+
+  // The specs differ: these are not two runs of the same experiment, and the field says why.
+  if(v.spec_diffs && v.spec_diffs.length){
+    x += `<span class="why">the specs differ, so this is not one experiment run twice:</span><table>`;
+    for(const d of v.spec_diffs.slice(0,4))
+      x += `<tr><td class="k">${esc(d.field)}</td><td>${esc(d.a)} → ${esc(d.b)}</td><td>${esc(d.means)}</td></tr>`;
+    x += `</table>`;
+  }
+
+  // Onset is causal; crossing moves whenever the tolerance moves. Two different facts.
+  if(v.onset_step >= 0){
+    x += `<span class="why">onset <i>step ${v.onset_step}</i> on <i>${esc(v.onset_channel)}</i> — where the bits first parted`;
+    if(v.crossing_step >= 0 && v.crossing_step !== v.onset_step)
+      x += `; crossing <i>step ${v.crossing_step}</i> — where it first exceeded the tolerance`;
+    x += `</span>`;
+  }
+  if(v.shape) x += `<span class="why">${esc(v.shape)}</span>`;
+
+  if(v.channels && v.channels.length){
+    x += `<span class="why">${v.channels.length} channel(s) differ, ranked by relative difference — not independent, so a ranking and not a count:</span><table>`;
+    for(const c of v.channels.slice(0,4))
+      x += `<tr><td class="k">${esc(c.channel)}</td><td>${esc(c.name)}</td>`
+         + `<td>rel ${c.rel.toExponential(3)} at step ${c.step}</td>`
+         + `<td>${c.a.toPrecision(9)} vs ${c.b.toPrecision(9)}</td></tr>`;
+    x += `</table>`;
+    if(v.channels.length > 4) x += `<span class="why more">… ${v.channels.length-4} more, and the full list is in <i>ferroscope diff</i></span>`;
+  }
+
+  // What the two runs did not both record. The verdict covers the intersection only.
+  const st = v.structural;
+  if(st){
+    let bits = [];
+    if(st.a_last_step !== st.b_last_step)
+      bits.push(`A ends at step ${st.a_last_step}, B at ${st.b_last_step}`);
+    if(st.only_in_a.length) bits.push(`only in A: ${st.only_in_a.map(esc).join(', ')}`);
+    if(st.only_in_b.length) bits.push(`only in B: ${st.only_in_b.map(esc).join(', ')}`);
+    bits.push(`the verdict covers the ${st.shared} sample(s) both runs recorded; ${st.excluded} excluded`);
+    x += `<span class="why">the runs did not record the same things — ${bits.join(' · ')}</span>`;
+  }
+
+  // The joules axis, which no other viewer in the field shows at all.
+  const e = v.energy;
+  if(e){
+    const pct = (a,b) => a === 0 ? 'n/a' : `${((b-a)/a*100).toFixed(2)}%`;
+    x += `<span class="why">energy <i>A ${e.a_j.toFixed(3)} J</i> vs <i>B ${e.b_j.toFixed(3)} J</i>`
+       + ` · total ${pct(e.a_j,e.b_j)} · compute ${pct(e.a_compute_j,e.b_compute_j)}`
+       + ` · actuation ${pct(e.a_actuation_j,e.b_actuation_j)}</span>`;
+  }
   strip.innerHTML = x;
 
   const ch = (v.kind==='diverged'||v.kind==='within-tolerance'||v.kind==='non-finite')

@@ -9,12 +9,13 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.5 adds `urdf --check` and the collision and inertial layers.
 # 0.1.11 adds `live`: replay any recording as a live stream, WebSocket by default and
 # WebTransport behind `--features webtransport`.
+# 0.1.14: diff qualifies its headline when the two runs did not record the same things.
 # 0.1.13: `diff` recomputes both receipts instead of trusting stored metadata, and reports
 # onset / crossing / shape / ranked extent / energy delta rather than one first-in-emit-order hit.
 # 0.1.12: `live` binds 8737 (the port the viewer's live button dials) instead of an ephemeral
 # one, reports the span it can actually pace, cannot panic on --rate/--hold, and tells the
 # truth about how many viewers received the sealed file.
-version = "0.1.13"
+version = "0.1.14"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
