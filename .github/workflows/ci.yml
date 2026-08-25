@@ -50,6 +50,67 @@ jobs:
           grep -q "does not verify against its own receipt" viewer/index.html \
             || { echo "the viewer no longer tells the reader a file failed its receipt"; exit 1; }
           echo "the browser comparator verifies both files and says so"
+      - name: every comparator recomputes receipts, not just the one that was fixed
+        # This project has now shipped the same defect on three surfaces: the CLI compared two
+        # STORED digest strings, the wasm comparator had its own copy, and the scenario harness
+        # -- the one a suite gate calls to decide whether a run reproduced -- had a third. The
+        # MCP tool never verified at all. A defect that is a PATTERN needs a gate over every
+        # implementation of it.
+        #
+        # The check is the DECISION EXPRESSION, not the presence of a word. The first version of
+        # this gate grepped for "trustworthy" and passed a mutant that had deleted the binding
+        # but left the identifier in a comment -- a gate that could not fail.
+        run: |
+          fail=0
+          for f in crates/ferroscope-cli/src/main.rs \
+                   crates/ferroscope-wasm/src/lib.rs \
+                   crates/ferroscope-run/src/harness.rs \
+                   crates/ferroscope-mcp/src/tools.rs; do
+            # A call, not the word: every one of these files names digests_agree in the comment
+            # explaining why it no longer calls it.
+            if grep -n "digests_agree(" "$f" | grep -qv "^[0-9]*: *//"; then
+              echo "$f compares stored digests again"; fail=1
+            fi
+            grep -q "verify(" "$f" \
+              || { echo "$f no longer recomputes a receipt before comparing"; fail=1; }
+          done
+          for f in crates/ferroscope-cli/src/main.rs \
+                   crates/ferroscope-wasm/src/lib.rs \
+                   crates/ferroscope-run/src/harness.rs; do
+            grep -q "reproduced() && trustworthy" "$f" \
+              || { echo "$f can report reproduced for a file that fails its own receipt"; fail=1; }
+          done
+          test "$fail" -eq 0 || exit 1
+          echo "all four comparators recompute both receipts before answering"
+      - name: the agent-facing comparator refuses a forged file
+        # Behaviour, not grep, for the surface where it is cheap to run: build the tool, forge a
+        # recording that carries another run's stored digest, and require the refusal.
+        run: |
+          cargo build --release -p ferroscope-cli -p ferroscope-mcp
+          ./target/release/ferroscope demo mcp-a.mcap --steps 400 --seed 7 > /dev/null
+          ./target/release/ferroscope demo mcp-b.mcap --steps 400 --seed 7 --drift 100 > /dev/null
+          python3 - <<'EOF'
+          import re
+          a = open('mcp-a.mcap','rb').read(); b = open('mcp-b.mcap','rb').read()
+          def stored(buf):
+              i = buf.find(b'trace_digest')
+              return re.search(rb'[0-9a-f]{64}', buf[i:i+200]).group(0)
+          f = b.replace(stored(b), stored(a), 1)
+          assert len(f) == len(b) and f != b
+          open('mcp-forged.mcap','wb').write(f)
+          EOF
+          REQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_diff","arguments":{"a":"mcp-a.mcap","b":"mcp-forged.mcap"}}}'
+          echo "$REQ" | ./target/release/ferroscope-mcp > /tmp/mcp.out 2>/dev/null || true
+          grep -q "DOES NOT VERIFY" /tmp/mcp.out \
+            || { echo "the agent-facing comparator did not report the forged file"; cat /tmp/mcp.out; exit 1; }
+          grep -q "cannot support a reproduction verdict" /tmp/mcp.out \
+            || { echo "the agent-facing comparator did not refuse the reproduction claim"; cat /tmp/mcp.out; exit 1; }
+          # And an honest pair must still be answered, or the check above proves nothing.
+          REQ2='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_diff","arguments":{"a":"mcp-a.mcap","b":"mcp-b.mcap"}}}'
+          echo "$REQ2" | ./target/release/ferroscope-mcp > /tmp/mcp2.out 2>/dev/null || true
+          grep -q "VERIFIED" /tmp/mcp2.out \
+            || { echo "an honest pair is no longer verified"; cat /tmp/mcp2.out; exit 1; }
+          echo "the agent-facing comparator refuses a forged file and answers an honest pair"
 
   harness:
     # The scenario harness end to end: discover, run a suite, query history, and compare two

@@ -598,22 +598,104 @@ fn run_diff(args: &Value) -> Result<String, String> {
     let a = arg(args, "a")?;
     let b = arg(args, "b")?;
     let (ba, bb) = (read(a)?, read(b)?);
-    let (_, ta) = ferroscope_schema::trace_from(&ba)
+    let (ra, ta) = ferroscope_schema::trace_from(&ba)
         .ok_or_else(|| format!("{a} is not a Ferroscope recording"))?;
-    let (_, tb) = ferroscope_schema::trace_from(&bb)
+    let (rb, tb) = ferroscope_schema::trace_from(&bb)
         .ok_or_else(|| format!("{b} is not a Ferroscope recording"))?;
-    let v = ferroscope_receipt::compare(&ta, &tb, ferroscope_receipt::Tolerance::default());
-    let verdict = format!("{v:?}");
-    Ok(format!(
-        "A  {a}\nB  {b}\n\n  verdict     {verdict}\n\n{}",
-        match v {
-            ferroscope_receipt::Verdict::BitExact =>
-                "B reproduced A exactly, byte for byte.".to_string(),
-            ferroscope_receipt::Verdict::IdenticalAtPrecision { .. } =>
-                "B reproduced A at the precision both runs declared.".to_string(),
-            ferroscope_receipt::Verdict::WithinTolerance { .. } =>
-                "B did not reproduce A exactly, but stayed inside the tolerance.".to_string(),
-            _ => format!("B did not reproduce A. The verdict names how they parted: {verdict}"),
+
+    // Recompute both receipts before answering. An agent asking "did this reproduce?" and
+    // getting a yes has no way to tell that nothing checked whether either file still stands
+    // behind its own digest, and this tool answers exactly that question.
+    let va = ferroscope_schema::verify(&ba);
+    let vb = ferroscope_schema::verify(&bb);
+    let ok = |v: &Option<ferroscope_schema::Verification>| v.as_ref().is_some_and(|v| v.ok());
+    let (a_ok, b_ok) = (ok(&va), ok(&vb));
+    let trustworthy = a_ok && b_ok;
+
+    let p = ferroscope_receipt::profile(&ta, &tb, ferroscope_receipt::Tolerance::default());
+    let v = &p.verdict;
+
+    let mut out = format!(
+        "A  {a}  {}\nB  {b}  {}\n\n",
+        if a_ok { "VERIFIED" } else { "DOES NOT VERIFY" },
+        if b_ok { "VERIFIED" } else { "DOES NOT VERIFY" },
+    );
+    if !trustworthy {
+        out.push_str(
+            "  A file that fails its own receipt cannot support a reproduction verdict. What \
+             follows compares bytes, not evidence.\n\n",
+        );
+    }
+    if let (Some(x), Some(y)) = (&ra, &rb) {
+        let diffs = ferroscope_receipt::spec_differences(&x.spec, &y.spec);
+        if !diffs.is_empty() {
+            out.push_str("  the specs differ, so these are not two runs of one experiment:\n");
+            for d in diffs.iter().take(6) {
+                out.push_str(&format!(
+                    "    {} : {} -> {}  ({})\n",
+                    d.field, d.a, d.b, d.means
+                ));
+            }
+            out.push('\n');
         }
-    ))
+    }
+    if p.structural.is_some() {
+        out.push_str(&format!("  on what both runs recorded: {v}\n"));
+    } else {
+        out.push_str(&format!("  verdict     {v}\n"));
+    }
+    if let Some((ch, step)) = &p.onset {
+        out.push_str(&format!(
+            "  onset       step {step} on {ch} - where the bits first parted, which is the \
+             causal step; the crossing below moves whenever the tolerance does\n"
+        ));
+    }
+    if let Some(c) = p.crossing {
+        out.push_str(&format!("  crossing    step {c}\n"));
+    }
+    if let Some(d) = p.dominant() {
+        out.push_str(&format!("  shape       {}\n", d.shape));
+    }
+    if !p.channels.is_empty() {
+        out.push_str(
+            "  extent      channels ranked by relative difference - they are not independent, \
+             so this is a ranking and not a count of separate faults:\n",
+        );
+        for c in p.channels.iter().take(6) {
+            out.push_str(&format!(
+                "    {} rel {:.3e} at step {} (onset {})\n",
+                c.channel, c.worst_rel, c.worst_rel_step, c.onset_step
+            ));
+        }
+    }
+    if let Some(st) = &p.structural {
+        out.push_str(&format!(
+            "  coverage    A ends at step {}, B at step {}; the verdict covers the {} sample(s) \
+             both runs recorded and says nothing about the {} excluded\n",
+            st.a_last_step, st.b_last_step, st.shared_samples, st.excluded_samples
+        ));
+    }
+    if let (Some(x), Some(y)) = (&va, &vb)
+        // Both quotes must be admissible: a gap in either ledger can hide the whole difference.
+        && x.quote.quotable
+        && y.quote.quotable
+    {
+        out.push_str(&format!(
+            "  energy      A {:.3} J   B {:.3} J   delta {:+.6} J\n",
+            x.quote.total_j,
+            y.quote.total_j,
+            y.quote.total_j - x.quote.total_j
+        ));
+    }
+    out.push_str(&format!(
+        "\n  {}\n",
+        if !trustworthy {
+            "No reproduction claim can be made: at least one file fails its own receipt."
+        } else if v.reproduced() {
+            "B reproduced A, and both files still stand behind their own receipts."
+        } else {
+            "B did not reproduce A. The lines above name where they parted and how it grew."
+        }
+    ));
+    Ok(out)
 }

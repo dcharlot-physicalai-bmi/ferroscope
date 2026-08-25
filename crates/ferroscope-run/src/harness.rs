@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use ferroscope_receipt::{compare, digests_agree, Precision, RunSpec, Tolerance};
+use ferroscope_receipt::{Precision, RunSpec, Tolerance};
 use ferroscope_schema::json::Value;
 use ferroscope_schema::{trace_from, verify};
 
@@ -878,25 +878,61 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
             rel: f.rel.unwrap_or(1e-9),
         };
 
-        let verdict = match (&reca, &recb) {
-            (Some(x), Some(y)) => match digests_agree(x, y) {
-                Some(v) => {
-                    println!("  {v}");
-                    println!("  (digests alone; no per-step comparison was needed)");
-                    return Ok(if v.reproduced() {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    });
+        // Recompute both receipts first. This path used to take the same shortcut the CLI and
+        // the browser comparator took — `digests_agree` on two STORED digest strings, returning
+        // SUCCESS on a match — so a recording whose metadata block carried another run's
+        // trace_digest passed however its messages read. This is the surface a suite gate calls
+        // to decide whether a scenario reproduced, so it is the one where that mattered most.
+        let va = verify(&ba);
+        let vb = verify(&bb);
+        let trustworthy =
+            va.as_ref().is_some_and(|v| v.ok()) && vb.as_ref().is_some_and(|v| v.ok());
+        if !trustworthy {
+            for (label, v) in [("A", &va), ("B", &vb)] {
+                match v {
+                    Some(v) if v.ok() => {}
+                    Some(_) => println!("  {label} DOES NOT VERIFY against its own receipt"),
+                    None => println!("  {label} carries no recomputable receipt"),
                 }
-                None => {
-                    println!("  digests differ, comparing step by step");
-                    compare(&ta, &tb, tol)
+            }
+            println!("  what follows compares bytes, not evidence.");
+        }
+
+        if let (Some(x), Some(y)) = (&reca, &recb) {
+            let diffs = ferroscope_receipt::spec_differences(&x.spec, &y.spec);
+            if !diffs.is_empty() {
+                println!("  the specs differ, so these are not two runs of the same experiment:");
+                for d in diffs.iter().take(6) {
+                    println!("    {:<20} {}  ->  {}", d.field, d.a, d.b);
                 }
-            },
-            _ => compare(&ta, &tb, tol),
-        };
-        println!("  {verdict}");
+            }
+        }
+
+        let p = ferroscope_receipt::profile(&ta, &tb, tol);
+        let verdict = p.verdict.clone();
+        if p.structural.is_some() {
+            println!("  on what both runs recorded: {verdict}");
+        } else {
+            println!("  {verdict}");
+        }
+        if let Some((ch, step)) = &p.onset {
+            println!("  onset     step {step} on {ch} - where the bits first parted");
+        }
+        if let Some(d) = p.dominant() {
+            println!("  shape     {}", d.shape);
+            for c in p.channels.iter().take(4) {
+                println!(
+                    "    {:<24} rel {:.3e} at step {}",
+                    c.channel, c.worst_rel, c.worst_rel_step
+                );
+            }
+        }
+        if let Some(st) = &p.structural {
+            println!(
+                "  coverage  the verdict covers the {} sample(s) both runs recorded; {} excluded",
+                st.shared_samples, st.excluded_samples
+            );
+        }
         // The cost delta is the other half of a comparison, and the half nobody reports.
         let dj = rb.energy_j - ra.energy_j;
         println!(
@@ -910,7 +946,7 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
                 0.0
             }
         );
-        Ok(if verdict.reproduced() {
+        Ok(if verdict.reproduced() && trustworthy {
             ExitCode::SUCCESS
         } else {
             ExitCode::from(1)
