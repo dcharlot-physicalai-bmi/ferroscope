@@ -24,17 +24,18 @@ B  b.mcap
                                           (|Δ| 1.117e-4, rel 9.999e-5)
   that is       /robot/joints effort[knee]
 
-  onset        step 392 on /control/height_error — where the bits first parted
+  onset        step 392 on /energy/actuation/leg — where the bits first parted
   crossing     step 392 — where a value first exceeded abs 1.0e-9 / rel 1.0e-9
                (this step moves when the tolerance moves; the onset does not)
-  shape        growing: the relative difference ends 6.967e1x where it started, e-folding
-               about every 614 steps — sensitivity, so no tolerance makes this reproducible
-  extent       6 channel(s) differ, ranked by relative difference — they are not independent,
-               so this is a ranking and not a count of separate faults:
-    /control/height_error  rel 2.878e-2 at step 2195   value          -0.000000066768 vs -0.000000068747
-    /robot/joints          rel 3.156e-3 at step 2195   velocity[hip]  -0.000039893826 vs -0.000039767935
-    /energy/actuation/leg  rel 2.865e-3 at step 2431   watts           0.020079697055 vs  0.020022165866
-    /robot/contacts        rel 2.865e-3 at step 2431   force_n         0.057866189648 vs  0.057700417129
+  shape        growing: the difference against the channel's scale ends 2.795e1x where it
+               started, e-folding about every 783 steps — sensitivity, so no tolerance
+               makes this reproducible
+  extent       6 channel(s) differ, ranked by |Δ| against each channel's own scale — they are
+               not independent, so this is a ranking and not a count of separate faults:
+    /energy/actuation/leg  Δ/scale 1.661e-6 at step 2979   watts          0.020079697055 vs 0.020022165866
+    /robot/contacts        Δ/scale 9.115e-7 at step 392    force_n        0.057866189648 vs 0.057700417129
+    /robot/joints          Δ/scale 9.115e-7 at step 392    velocity[hip] -0.000039893826 vs -0.000039767935
+    /control/height_error  Δ/scale 4.185e-7 at step 2917   value         -0.000000066768 vs -0.000000068747
 
   energy       A 109.700 J    B 109.700 J    Δ -0.000000 J
                total -3.587e-7 J (below 0.01 %)   compute identical   actuation -3.587e-7 J
@@ -49,6 +50,16 @@ the ranked channels, the structural differences and the joules delta, on a page 
 nothing. Both surfaces re-verify each file before comparing: the page had the identical hole
 the CLI did, and told a reader that a file carrying another run's edited digest was "identical
 at quantized", on a green strip.
+
+One column in that table is the whole reason it is trustworthy. Channels are ranked by |Δ|
+against **each channel's own scale**, not by the pointwise relative difference — because a
+quantity passing through zero has a meaningless relative error, and ranking on it puts a
+signal's own zero crossings above the real finding. Ranked the naive way, this very pair led
+with `/control/height_error` at "rel 2.9e-2", which was the controller error crossing zero;
+the perturbation the demo actually injects is on the contact force, and it now ranks where it
+belongs. The same denominator fixes the `shape` line, which is summarised by each window's
+envelope rather than its median: a leg's power is zero through every flight phase, and a median
+read zero straight through a live divergence and called it a transient.
 
 Four of those lines exist because a design review took the old output apart. It used to name
 the first value in *recorder emit order* that crossed the threshold — a hip velocity at

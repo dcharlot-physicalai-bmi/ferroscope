@@ -658,13 +658,14 @@ fn run_diff(args: &Value) -> Result<String, String> {
     }
     if !p.channels.is_empty() {
         out.push_str(
-            "  extent      channels ranked by relative difference - they are not independent, \
-             so this is a ranking and not a count of separate faults:\n",
+            "  extent      channels ranked by |delta| against each channel's own scale, which a \
+             zero crossing cannot inflate - they are not independent, so this is a ranking and \
+             not a count of separate faults:\n",
         );
         for c in p.channels.iter().take(6) {
             out.push_str(&format!(
-                "    {} rel {:.3e} at step {} (onset {})\n",
-                c.channel, c.worst_rel, c.worst_rel_step, c.onset_step
+                "    {} delta/scale {:.3e} at step {} (onset {}, pointwise rel {:.3e})\n",
+                c.channel, c.worst_scaled, c.worst_scaled_step, c.onset_step, c.worst_rel
             ));
         }
     }

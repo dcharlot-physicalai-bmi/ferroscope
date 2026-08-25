@@ -515,8 +515,9 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
             println!("  shape        {}", d.shape);
         }
         println!(
-            "  extent       {} channel(s) differ, ranked by relative difference — they are not \
-             independent, so this is a ranking and not a count of separate faults:",
+            "  extent       {} channel(s) differ, ranked by |Δ| against each channel's own \
+             scale — they are not independent, so this is a ranking and not a count of \
+             separate faults:",
             p.channels.len()
         );
         for d in p.channels.iter().take(6) {
@@ -526,8 +527,8 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
                 .cloned()
                 .unwrap_or_else(|| format!("[{}]", d.worst_index));
             println!(
-                "    {:<22} rel {:.3e} at step {:<7} {name}  {:.12} vs {:.12}",
-                d.channel, d.worst_rel, d.worst_rel_step, d.a_at_worst, d.b_at_worst
+                "    {:<22} Δ/scale {:.3e} at step {:<7} {name}  {:.12} vs {:.12}",
+                d.channel, d.worst_scaled, d.worst_scaled_step, d.a_at_worst, d.b_at_worst
             );
         }
         if p.channels.len() > 6 {

@@ -922,8 +922,8 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
             println!("  shape     {}", d.shape);
             for c in p.channels.iter().take(4) {
                 println!(
-                    "    {:<24} rel {:.3e} at step {}",
-                    c.channel, c.worst_rel, c.worst_rel_step
+                    "    {:<24} delta/scale {:.3e} at step {}",
+                    c.channel, c.worst_scaled, c.worst_scaled_step
                 );
             }
         }

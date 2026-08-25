@@ -34,7 +34,7 @@ categories = ["science::robotics", "visualization", "wasm"]
 ferroscope-mcap = { version = "0.1.5", path = "crates/ferroscope-mcap" }
 ferroscope-schema = { version = "0.1.9", path = "crates/ferroscope-schema" }
 ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
-ferroscope-receipt = { version = "0.1.1", path = "crates/ferroscope-receipt" }
+ferroscope-receipt = { version = "0.1.2", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
 ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
 ferroscope-power = { version = "0.1.1", path = "crates/ferroscope-power" }

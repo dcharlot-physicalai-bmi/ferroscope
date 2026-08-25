@@ -208,12 +208,14 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         }
         chans.push_str(&format!(
             "{{\"channel\":\"{}\",\"name\":\"{}\",\"onset\":{},\"rel\":{},\"step\":{},\
-              \"a\":{},\"b\":{},\"shape\":\"{}\"}}",
+              \"scaled\":{},\"scale\":{},\"a\":{},\"b\":{},\"shape\":\"{}\"}}",
             esc(&d.channel),
             esc(&name_of(&d.channel, d.worst_index)),
             d.onset_step,
             fin(d.worst_rel),
-            d.worst_rel_step,
+            d.worst_scaled_step,
+            fin(d.worst_scaled),
+            fin(d.scale),
             fin(d.a_at_worst),
             fin(d.b_at_worst),
             esc(&d.shape.to_string()),
@@ -328,26 +330,70 @@ fn json_strings(v: &[String]) -> String {
 /// channel's values at each step.
 #[wasm_bindgen]
 pub fn divergence_curve(a: &[u8], b: &[u8], channel: &str) -> Result<String, JsValue> {
+    use std::collections::BTreeMap;
     let (_, ta) = trace_from(a).ok_or_else(|| JsValue::from_str("cannot read recording A"))?;
     let (_, tb) = trace_from(b).ok_or_else(|| JsValue::from_str("cannot read recording B"))?;
 
+    // Keyed on (channel, step), not zipped positionally. The old version walked the two sample
+    // vectors in lockstep, so the moment one run recorded a step the other did not — a contact
+    // that fired once, a run that stopped early — every later pair was misaligned and the lane
+    // drew the difference between two unrelated instants.
+    let mut bs: BTreeMap<u64, &Vec<f64>> = BTreeMap::new();
+    for s in tb.samples.iter().filter(|s| s.channel == channel) {
+        bs.entry(s.step).or_insert(&s.values);
+    }
+
+    // The channel's own scale, over both runs: the denominator that a zero crossing cannot
+    // inflate. Computed in a first pass because it is a property of the whole channel.
+    let mut scale = 0.0f64;
+    for s in ta
+        .samples
+        .iter()
+        .chain(tb.samples.iter())
+        .filter(|s| s.channel == channel)
+    {
+        for v in &s.values {
+            if v.is_finite() {
+                scale = scale.max(v.abs());
+            }
+        }
+    }
+
     let mut out = String::from("[");
     let mut first = true;
-    for (sa, sb) in ta.samples.iter().zip(&tb.samples) {
-        if sa.channel != channel || sb.channel != channel || sa.step != sb.step {
-            continue;
+    for sa in ta.samples.iter().filter(|s| s.channel == channel) {
+        let Some(vb) = bs.get(&sa.step) else { continue };
+        // Absolute AND relative. Absolute alone is the misleading axis: a quantity that is
+        // itself growing has a growing |Δ| at constant relative error, so a lane drawn on |Δ|
+        // shows a rising curve for a run that never got any less faithful.
+        let mut abs = 0.0f64;
+        let mut rel = 0.0f64;
+        for (x, y) in sa.values.iter().zip(vb.iter()) {
+            let d = (x - y).abs();
+            abs = abs.max(d);
+            let denom = x.abs().max(y.abs());
+            if denom > 0.0 {
+                rel = rel.max(d / denom);
+            }
         }
-        let d = sa
-            .values
-            .iter()
-            .zip(&sb.values)
-            .map(|(x, y)| (x - y).abs())
-            .fold(0.0f64, f64::max);
         if !first {
             out.push(',');
         }
         first = false;
-        out.push_str(&format!("[{},{}]", sa.step, fin(d)));
+        let scaled = if scale > 0.0 {
+            abs / scale
+        } else if abs > 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        out.push_str(&format!(
+            "[{},{},{},{}]",
+            sa.step,
+            fin(abs),
+            fin(rel),
+            fin(scaled)
+        ));
     }
     out.push(']');
     Ok(out)

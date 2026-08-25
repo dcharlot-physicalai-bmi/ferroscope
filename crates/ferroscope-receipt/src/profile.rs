@@ -10,11 +10,17 @@
 //! Three cautions are built into the types, because each one is a way a confident-looking
 //! statistic can be wrong:
 //!
-//! * Shape is judged on the **relative** difference. A quantity that is itself growing — a
-//!   robot moving forward at 1.7 m/s — has a growing |Δ| at constant relative error, so
-//!   absolute growth alone would report sensitivity where there is none.
+//! * Shape and ranking are judged on |Δ| against the **channel's own scale**, never on the
+//!   pointwise relative difference. Absolute growth alone reports sensitivity where there is
+//!   none (a robot moving forward at 1.7 m/s has a growing |Δ| at constant relative error);
+//!   pointwise relative error reports it where the signal merely crosses zero, since the
+//!   denominator vanishes there. The channel's scale is the denominator neither can distort.
 //! * A shape is refused outright when too few steps follow the onset. A slope fitted to a
 //!   handful of noisy points is not a finding, and [`Shape::TooShort`] says so instead.
+//! * A window is summarised by its **envelope**, not its median. Physical channels are
+//!   intermittent — a leg's actuation power is zero through every flight phase, a contact
+//!   force is zero between touchdowns — so a median reads zero straight through a live
+//!   divergence, and a persistent difference came out classified as a transient.
 //! * Channels are **not independent**. One perturbation to a contact force shows up on the
 //!   base pose, the leg, the foot, the joints and the contacts. The ranked list is a ranking,
 //!   never a count of five separate failures.
@@ -57,22 +63,22 @@ impl std::fmt::Display for Shape {
             ),
             Shape::Settled { ratio } => write!(
                 f,
-                "settled: the relative difference ends {ratio:.2}x where it started — an offset, \
-                 so look for a parameter, an asset or a config that differs"
+                "settled: the difference against the channel's scale ends {ratio:.2}x where it \
+                 started — an offset, so look for a parameter, asset or config that differs"
             ),
             Shape::Growing {
                 ratio,
                 e_folding_steps,
             } => write!(
                 f,
-                "growing: the relative difference ends {ratio:.3e}x where it started, e-folding \
-                 about every {e_folding_steps:.0} steps — sensitivity, so no tolerance makes \
-                 this reproducible"
+                "growing: the difference against the channel's scale ends {ratio:.3e}x where it \
+                 started, e-folding about every {e_folding_steps:.0} steps — sensitivity, \
+                 so no tolerance makes this reproducible"
             ),
             Shape::Fading { ratio } => write!(
                 f,
-                "fading: the relative difference ends {ratio:.2e}x where it started — a \
-                 transient, so read the onset step itself"
+                "fading: the difference against the channel's scale ends {ratio:.2e}x where it \
+                 started — a transient, so read the onset step itself"
             ),
         }
     }
@@ -86,10 +92,21 @@ pub struct ChannelDivergence {
     pub onset_step: u64,
     pub onset_abs: f64,
     pub onset_rel: f64,
-    /// Largest relative difference anywhere on this channel, and where.
+    /// Largest POINTWISE relative difference on this channel, and where.
+    ///
+    /// Informative, but never the ranking key: a quantity passing through zero has a
+    /// meaningless pointwise relative error, and ranking on it promotes a signal's own zero
+    /// crossings above a real difference elsewhere. See [`ChannelDivergence::worst_scaled`].
     pub worst_rel: f64,
     pub worst_rel_step: u64,
     pub worst_abs: f64,
+    /// The largest value of |Δ| divided by the channel's own scale — the largest magnitude
+    /// either run reaches on it. This is what the list is ranked by, because it is a relative
+    /// measure that a zero crossing cannot inflate.
+    pub worst_scaled: f64,
+    pub worst_scaled_step: u64,
+    /// The channel's scale: `max(|value|)` over both runs. `0` when the channel is all zeros.
+    pub scale: f64,
     /// The component index carrying `worst_rel`, for naming it in the payload's own terms.
     pub worst_index: usize,
     pub a_at_worst: f64,
@@ -123,7 +140,7 @@ pub struct Profile {
     pub onset: Option<(String, u64)>,
     /// Step where some value first exceeded the tolerance. Moves when the flag moves.
     pub crossing: Option<u64>,
-    /// Every channel that ever differs, ranked by largest relative difference.
+    /// Every channel that ever differs, ranked by |Δ| against the channel's own scale.
     pub channels: Vec<ChannelDivergence>,
     /// Present when the two runs did not record the same things. When this is `Some`, the
     /// verdict covers only the intersection and says nothing about the rest.
@@ -131,7 +148,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// The channel with the largest relative difference — the one to open first.
+    /// The channel whose difference is largest against its own scale — the one to open first.
     pub fn dominant(&self) -> Option<&ChannelDivergence> {
         self.channels.first()
     }
@@ -215,7 +232,9 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
         a_at_worst: f64,
         b_at_worst: f64,
         first_crossing: Option<u64>,
+        /// (step, |Δ|) — turned into a scaled series once the channel's scale is known.
         series: Vec<(u64, f64)>,
+        scale: f64,
     }
     let mut acc: BTreeMap<&str, Acc> = BTreeMap::new();
     let mut shared_a = Trace::default();
@@ -248,7 +267,7 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
                 continue;
             }
 
-            let mut step_rel = 0.0f64;
+            let mut step_abs = 0.0f64;
             let mut differed = false;
             let e = acc.entry(k.0).or_insert(Acc {
                 onset: None,
@@ -260,11 +279,15 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
                 b_at_worst: 0.0,
                 first_crossing: None,
                 series: Vec::new(),
+                scale: 0.0,
             });
             for (i, (&x, &y)) in xs.iter().zip(ys.iter()).enumerate() {
                 if !x.is_finite() || !y.is_finite() {
                     continue;
                 }
+                // The channel's own scale, from both runs, whether or not this value differs:
+                // it is what a difference on this channel should be judged against.
+                e.scale = e.scale.max(x.abs()).max(y.abs());
                 if x.to_bits() != y.to_bits() {
                     differed = true;
                 }
@@ -274,7 +297,7 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
                 }
                 let denom = x.abs().max(y.abs());
                 let rel = if denom > 0.0 { abs / denom } else { 0.0 };
-                step_rel = step_rel.max(rel);
+                step_abs = step_abs.max(abs);
                 if e.onset.is_none() {
                     e.onset = Some((k.1, abs, rel));
                 }
@@ -295,7 +318,7 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
                 e.onset = Some((k.1, 0.0, 0.0));
             }
             if e.onset.is_some() {
-                e.series.push((k.1, step_rel));
+                e.series.push((k.1, step_abs));
             }
         }
     }
@@ -313,6 +336,22 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
         .into_iter()
         .filter_map(|(ch, e)| {
             let (onset_step, onset_abs, onset_rel) = e.onset?;
+            // |Δ| against the channel's own scale. Where the scale is zero the channel is all
+            // zeros, and any difference on it is total.
+            let scaled = |d: f64| {
+                if e.scale > 0.0 {
+                    d / e.scale
+                } else if d > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            };
+            let (worst_scaled, worst_scaled_step) =
+                e.series.iter().map(|(st, d)| (scaled(*d), *st)).fold(
+                    (0.0f64, onset_step),
+                    |acc, x| if x.0 > acc.0 { x } else { acc },
+                );
             Some(ChannelDivergence {
                 channel: ch.to_string(),
                 onset_step,
@@ -321,17 +360,28 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
                 worst_rel: e.worst_rel,
                 worst_rel_step: e.worst_rel_step,
                 worst_abs: e.worst_abs,
+                worst_scaled,
+                worst_scaled_step,
+                scale: e.scale,
                 worst_index: e.worst_index,
                 a_at_worst: e.a_at_worst,
                 b_at_worst: e.b_at_worst,
                 first_crossing_step: e.first_crossing,
-                shape: shape_of(&e.series),
+                // Shape is judged on the SCALED series for the same reason the ranking is: a
+                // signal crossing zero makes the pointwise relative difference spike, and a
+                // shape fitted to those spikes describes the zero crossings, not the run.
+                shape: shape_of(
+                    &e.series
+                        .iter()
+                        .map(|(st, d)| (*st, scaled(*d)))
+                        .collect::<Vec<_>>(),
+                ),
             })
         })
         .collect();
     channels.sort_by(|x, y| {
-        y.worst_rel
-            .partial_cmp(&x.worst_rel)
+        y.worst_scaled
+            .partial_cmp(&x.worst_scaled)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| x.onset_step.cmp(&y.onset_step))
     });
@@ -366,8 +416,14 @@ fn shape_of(series: &[(u64, f64)]) -> Shape {
         return Shape::TooShort { steps: live.len() };
     }
     let tenth = (live.len() / 10).max(3);
-    let head = median(&live[..tenth]);
-    let tail = median(&live[live.len() - tenth..]);
+    // The ENVELOPE of each window, not its median. Physical channels are intermittent — a leg's
+    // actuation power is zero through every flight phase, a contact force is zero between
+    // touchdowns — so more than half a window can be exactly zero while the difference is
+    // perfectly alive. A median then reads 0 and the shape came out "fading: a transient" for a
+    // divergence that in fact persisted to the last step. A high quantile survives the zeros
+    // without chasing a single spike the way a bare max would.
+    let head = quantile(&live[..tenth], 0.9);
+    let tail = quantile(&live[live.len() - tenth..], 0.9);
     if head <= 0.0 {
         // Started at an exact-zero difference (signed zero); nothing to take a ratio against.
         return if tail > 0.0 {
@@ -395,14 +451,14 @@ fn shape_of(series: &[(u64, f64)]) -> Shape {
     }
 }
 
-fn median(v: &[f64]) -> f64 {
+fn quantile(v: &[f64], q: f64) -> f64 {
     let mut s: Vec<f64> = v.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     if s.is_empty() {
-        0.0
-    } else {
-        s[s.len() / 2]
+        return 0.0;
     }
+    let i = ((s.len() - 1) as f64 * q).round() as usize;
+    s[i.min(s.len() - 1)]
 }
 
 // ---------------------------------------------------------------------------
@@ -680,6 +736,63 @@ mod tests {
             }
             other => panic!("expected a divergence, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_intermittent_channel_is_not_called_a_transient() {
+        // A leg's actuation power: zero through every flight phase, non-zero in stance. The
+        // difference persists to the last step, but more than half of any window is exactly
+        // zero. Summarising a window by its median read 0 and classified a live, persistent
+        // divergence as "fading: a transient".
+        let mut a = Trace::default();
+        let mut b = Trace::default();
+        for i in 0..600u64 {
+            let stance = (i % 10) < 3;
+            let w = if stance { 5.0 } else { 0.0 };
+            a.push(i, "/leg/power", vec![w]);
+            b.push(i, "/leg/power", vec![if stance { w + 1e-3 } else { 0.0 }]);
+        }
+        let p = profile(&a, &b, Tolerance::default());
+        let d = p.dominant().expect("the channel diverged");
+        assert!(
+            matches!(d.shape, Shape::Settled { .. }),
+            "an intermittent but persistent difference read as {:?}",
+            d.shape
+        );
+    }
+
+    #[test]
+    fn a_zero_crossing_does_not_outrank_a_real_difference() {
+        // /wave passes through zero every cycle and differs by a nanometre. At the crossing its
+        // POINTWISE relative difference approaches 1, which is meaningless — the denominator is
+        // the signal being near zero, not the difference being large. /load differs by a part
+        // in a thousand of a quantity that never approaches zero, and is the real finding.
+        let mut a = Trace::default();
+        let mut b = Trace::default();
+        for i in 0..400u64 {
+            let t = i as f64 * 0.05;
+            let w = t.sin();
+            a.push(i, "/wave", vec![w]);
+            b.push(i, "/wave", vec![w + 1e-9]);
+            a.push(i, "/load", vec![10.0]);
+            b.push(i, "/load", vec![10.0 + 1e-2]);
+        }
+        let p = profile(&a, &b, Tolerance::default());
+        let top = p.dominant().expect("something diverged");
+        assert_eq!(
+            top.channel,
+            "/load",
+            "a zero crossing outranked a real difference: {:?}",
+            p.channels
+                .iter()
+                .map(|c| (c.channel.as_str(), c.worst_rel, c.worst_scaled))
+                .collect::<Vec<_>>()
+        );
+        // The pointwise relative difference on /wave really is enormous — which is exactly why
+        // it must not be the ranking key, and why it is still reported.
+        let wave = p.channels.iter().find(|c| c.channel == "/wave").unwrap();
+        assert!(wave.worst_rel > 0.01, "rel was {}", wave.worst_rel);
+        assert!(wave.worst_scaled < 1e-8, "scaled was {}", wave.worst_scaled);
     }
 
     #[test]

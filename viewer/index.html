@@ -904,7 +904,9 @@ function buildLanes(){
   if(pk.length) S.lanes.push({kind:'stack', title:'power · W, stacked by rail', keys:pk});
   for(const [n,rows] of Object.entries(b.scalars||{})) S.lanes.push({kind:'series', title:n, rows, color:TEAL});
   if((b.lag_ms||[]).length) S.lanes.push({kind:'series', title:'wall − sim · ms', rows:b.lag_ms, color:VIOLET});
-  if(S.div) S.lanes.push({kind:'log', title:`|Δ| vs B on ${S.div.channel} · log`, div:S.div});
+  if(S.div) S.lanes.push({kind:'log',
+    title:`Δ vs B on ${S.div.channel}${S.div.name?' · '+S.div.name:''} · against channel scale · log`,
+    div:S.div});
   el('plots').innerHTML = S.lanes.map((l,i) =>
     `<div class="lane"><h3><span>${esc(l.title)}</span><em id="lv${i}"></em></h3>
      <canvas id="lc${i}" height="54" role="img" aria-label="${esc(l.title)}"></canvas></div>`).join('');
@@ -941,23 +943,37 @@ function paintLanes(){
       });
       cur = series.reduce((s,a)=>{ const r=sampleAt(a,S.t); return s+(r?r[1]:0); },0).toFixed(1)+' W';
     } else if(l.kind==='log'){
-      const FLOOR=-14, CEIL=-6, rows=l.div.curve;
+      const rows=l.div.curve;
+      // Column 3 is |Δ| against the channel's own scale, which is the honest axis: the
+      // POINTWISE relative difference (column 2) spikes wherever the signal itself crosses
+      // zero, and a lane drawn on it shows the zero crossings rather than the divergence.
+      // Older curves carry fewer columns; fall back rather than draw nothing.
+      const val = p => (p.length>3 ? p[3] : (p.length>2 ? p[2] : p[1]));
+      // Fit the log axis to the data. It was pinned at 1e-14..1e-6, so any difference above a
+      // microunit drew as a flat line along the top: the demo pair peaks near 3e-2 and was
+      // saturated for most of the run, which is exactly when the shape matters.
+      let lo=Infinity, hi=0;
+      for(const p of rows){ const d=val(p); if(d>0){ if(d<lo) lo=d; if(d>hi) hi=d; } }
+      const FLOOR = hi>0 ? Math.floor(Math.log10(lo===Infinity?hi:lo))-1 : -14;
+      const CEIL  = hi>0 ? Math.ceil(Math.log10(hi))+1 : -6;
+      const SPAN  = (CEIL-FLOOR)||1;
       x.beginPath();
       rows.forEach((p,j)=>{
         const px=j/(rows.length-1)*w;
-        const v=p[1]>0?Math.max(FLOOR,Math.log10(p[1])):FLOOR;
-        const py=h-2-(v-FLOOR)/(CEIL-FLOOR)*(h-4);
+        const d=val(p);
+        const v=d>0?Math.max(FLOOR,Math.log10(d)):FLOOR;
+        const py=h-2-(v-FLOOR)/SPAN*(h-4);
         j?x.lineTo(px,py):x.moveTo(px,py);
       });
       x.strokeStyle=RED; x.lineWidth=1.4; x.stroke();
       x.lineTo(w,h); x.lineTo(0,h); x.closePath(); x.fillStyle='rgba(255,106,106,.16)'; x.fill();
-      const onset=rows.findIndex(p=>p[1]>0);
+      const onset=rows.findIndex(p=>val(p)>0);
       if(onset>=0){ const px=onset/(rows.length-1)*w;
         x.strokeStyle=RED; x.setLineDash([3,3]); x.beginPath();
         x.moveTo(px+.5,0); x.lineTo(px+.5,h); x.stroke(); x.setLineDash([]); }
       const idx=Math.min(rows.length-1,
         Math.round((S.t-S.span[0])/((S.span[1]-S.span[0])||1)*(rows.length-1)));
-      cur = rows[idx] && rows[idx][1]>0 ? rows[idx][1].toExponential(2) : 'identical';
+      cur = rows[idx] && val(rows[idx])>0 ? val(rows[idx]).toExponential(2) : 'identical';
     } else {
       const ys=l.rows.map(p=>p[1]);
       let lo=Math.min(...ys), hi=Math.max(...ys);
@@ -1172,13 +1188,17 @@ function compare(){
   }
   strip.innerHTML = x;
 
-  const ch = (v.kind==='diverged'||v.kind==='within-tolerance'||v.kind==='non-finite')
-    ? v.channel : Object.keys(S.bundle?.poses||{})[0];
+  // The channel with the LARGEST relative difference, not the one the verdict happened to
+  // name. The verdict names where a threshold was first crossed, which is an artifact of emit
+  // order and of the tolerance; the ranked list names the quantity that actually moved most.
+  const ch = (v.channels && v.channels.length) ? v.channels[0].channel
+    : ((v.kind==='diverged'||v.kind==='within-tolerance'||v.kind==='non-finite')
+        ? v.channel : Object.keys(S.bundle?.poses||{})[0]);
   S.div = null;
   if(ch){
     try {
       const curve = JSON.parse(divergence_curve(S.A.bytes, S.B.bytes, ch));
-      if(curve.length) S.div = {channel:ch, curve};
+      if(curve.length) S.div = {channel:ch, curve, name:(v.channels&&v.channels[0]&&v.channels[0].channel===ch)?v.channels[0].name:''};
     } catch(e){ /* a channel absent from one run simply has no lane */ }
   }
   buildLanes(); paintLanes(); paintInspector();
