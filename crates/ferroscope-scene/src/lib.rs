@@ -614,7 +614,7 @@ impl Scene {
                     })
                     .collect();
                 robot
-                    .log_pose(&mut rec, t, &q, prefix)
+                    .log_pose_at(&mut rec, t, &q, prefix, r.at)
                     .map_err(|e| e.to_string())?;
                 for (name, v) in &q {
                     rec.scalar(&format!("/joints/{}/{name}", r.id), t, *v, "rad")
@@ -679,6 +679,51 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two joints and one moving link: enough to have a pose worth mounting.
+    const TINY_URDF: &str = r#"<robot name="tiny">
+      <link name="base">
+        <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>
+      </link>
+      <link name="arm">
+        <collision><geometry><box size="0.1 0.1 0.4"/></geometry></collision>
+      </link>
+      <joint name="j" type="revolute">
+        <parent link="base"/><child link="arm"/>
+        <origin xyz="0 0 0.1"/><axis xyz="0 1 0"/>
+        <limit lower="-1" upper="1" effort="1" velocity="1"/>
+      </joint>
+    </robot>"#;
+
+    #[test]
+    fn mounting_a_robot_changes_the_recording_not_only_the_report() {
+        // `at` was honoured when computing ground clearance and dropped before the transforms
+        // were written, so two visibly different scenes recorded byte-identically and their
+        // determinism receipts could not tell them apart — the one thing a receipt is for.
+        let mk = |z: f64| {
+            Scene::parse(&format!(
+                r#"{{"name":"t","duration_s":0.2,"rate_hz":50,
+                     "robots":[{{"id":"r","urdf":"tiny","at":[0,0,{z}],"sweep":"each"}}]}}"#
+            ))
+            .unwrap()
+            .record(|_| Some(TINY_URDF.to_string()))
+            .unwrap()
+        };
+        let ground = mk(0.0);
+        let mounted = mk(0.25);
+        assert_ne!(
+            ground.receipt.trace_digest, mounted.receipt.trace_digest,
+            "mounting the robot did not reach the recording"
+        );
+        // And the clearance moves with it, by the mount height.
+        let gz = ground.lowest.as_ref().unwrap().0;
+        let mz = mounted.lowest.as_ref().unwrap().0;
+        assert!(
+            (mz - gz - 0.25).abs() < 1e-9,
+            "clearance moved by {}, expected 0.25",
+            mz - gz
+        );
+    }
 
     #[test]
     fn a_minimal_scene_reads_and_records() {

@@ -857,13 +857,36 @@ impl Robot {
         q: &[(String, f64)],
         topic_prefix: &str,
     ) -> ferroscope_mcap::Result<()> {
+        self.log_pose_at(rec, t, q, topic_prefix, [0.0; 3])
+    }
+
+    /// [`Robot::log_pose`] with the base mounted somewhere other than the world origin.
+    ///
+    /// The offset has to reach the RECORDING, not merely a caller's own bookkeeping. A scene
+    /// format that accepted a mount point, honoured it when reporting ground clearance, and
+    /// dropped it before writing the transforms produced two recordings that were byte-for-byte
+    /// identical for two visibly different scenes — and a determinism receipt that could not
+    /// tell them apart, which is the one thing it exists to do.
+    pub fn log_pose_at<W: Write>(
+        &self,
+        rec: &mut Recorder<W>,
+        t: Stamp,
+        q: &[(String, f64)],
+        topic_prefix: &str,
+        at: [f64; 3],
+    ) -> ferroscope_mcap::Result<()> {
         for (link, pose) in self.forward_kinematics(q) {
+            let p = [
+                pose.translation[0] + at[0],
+                pose.translation[1] + at[1],
+                pose.translation[2] + at[2],
+            ];
             rec.transform(
                 &format!("{topic_prefix}/tf/{link}"),
                 t,
                 "world",
                 &link,
-                pose.translation,
+                p,
                 pose.rotation,
             )?;
         }

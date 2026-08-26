@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-cli"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-live",
@@ -692,7 +692,7 @@ version = "0.1.1"
 
 [[package]]
 name = "ferroscope-receipt"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "ferroscope-run"
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-scene"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-urdf"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ferroscope-mcap",
  "ferroscope-schema",

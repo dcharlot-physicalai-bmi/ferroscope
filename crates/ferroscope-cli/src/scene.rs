@@ -96,11 +96,7 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
         rec.compute_fraction * 100.0
     );
     if let Some((z, who)) = &rec.lowest {
-        if *z < -1e-6 {
-            println!("  clearance    BELOW THE GROUND PLANE: {who} reached {z:.4} m");
-        } else {
-            println!("  clearance    lowest point {z:.4} m ({who})");
-        }
+        print_clearance(*z, who);
     }
     println!("  open it      https://ferroscope.physicalai-bmi.org/viewer");
     Ok(true)
@@ -217,4 +213,34 @@ fn sweep_cases(path: &str, text: &str, out: &str, check_only: bool) -> Result<bo
         results.len() - 1
     );
     Ok(failed == 0)
+}
+
+/// Report the lowest point a scene reached — and, when it is under the floor, the mount height
+/// that fixes it.
+///
+/// A joint sweep is kinematic: it walks each joint through its declared range and asks nothing
+/// about contact, so an arm standing at the origin will put its own gripper under the ground
+/// exactly as a real one would if you bolted it to the floor. Saying only "BELOW THE GROUND
+/// PLANE" reads as a defect in the tool. Saying how high to mount it turns the same measurement
+/// into the next action, and the number is one the run already computed.
+pub fn print_clearance(z: f64, who: &str) {
+    if z >= -1e-6 {
+        println!("  clearance    lowest point {z:.4} m ({who})");
+        return;
+    }
+    println!("  clearance    BELOW THE GROUND PLANE: {who} reached {z:.4} m");
+    // A centimetre of margin, rounded up, so the suggestion is a number a person would type.
+    let mount = ((-z + 0.01) * 100.0).ceil() / 100.0;
+    // A robot's links are recorded as "<robot id>/<link>", so the thing to mount is named in
+    // the measurement itself.
+    match who.split_once('/').map(|(id, _)| id) {
+        Some(id) => println!(
+            "               a joint sweep ignores contact, so a robot at the origin reaches \
+             under the floor. Mount it: \"at\":[0,0,{mount:.2}] on robot \"{id}\"."
+        ),
+        None => println!(
+            "               raise it by {mount:.2} m, or lower the ground, if the scene is \
+             meant to stay above it."
+        ),
+    }
 }

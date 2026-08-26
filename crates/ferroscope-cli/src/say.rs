@@ -100,9 +100,7 @@ pub fn run(phrase: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         rec.compute_fraction * 100.0
     );
     if let Some((z, who)) = &rec.lowest {
-        if *z < -1e-6 {
-            println!("  clearance    BELOW THE GROUND PLANE: {who} reached {z:.4} m");
-        }
+        crate::scene::print_clearance(*z, who);
     }
     println!("  open it      https://ferroscope.physicalai-bmi.org/viewer");
     if !show_json {

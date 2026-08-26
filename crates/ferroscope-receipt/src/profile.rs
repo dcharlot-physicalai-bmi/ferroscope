@@ -32,6 +32,9 @@ use crate::{compare, Tolerance, Trace, Verdict};
 /// Steps after the onset below which no shape is claimed.
 const MIN_SHAPE_STEPS: usize = 20;
 
+/// Non-zero samples a shape window must carry before it is trusted to represent the signal.
+const MIN_NONZERO: usize = 3;
+
 /// How much a relative difference must grow across the window to be called growing, and shrink
 /// to be called fading. Between the two it is an offset that settled.
 const GROWTH_FACTOR: f64 = 4.0;
@@ -415,15 +418,20 @@ fn shape_of(series: &[(u64, f64)]) -> Shape {
     if live.len() < MIN_SHAPE_STEPS {
         return Shape::TooShort { steps: live.len() };
     }
-    let tenth = (live.len() / 10).max(3);
-    // The ENVELOPE of each window, not its median. Physical channels are intermittent — a leg's
-    // actuation power is zero through every flight phase, a contact force is zero between
-    // touchdowns — so more than half a window can be exactly zero while the difference is
-    // perfectly alive. A median then reads 0 and the shape came out "fading: a transient" for a
-    // divergence that in fact persisted to the last step. A high quantile survives the zeros
-    // without chasing a single spike the way a bare max would.
-    let head = quantile(&live[..tenth], 0.9);
-    let tail = quantile(&live[live.len() - tenth..], 0.9);
+    // The ENVELOPE of each window, over a window WIDE ENOUGH to contain the signal. Physical
+    // channels are intermittent — a leg's actuation power is zero through every flight phase, a
+    // contact force is zero between touchdowns — and both halves of that matter:
+    //
+    //   * A median reads 0 through a live divergence, so the envelope is used instead. That
+    //     alone was not enough.
+    //   * A fixed 10 % window can land ENTIRELY inside one gap. Measured on a real 600-step
+    //     demo pair: the last 10 % held max 0 while the last 20 % held 9.4e-6, above the head's
+    //     1.9e-6 — a GROWING difference reported as "fading: a transient".
+    //
+    // So each window grows until it holds a few non-zero samples. If it cannot, the difference
+    // really has stopped, and only then does "fading" mean what the word says.
+    let head = end_envelope(&live, false);
+    let tail = end_envelope(&live, true);
     if head <= 0.0 {
         // Started at an exact-zero difference (signed zero); nothing to take a ratio against.
         return if tail > 0.0 {
@@ -448,6 +456,19 @@ fn shape_of(series: &[(u64, f64)]) -> Shape {
         Shape::Fading { ratio }
     } else {
         Shape::Settled { ratio }
+    }
+}
+
+/// The envelope of the window at one end of the series, widened until it carries signal.
+fn end_envelope(v: &[f64], from_end: bool) -> f64 {
+    let mut n = (v.len() / 10).max(3);
+    let half = (v.len() / 2).max(n);
+    loop {
+        let w = if from_end { &v[v.len() - n..] } else { &v[..n] };
+        if w.iter().filter(|x| **x > 0.0).count() >= MIN_NONZERO || n >= half {
+            return quantile(w, 0.9);
+        }
+        n = (n * 2).min(half);
     }
 }
 
@@ -757,6 +778,40 @@ mod tests {
         assert!(
             matches!(d.shape, Shape::Settled { .. }),
             "an intermittent but persistent difference read as {:?}",
+            d.shape
+        );
+    }
+
+    #[test]
+    fn a_tail_window_landing_in_a_gap_does_not_read_as_fading() {
+        // The case measured on a real 600-step demo pair: an intermittent channel whose
+        // difference GROWS, where the last tenth of the series falls entirely inside a gap.
+        //
+        // The duty cycle has to be long relative to the window for this to bite — the first
+        // version of this test used a period of 10 against a 60-sample window, so the window
+        // always caught a burst, and the mutation that pins the fix passed it. Period 200 with
+        // 60 steps of stance puts steps 540..599 wholly in a gap while the head window
+        // 0..59 is wholly in a burst.
+        let mut a = Trace::default();
+        let mut b = Trace::default();
+        let n = 600u64;
+        for i in 0..n {
+            let phase = i % 200;
+            let stance = phase < 60;
+            let base = if stance { 5.0 } else { 0.0 };
+            let d = if stance {
+                1e-6 * (1.0 + i as f64 / 50.0)
+            } else {
+                0.0
+            };
+            a.push(i, "/leg/power", vec![base]);
+            b.push(i, "/leg/power", vec![base + d]);
+        }
+        let p = profile(&a, &b, Tolerance::default());
+        let d = p.dominant().expect("the channel diverged");
+        assert!(
+            matches!(d.shape, Shape::Growing { .. }),
+            "a growing difference whose tail window fell in a gap read as {:?}",
             d.shape
         );
     }
