@@ -2,7 +2,7 @@
 name = "ferroscope-run"
 description = "Scenarios, cases, suites and verdicts for physical AI, as a local Rust harness: no manifest, no container, no machine to wait for. Every run is one MCAP file with its own receipt and its own joule cost."
 # 0.1.1 adds run.geometry and re-exports the scene types at the crate root.
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

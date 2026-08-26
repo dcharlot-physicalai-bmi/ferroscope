@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{compare, Tolerance, Trace, Verdict};
+use crate::{Tolerance, Trace, Verdict, compare};
 
 /// Steps after the onset below which no shape is claimed.
 const MIN_SHAPE_STEPS: usize = 20;
@@ -555,7 +555,13 @@ pub fn spec_differences(a: &crate::RunSpec, b: &crate::RunSpec) -> Vec<FieldDiff
         b.build.clone(),
         "the toolchain moved, not the experiment — a version bump alone makes an archive incomparable",
     );
-    pairs_diff(&a.assets, &b.assets, "asset", "a mesh, URDF or policy changed; that explains forces that otherwise read as nondeterminism", &mut out);
+    pairs_diff(
+        &a.assets,
+        &b.assets,
+        "asset",
+        "a mesh, URDF or policy changed; that explains forces that otherwise read as nondeterminism",
+        &mut out,
+    );
     pairs_diff(
         &a.config,
         &b.config,

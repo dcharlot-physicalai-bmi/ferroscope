@@ -965,6 +965,10 @@ const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
 cargo install ferroscope-cli      # installs a binary called `ferroscope`
 ```
 
+Needs **Rust 1.98** and builds on **edition 2024**. The declared `rust-version` is checked by
+its own CI job on exactly that toolchain, because a promise nothing tests is one that has
+already stopped being true somewhere.
+
 > The bare name `ferroscope` on crates.io belongs to an unrelated Rust debugger, published in
 > July 2025. The libraries keep the namespace; the CLI crate carries the `-cli` suffix and the
 > binary it installs is still called `ferroscope`.

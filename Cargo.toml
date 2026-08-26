@@ -21,8 +21,8 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dcharlot-physicalai-bmi/ferroscope"
 homepage = "https://ferroscope.physicalai-bmi.org"
@@ -31,19 +31,19 @@ keywords = ["robotics", "mcap", "observability", "simulation", "energy"]
 categories = ["science::robotics", "visualization", "wasm"]
 
 [workspace.dependencies]
-ferroscope-mcap = { version = "0.1.5", path = "crates/ferroscope-mcap" }
-ferroscope-schema = { version = "0.1.9", path = "crates/ferroscope-schema" }
-ferroscope-ledger = { version = "0.1.0", path = "crates/ferroscope-ledger" }
-ferroscope-receipt = { version = "0.1.3", path = "crates/ferroscope-receipt" }
-ferroscope-run = { version = "0.1.0", path = "crates/ferroscope-run" }
-ferroscope-mesh = { version = "0.1.0", path = "crates/ferroscope-mesh" }
-ferroscope-power = { version = "0.1.1", path = "crates/ferroscope-power" }
-ferroscope-live = { version = "0.1.3", path = "crates/ferroscope-live" }
+ferroscope-mcap = { version = "0.1.6", path = "crates/ferroscope-mcap" }
+ferroscope-schema = { version = "0.1.10", path = "crates/ferroscope-schema" }
+ferroscope-ledger = { version = "0.1.1", path = "crates/ferroscope-ledger" }
+ferroscope-receipt = { version = "0.1.4", path = "crates/ferroscope-receipt" }
+ferroscope-run = { version = "0.1.4", path = "crates/ferroscope-run" }
+ferroscope-mesh = { version = "0.1.1", path = "crates/ferroscope-mesh" }
+ferroscope-power = { version = "0.1.2", path = "crates/ferroscope-power" }
+ferroscope-live = { version = "0.1.4", path = "crates/ferroscope-live" }
 ferroscope-cad = { version = "0.1.0", path = "crates/ferroscope-cad" }
-ferroscope-scene = { version = "0.1.3", path = "crates/ferroscope-scene" }
-ferroscope-phrase = { version = "0.1.0", path = "crates/ferroscope-phrase" }
+ferroscope-scene = { version = "0.1.4", path = "crates/ferroscope-scene" }
+ferroscope-phrase = { version = "0.1.1", path = "crates/ferroscope-phrase" }
 ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }
-ferroscope-urdf = { version = "0.1.3", path = "crates/ferroscope-urdf" }
+ferroscope-urdf = { version = "0.1.4", path = "crates/ferroscope-urdf" }
 
 [profile.release]
 opt-level = 3

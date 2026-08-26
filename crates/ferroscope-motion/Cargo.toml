@@ -1,7 +1,7 @@
 [package]
 name = "ferroscope-motion"
 description = "The SO-101 under real dynamics: a ferromotion rollout recorded with a determinism receipt, an actuation rail computed from joint torques, and a production note. The run is produced and certified by the same stack that renders it."
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version = "1.85"
 license.workspace = true
@@ -16,7 +16,7 @@ name = "ferroscope-motion"
 path = "src/main.rs"
 
 [dependencies]
-ferromotion-core = "0.58"
+ferromotion-core = "0.62"
 ferroscope-schema = { workspace = true }
 ferroscope-receipt = { workspace = true }
 ferroscope-ledger = { workspace = true }

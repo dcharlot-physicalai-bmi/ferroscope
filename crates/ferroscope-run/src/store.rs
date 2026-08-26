@@ -266,7 +266,7 @@ impl Predicate {
             other => {
                 return Err(format!(
                     "unknown predicate operator {other:?} (use = ~ < > @)"
-                ))
+                ));
             }
         };
         Ok(Predicate { key, op, value })
@@ -360,20 +360,20 @@ impl Query {
         if !self.outcome.is_empty() && !self.outcome.contains(&r.outcome) {
             return false;
         }
-        if let Some(q) = &self.search {
-            if !r.scenario.to_lowercase().contains(&q.to_lowercase()) {
-                return false;
-            }
+        if let Some(q) = &self.search
+            && !r.scenario.to_lowercase().contains(&q.to_lowercase())
+        {
+            return false;
         }
-        if let Some(t) = self.since_us {
-            if r.started_us < t {
-                return false;
-            }
+        if let Some(t) = self.since_us
+            && r.started_us < t
+        {
+            return false;
         }
-        if let Some(t) = self.until_us {
-            if r.started_us > t {
-                return false;
-            }
+        if let Some(t) = self.until_us
+            && r.started_us > t
+        {
+            return false;
         }
         if !self.params.iter().all(|p| p.matches_params(&r.params)) {
             return false;
@@ -569,34 +569,46 @@ mod tests {
         let r = rec("a", "hop", Outcome::Passed, 100);
 
         // = typed equality on a parameter
-        assert!(Predicate::parse("seed:=:42")
-            .unwrap()
-            .matches_params(&r.params));
-        assert!(!Predicate::parse("seed:=:7")
-            .unwrap()
-            .matches_params(&r.params));
+        assert!(
+            Predicate::parse("seed:=:42")
+                .unwrap()
+                .matches_params(&r.params)
+        );
+        assert!(
+            !Predicate::parse("seed:=:7")
+                .unwrap()
+                .matches_params(&r.params)
+        );
 
         // < and > numeric ordering on a result
-        assert!(Predicate::parse("final_z:<:0.4")
-            .unwrap()
-            .matches_map(&r.results));
-        assert!(!Predicate::parse("final_z:>:0.4")
-            .unwrap()
-            .matches_map(&r.results));
+        assert!(
+            Predicate::parse("final_z:<:0.4")
+                .unwrap()
+                .matches_map(&r.results)
+        );
+        assert!(
+            !Predicate::parse("final_z:>:0.4")
+                .unwrap()
+                .matches_map(&r.results)
+        );
 
         // ~ case-insensitive substring
         let mut with_label = r.clone();
         with_label
             .results
             .push(("label".into(), Value::Str("Warehouse Aisle".into())));
-        assert!(Predicate::parse("label:~:warehouse")
-            .unwrap()
-            .matches_map(&with_label.results));
+        assert!(
+            Predicate::parse("label:~:warehouse")
+                .unwrap()
+                .matches_map(&with_label.results)
+        );
 
         // @ traverses a dotted path; every other operator treats the dot as literal.
-        assert!(Predicate::parse("grasp.quality:@:pass")
-            .unwrap()
-            .matches_map(&r.results));
+        assert!(
+            Predicate::parse("grasp.quality:@:pass")
+                .unwrap()
+                .matches_map(&r.results)
+        );
         assert!(
             !Predicate::parse("grasp.quality:=:pass")
                 .unwrap()

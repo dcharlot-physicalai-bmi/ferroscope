@@ -73,9 +73,9 @@ pub mod store;
 mod harness;
 
 pub use ferroscope_schema::{Contact, Geometry, JointState, Shape, Stamp};
-pub use harness::{Case, Clause, Harness, Scenario, Selection, Suite, CASE_CAP};
+pub use harness::{CASE_CAP, Case, Clause, Harness, Scenario, Selection, Suite};
 pub use run::{Check, Halt, Metric, Outcome, Run};
-pub use store::{Op, Predicate, Query, Record, Store, DEFAULT_ROOT};
+pub use store::{DEFAULT_ROOT, Op, Predicate, Query, Record, Store};
 
 /// Everything a scenario file needs in one line.
 pub mod prelude {

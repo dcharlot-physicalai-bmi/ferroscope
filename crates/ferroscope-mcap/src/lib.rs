@@ -35,8 +35,8 @@ mod crc32;
 mod read;
 mod write;
 
-pub use crc32::{crc32, Crc32};
-pub use read::{read, read_prefix, record_spans, Log, RecordSpan, Statistics};
+pub use crc32::{Crc32, crc32};
+pub use read::{Log, RecordSpan, Statistics, read, read_prefix, record_spans};
 pub use write::{Writer, WriterOptions};
 
 /// The eight bytes that open and close every MCAP file. The `0x30` is ASCII `'0'`: the

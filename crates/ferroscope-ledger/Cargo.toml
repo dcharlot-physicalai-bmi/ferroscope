@@ -1,7 +1,8 @@
 [package]
 name = "ferroscope-ledger"
 description = "Energy accounting for embodied runs: E_task = E_compute + E_actuation, integrated from measured power with an explicit refusal when the sampling cannot support the number."
-version.workspace = true
+# 0.1.1: workspace moved to Rust 1.98 and edition 2024.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

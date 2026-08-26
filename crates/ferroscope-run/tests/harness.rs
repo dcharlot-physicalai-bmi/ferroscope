@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use ferroscope_run::prelude::*;
-use ferroscope_run::{Case, Clause, Outcome, Query, Selection, Store, CASE_CAP};
+use ferroscope_run::{CASE_CAP, Case, Clause, Outcome, Query, Selection, Store};
 
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("fsrun-{tag}-{}", std::process::id()));

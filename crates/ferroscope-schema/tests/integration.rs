@@ -6,9 +6,9 @@
 
 use ferroscope_ledger::Rail;
 use ferroscope_mcap::{Writer, WriterOptions};
-use ferroscope_receipt::{compare, Precision, Receipt, Tolerance, Verdict};
+use ferroscope_receipt::{Precision, Receipt, Tolerance, Verdict, compare};
 use ferroscope_schema::{
-    json, mcap, trace_from, verify, Contact, JointState, Recorder, Stamp, RECEIPT_BLOCK,
+    Contact, JointState, RECEIPT_BLOCK, Recorder, Stamp, json, mcap, trace_from, verify,
 };
 
 /// A short deterministic run: a mass on a spring, sampled at 1 kHz.
@@ -156,10 +156,12 @@ fn an_empty_production_note_writes_no_block() {
     // "Nothing to say" and "a block full of nothing" are different files; the reader that
     // checks for the block's presence must be able to trust it.
     let bytes = record_with_production(3, None, Vec::new);
-    assert!(mcap::read(&bytes)
-        .unwrap()
-        .metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
-        .is_none());
+    assert!(
+        mcap::read(&bytes)
+            .unwrap()
+            .metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
+            .is_none()
+    );
 }
 
 #[test]

@@ -100,13 +100,11 @@ impl Measure {
                     .unwrap_or(f64::NAN),
                 // Unscoped, the honest reading is the LAST body to settle: "everything has come
                 // to rest" is what a whole-scene settle time means.
-                None => r.settled_by.iter().map(|(_, t)| *t).fold(f64::NAN, |a, b| {
-                    if a.is_nan() {
-                        b
-                    } else {
-                        a.max(b)
-                    }
-                }),
+                None => r
+                    .settled_by
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .fold(f64::NAN, |a, b| if a.is_nan() { b } else { a.max(b) }),
             },
         }
     }
@@ -155,15 +153,15 @@ impl Check {
                 ),
             );
         }
-        if let Some(lo) = self.at_least {
-            if v < lo {
-                return (false, format!("{what} = {v:.4}, below {lo}"));
-            }
+        if let Some(lo) = self.at_least
+            && v < lo
+        {
+            return (false, format!("{what} = {v:.4}, below {lo}"));
         }
-        if let Some(hi) = self.at_most {
-            if v > hi {
-                return (false, format!("{what} = {v:.4}, above {hi}"));
-            }
+        if let Some(hi) = self.at_most
+            && v > hi
+        {
+            return (false, format!("{what} = {v:.4}, above {hi}"));
         }
         (true, format!("{what} = {v:.4}"))
     }
@@ -200,12 +198,12 @@ fn substitute(v: &Value, set: &[(String, f64)]) -> Value {
     match v {
         Value::Obj(kv) => {
             // A one-key object whose key is "$" is a hole, not an object.
-            if kv.len() == 1 && kv[0].0 == "$" {
-                if let Value::Str(name) = &kv[0].1 {
-                    if let Some((_, x)) = set.iter().find(|(k, _)| k == name) {
-                        return Value::Num(*x);
-                    }
-                }
+            if kv.len() == 1
+                && kv[0].0 == "$"
+                && let Value::Str(name) = &kv[0].1
+                && let Some((_, x)) = set.iter().find(|(k, _)| k == name)
+            {
+                return Value::Num(*x);
             }
             Value::Obj(
                 kv.iter()
@@ -222,13 +220,14 @@ fn substitute(v: &Value, set: &[(String, f64)]) -> Value {
 fn holes(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Obj(kv) => {
-            if kv.len() == 1 && kv[0].0 == "$" {
-                if let Value::Str(name) = &kv[0].1 {
-                    if !out.contains(name) {
-                        out.push(name.clone());
-                    }
-                    return;
+            if kv.len() == 1
+                && kv[0].0 == "$"
+                && let Value::Str(name) = &kv[0].1
+            {
+                if !out.contains(name) {
+                    out.push(name.clone());
                 }
+                return;
             }
             kv.iter().for_each(|(_, x)| holes(x, out));
         }
@@ -489,11 +488,7 @@ impl Suite {
 fn trim(v: f64) -> String {
     let s = format!("{v:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
-    if s.is_empty() {
-        "0".into()
-    } else {
-        s
-    }
+    if s.is_empty() { "0".into() } else { s }
 }
 
 #[cfg(test)]

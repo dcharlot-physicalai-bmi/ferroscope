@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use ferroscope_mcap::{read, Writer, WriterOptions};
+use ferroscope_mcap::{Writer, WriterOptions, read};
 
 fn sample() -> Vec<u8> {
     let mut w = Writer::new(

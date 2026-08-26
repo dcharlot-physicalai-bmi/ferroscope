@@ -44,10 +44,10 @@ mod profile;
 mod sha256;
 
 pub use profile::{
-    declared_fields, profile, spec_differences, ChannelDivergence, FieldDiff, Profile, Shape,
-    Structural,
+    ChannelDivergence, FieldDiff, Profile, Shape, Structural, declared_fields, profile,
+    spec_differences,
 };
-pub use sha256::{hex, sha256, Sha256};
+pub use sha256::{Sha256, hex, sha256};
 
 use std::fmt;
 
@@ -535,13 +535,19 @@ impl fmt::Display for Verdict {
                 rel_step,
                 rel_channel,
             } => {
-                write!(f, "within tolerance: worst |Δ| {max_abs:.3e} at step {at_step} on {channel}")?;
+                write!(
+                    f,
+                    "within tolerance: worst |Δ| {max_abs:.3e} at step {at_step} on {channel}"
+                )?;
                 // Only spell out the relative worst separately when it is somewhere else;
                 // naming one location for two statistics is what made the old line wrong.
                 if rel_step == at_step && rel_channel == channel {
                     write!(f, ", rel {max_rel:.3e}")
                 } else {
-                    write!(f, "; worst rel {max_rel:.3e} at step {rel_step} on {rel_channel}")
+                    write!(
+                        f,
+                        "; worst rel {max_rel:.3e} at step {rel_step} on {rel_channel}"
+                    )
                 }
             }
             Verdict::Diverged {
@@ -674,13 +680,13 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
         Verdict::BitExact
     } else {
         // A difference that is real but subtracts to zero still has a location.
-        if worst_channel.is_empty() {
-            if let Some((step, ch)) = first_bit_diff {
-                worst_step = step;
-                worst_channel = ch.clone();
-                rel_step = step;
-                rel_channel = ch;
-            }
+        if worst_channel.is_empty()
+            && let Some((step, ch)) = first_bit_diff
+        {
+            worst_step = step;
+            worst_channel = ch.clone();
+            rel_step = step;
+            rel_channel = ch;
         }
         if rel_channel.is_empty() {
             rel_step = worst_step;

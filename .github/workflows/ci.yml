@@ -17,6 +17,21 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  msrv:
+    # The declared rust-version is a promise to anyone running `cargo install`, and a promise
+    # nothing checks is one that has already stopped being true somewhere. Pinned to the exact
+    # version the workspace declares, so this job fails the day a newer feature sneaks in.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: read the declared MSRV
+        id: msrv
+        run: echo "v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ steps.msrv.outputs.v }}" }
+      - run: cargo build --workspace --all-features
+      - run: echo "the workspace builds on its declared MSRV ${{ steps.msrv.outputs.v }}"
+
   wasm:
     # The claim on the tin: the four libraries build for the browser unchanged. A claim that
     # is not in CI is a claim that has already stopped being true somewhere.

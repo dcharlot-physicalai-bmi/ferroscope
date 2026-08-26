@@ -3,7 +3,7 @@ name = "ferroscope-wasm"
 description = "Ferroscope in the browser: open a recording, verify its receipt, and diff two runs, entirely client-side. No server, no upload, no account."
 # 0.1.1 tracks the bundle gaining geometry and frame tracks for the 3-D panel.
 # 0.1.2 adds the attachment() accessor the 3-D panel loads glTF through.
-version = "0.1.8"
+version = "0.1.9"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

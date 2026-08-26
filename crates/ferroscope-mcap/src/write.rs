@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use crate::{op, Channel, Crc32, Error, Result, Schema, MAGIC};
-use crate::{put_bytes, put_map_ss, put_map_u16_u64, put_str, put_u16, put_u32, put_u64, put_u8};
+use crate::{Channel, Crc32, Error, MAGIC, Result, Schema, op};
+use crate::{put_bytes, put_map_ss, put_map_u16_u64, put_str, put_u8, put_u16, put_u32, put_u64};
 
 /// Writer configuration.
 #[derive(Clone, Debug)]

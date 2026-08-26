@@ -76,7 +76,7 @@ pub fn body_glb(half: [f64; 3], color: [f32; 4]) -> Vec<u8> {
     for i in &idx {
         bin.extend_from_slice(&i.to_le_bytes());
     }
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
 

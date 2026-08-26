@@ -20,7 +20,7 @@
 //! ferroscope-motion out.mcap --passive       gravity only; exit 1 if energy drifts > 5 %
 //! ```
 
-use ferromotion_core::{from_urdf_full, inverse_dynamics, mass_matrix, LinkInertia, Robot};
+use ferromotion_core::{LinkInertia, Robot, from_urdf_full, inverse_dynamics, mass_matrix};
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{Precision, RunSpec};
 use ferroscope_schema::{Recorder, Stamp};

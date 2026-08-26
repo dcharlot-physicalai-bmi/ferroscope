@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::json::{Obj, Value};
-use crate::{mcap, verify, PRODUCTION_BLOCK, RECEIPT_BLOCK};
+use crate::{PRODUCTION_BLOCK, RECEIPT_BLOCK, mcap, verify};
 
 /// Series longer than this are strided down. A 1080 px lane cannot show more.
 const MAX_POINTS: usize = 4_000;

@@ -5,7 +5,7 @@
 //! anything having to be deterministic about the order of operations. That is what lets a
 //! described scene carry the same determinism receipt as a simulated one.
 
-use crate::{vec3, Problem};
+use crate::{Problem, vec3};
 use ferroscope_schema::json::Value;
 
 /// The motions a scene can describe.

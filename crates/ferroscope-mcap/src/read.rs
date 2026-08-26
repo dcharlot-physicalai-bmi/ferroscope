@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{op, Attachment, Channel, Cur, Error, Message, Result, Schema, MAGIC};
+use crate::{Attachment, Channel, Cur, Error, MAGIC, Message, Result, Schema, op};
 
 /// The `Statistics` record from the summary section, when the writer produced one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -129,7 +129,7 @@ pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
                     offset: pos + 9,
                     want: usize::MAX,
                     have: body_end - pos - 9,
-                })
+                });
             }
         };
         if body_end - pos - 9 < len {

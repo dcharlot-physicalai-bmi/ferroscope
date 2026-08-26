@@ -261,11 +261,7 @@ fn cmd_verify(path: &str) -> Result<bool, String> {
 }
 
 fn mark(ok: bool) -> &'static str {
-    if ok {
-        "ok"
-    } else {
-        "MISMATCH"
-    }
+    if ok { "ok" } else { "MISMATCH" }
 }
 
 fn cmd_energy(path: &str) -> Result<bool, String> {
@@ -459,10 +455,10 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         println!("  {}", p.verdict);
     }
     // The verdict names an array slot; the recording knows what lives in that slot.
-    if let Verdict::Diverged { channel, index, .. } = &p.verdict {
-        if let Some(name) = labels.get(channel).and_then(|l| l.get(*index)) {
-            println!("  that is       {channel} {name}");
-        }
+    if let Verdict::Diverged { channel, index, .. } = &p.verdict
+        && let Some(name) = labels.get(channel).and_then(|l| l.get(*index))
+    {
+        println!("  that is       {channel} {name}");
     }
 
     if let Some(s) = &p.structural {
@@ -544,16 +540,16 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         print_energy_delta(&x.quote, &y.quote);
     }
 
-    if let Verdict::WithinTolerance { .. } = &p.verdict {
-        if let Some(r) = &ra {
-            println!(
-                "  → tolerance was abs {:.1e} / rel {:.1e}; nothing exceeded both. The digest \
+    if let Verdict::WithinTolerance { .. } = &p.verdict
+        && let Some(r) = &ra
+    {
+        println!(
+            "  → tolerance was abs {:.1e} / rel {:.1e}; nothing exceeded both. The digest \
                  itself cannot see below {:.1e} relative.",
-                tol.abs,
-                tol.rel,
-                r.precision.relative_resolution()
-            );
-        }
+            tol.abs,
+            tol.rel,
+            r.precision.relative_resolution()
+        );
     }
     Ok(p.verdict.reproduced() && trustworthy && !specs_differ)
 }

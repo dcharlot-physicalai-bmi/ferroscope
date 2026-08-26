@@ -264,11 +264,7 @@ pub fn parse(s: &str) -> Option<Value> {
     let mut i = 0usize;
     let v = parse_value(b, &mut i)?;
     skip_ws(b, &mut i);
-    if i == b.len() {
-        Some(v)
-    } else {
-        None
-    }
+    if i == b.len() { Some(v) } else { None }
 }
 
 fn skip_ws(b: &[u8], i: &mut usize) {

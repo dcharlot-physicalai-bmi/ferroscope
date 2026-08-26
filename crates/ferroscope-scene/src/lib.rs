@@ -444,11 +444,7 @@ impl Scene {
             });
         }
 
-        if out.is_empty() {
-            Ok(s)
-        } else {
-            Err(out)
-        }
+        if out.is_empty() { Ok(s) } else { Err(out) }
     }
 
     /// How many steps this scene will record.

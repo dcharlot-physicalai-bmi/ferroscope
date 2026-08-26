@@ -435,22 +435,33 @@ pub fn read(text: &str) -> Result<Reading, Problem> {
                     let from = dist.unwrap_or(2.0);
                     format!(
                         "{{\"kind\":\"fall\",\"from\":[{},0,{}],\"restitution\":0.35}}",
-                        n(x), n(from)
+                        n(x),
+                        n(from)
                     )
                 }
                 "orbit" => format!(
                     "{{\"kind\":\"orbit\",\"center\":[{},0,{}],\"radius\":{},\"period_s\":{}}}",
-                    n(offset), n((size + 0.6).max(0.8)), n(dist.unwrap_or(0.8)), n(period.unwrap_or(4.0))
+                    n(offset),
+                    n((size + 0.6).max(0.8)),
+                    n(dist.unwrap_or(0.8)),
+                    n(period.unwrap_or(4.0))
                 ),
                 "linear" => format!(
                     "{{\"kind\":\"linear\",\"from\":[{},{},{}],\"to\":[{},{},{}],\"period_s\":{}}}",
-                    n(-dist.unwrap_or(1.2)), n(x), n(half),
-                    n(dist.unwrap_or(1.2)), n(x), n(half),
+                    n(-dist.unwrap_or(1.2)),
+                    n(x),
+                    n(half),
+                    n(dist.unwrap_or(1.2)),
+                    n(x),
+                    n(half),
                     n(period.unwrap_or(4.0))
                 ),
                 "oscillate" => format!(
                     "{{\"kind\":\"oscillate\",\"at\":[{},0,{}],\"axis\":[0,0,1],\"amplitude\":{},\"period_s\":{}}}",
-                    n(x), n(half + 0.4), n(dist.unwrap_or(0.3)), n(period.unwrap_or(2.0))
+                    n(x),
+                    n(half + 0.4),
+                    n(dist.unwrap_or(0.3)),
+                    n(period.unwrap_or(2.0))
                 ),
                 _ => format!("{{\"kind\":\"static\",\"at\":[{},0,{}]}}", n(x), n(half)),
             };
@@ -517,10 +528,10 @@ pub fn read(text: &str) -> Result<Reading, Problem> {
 
     // Global timing: seconds and hertz that no clause consumed as a period.
     for c in &clauses {
-        if c.motion.is_none() || c.motion == Some("fall") || c.motion == Some("static") {
-            if let Some(s) = c.seconds.first() {
-                duration = Some(*s);
-            }
+        if (c.motion.is_none() || c.motion == Some("fall") || c.motion == Some("static"))
+            && let Some(s) = c.seconds.first()
+        {
+            duration = Some(*s);
         }
         if let Some(h) = c.hertz.first() {
             rate = Some(*h);
@@ -559,7 +570,9 @@ pub fn read(text: &str) -> Result<Reading, Problem> {
     let scene_json = format!(
         "{{\n  \"name\": {},\n  \"duration_s\": {},\n  \"rate_hz\": {},\n  \"gravity\": {},\n  \"bodies\": [\n    {}\n  ],\n  \"robots\": [\n    {}\n  ]\n}}",
         json_str(if name.is_empty() { "scene" } else { &name }),
-        n(dur), n(hz), n(g),
+        n(dur),
+        n(hz),
+        n(g),
         bodies.join(",\n    "),
         robots.join(",\n    ")
     );

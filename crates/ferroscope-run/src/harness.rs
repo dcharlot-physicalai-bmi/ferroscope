@@ -1,6 +1,6 @@
 //! Declaration, selection, execution, and the CLI your binary gets for free.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -10,7 +10,7 @@ use ferroscope_schema::json::Value;
 use ferroscope_schema::{trace_from, verify};
 
 use crate::run::{Halt, Outcome, Run};
-use crate::store::{Predicate, Query, Record, Store, DEFAULT_ROOT};
+use crate::store::{DEFAULT_ROOT, Predicate, Query, Record, Store};
 
 /// The cap on expanded cases for one scenario. Antioch caps at 2,000; matching it keeps a
 /// ported sweep portable, and the refusal names the count so a narrower grid is obvious.

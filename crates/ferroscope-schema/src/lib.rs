@@ -54,7 +54,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use ferroscope_ledger::{Ledger, Quote, Rail};
-use ferroscope_mcap::{read, Log, Writer, WriterOptions};
+use ferroscope_mcap::{Log, Writer, WriterOptions, read};
 use ferroscope_receipt::{Precision, Receipt, RunSpec, Trace, TraceDigest};
 
 pub use bundle::{bundle, bundle_prefix};
