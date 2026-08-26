@@ -9,6 +9,7 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.5 adds `urdf --check` and the collision and inertial layers.
 # 0.1.11 adds `live`: replay any recording as a live stream, WebSocket by default and
 # WebTransport behind `--features webtransport`.
+# 0.1.17: `export` help says what a bundle is for — seeing a run too big for a browser.
 # 0.1.16: a robot's mount point reaches the recording (it was honoured only when reporting
 # ground clearance), and a floor breach now prints the mount height that fixes it.
 # 0.1.15: diff ranks channels by |delta| against each channel's own scale, so a signal's zero
@@ -19,7 +20,7 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.12: `live` binds 8737 (the port the viewer's live button dials) instead of an ephemeral
 # one, reports the span it can actually pace, cannot panic on --rate/--hold, and tells the
 # truth about how many viewers received the sealed file.
-version = "0.1.16"
+version = "0.1.17"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

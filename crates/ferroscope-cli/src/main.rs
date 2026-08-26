@@ -107,7 +107,8 @@ USAGE
   ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
   ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
                      [--abs <f>] [--rel <f>]
-  ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
+  ferroscope export  <run.mcap> <out.json> viewer bundle: open it in the viewer to see a
+                                           run too big for a browser to read whole
   ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
                      [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
                      port 8737 by default, which is the port the viewer's live button dials

@@ -130,6 +130,26 @@ here as measured because the first draft of this table carried an extrapolation 
 In the browser the ceiling is Chrome's, not ours: past roughly 2 GB the File API will not hand a
 page one `ArrayBuffer`, and the read fails before any Ferroscope code runs.
 
+**So hand the browser a bundle instead.** `ferroscope export` strides every lane down to what a
+screen can actually draw, and the viewer opens the result:
+
+```sh
+ferroscope export huge.mcap bundle.json   # 2.6 GB in, 1.4 MB out, 76 s
+```
+
+That 2.6 GB run — 12.8 million messages, the one the page refuses — opens **as a bundle in a
+tenth of a second**, with its scene tree, its lanes, its receipt and its 54.8 kJ ledger. The
+reduction is about 1800:1 because a lane is capped at 4,000 points; nothing a 1500-second run
+shows on a 1080-pixel plot needs more.
+
+What a bundle cannot do, it says rather than pretending. It carries no raw bytes, so it cannot
+be compared (`diff` recomputes both receipts from the recordings, which is the point) and it
+carries no mesh attachments, so the 3-D view draws primitives and notes why. And its receipt is
+labelled **"recomputed at export … checked by the CLI, not this page"**: a bundle inherits a
+verification that happened elsewhere, and printing a bare "VERIFIED" over it would claim a check
+this machine never performed — the same misplaced confidence the comparator had when it trusted
+a stored digest.
+
 What matters is what happens *at* the ceiling. It used to be nothing at all: the rejection was
 unhandled, so the page sat silent — measured, three minutes of a tab that looks broken. It now
 refuses in a tenth of a second and says why, how big the file was, and that the CLI will do it.
@@ -1000,7 +1020,8 @@ ferroscope verify  <run.mcap>            recompute the receipt from the file its
 ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
 ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
                    [--abs <f>] [--rel <f>]
-ferroscope export  <run.mcap> <out.json> viewer bundle for the browser
+ferroscope export  <run.mcap> <out.json> viewer bundle — how to see a run too big
+                                         for a browser to open whole
 ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
                    [--port <n>] [--wt] [--rate <x>] [--hold <s>] [--no-wait]
                    binds 8737, the port the viewer's live button dials

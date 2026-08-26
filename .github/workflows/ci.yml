@@ -68,6 +68,35 @@ jobs:
               print('file.arrayBuffer() is not guarded by a try'); sys.exit(1)
           EOF
           echo "an oversized recording is refused with a reason"
+      - name: a bundle is the way past the browser's ceiling, and says what it cannot do
+        # `export` strides every lane to what a screen can draw, so the run the page refuses
+        # opens as a bundle instead. What a bundle cannot carry — raw bytes — is exactly what
+        # comparison and mesh attachments need, and each says so rather than failing obscurely.
+        # Its receipt is inherited from the CLI, so the page must not claim it checked it here.
+        run: |
+          cargo build --release -p ferroscope-cli
+          ./target/release/ferroscope demo big.mcap --steps 20000 > /dev/null
+          ./target/release/ferroscope export big.mcap bundle.json > /dev/null
+          python3 - <<'EOF'
+          import json, os, sys
+          b = json.load(open('bundle.json'))
+          assert b.get('format') == 'ferroscope.bundle.v1', b.get('format')
+          rec, bun = os.path.getsize('big.mcap'), os.path.getsize('bundle.json')
+          # The whole point: a bundle is orders of magnitude smaller than its recording.
+          assert bun * 20 < rec, f'bundle {bun} is not much smaller than {rec}'
+          assert b.get('receipt'), 'a bundle must carry the receipt it was exported with'
+          print(f'  {rec} bytes -> {bun} bytes ({rec//bun}:1), receipt carried')
+          EOF
+          for needle in \
+            "ferroscope.bundle.v1" \
+            "a bundle cannot be compared" \
+            "meshes are not carried in a bundle" \
+            "recomputed at export" \
+            "checked by"; do
+            grep -q "$needle" viewer/index.html \
+              || { echo "the viewer no longer handles bundles: missing \"$needle\""; exit 1; }
+          done
+          echo "a bundle opens, and names what it cannot do"
       - name: every comparator recomputes receipts, not just the one that was fixed
         # This project has now shipped the same defect on three surfaces: the CLI compared two
         # STORED digest strings, the wasm comparator had its own copy, and the scenario harness

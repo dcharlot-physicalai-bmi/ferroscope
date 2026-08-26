@@ -212,10 +212,10 @@
   <span class="brand"><b>Φ</b> FERROSCOPE <span id="ver"></span></span>
   <div class="files">
     <div class="slot" id="slotA"><b>A</b>
-      <label><input type="file" id="fileA" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmA">open a .mcap</span></label>
+      <label><input type="file" id="fileA" accept=".mcap,.json"><span class="nm" tabindex="0" role="button" id="nmA">open a .mcap</span></label>
     </div>
     <div class="slot" id="slotB"><b>B</b>
-      <label><input type="file" id="fileB" accept=".mcap"><span class="nm" tabindex="0" role="button" id="nmB">compare with…</span></label>
+      <label><input type="file" id="fileB" accept=".mcap,.json"><span class="nm" tabindex="0" role="button" id="nmB">compare with…</span></label>
     </div>
     <span class="demos">
     <button id="demoBtn" type="button" title="A one-legged hopper with a glTF body">hopper</button>
@@ -397,6 +397,9 @@ function shapeScale(shape, sz){
 async function meshFromAttachment(name){
   if(MESHES.has(name)) return MESHES.get(name);
   const promise = (async () => {
+    if(!S.A.bytes) throw new Error(
+      'meshes travel inside the recording as attachments, and a bundle does not carry their ' +
+      'bytes — open the .mcap itself to see them');
     const bytes = attachment(S.A.bytes, name);          // throws with the available names
     const gltf = await GLTF.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
     const group = gltf.scene;
@@ -539,7 +542,11 @@ function syncScene(){
           holder.add(inst);
           rec.pending = false;
           requestDraw();
-        }).catch(e => fail('mesh "'+g.mesh+'": '+(e.message||e)));
+        }).catch(e => {
+          if(S.A && S.A.bundle){ noteOnce('meshes are not carried in a bundle: this view draws ' +
+            'the primitives, and the .mcap itself has the mesh bytes'); return; }
+          fail('mesh "'+g.mesh+'": '+(e.message||e));
+        });
       }
       if(rec){ /* the mesh branch already registered it */ } else {
       const geo = shapeGeometry(g.shape);
@@ -855,10 +862,18 @@ function paintInspector(){
     h += row('platform', esc(r.platform));
     h += row('spec', esc(r.spec_digest.slice(0,14))+'…');
     h += row('trace', esc(r.trace_digest.slice(0,14))+'…');
-    h += row('recomputed here', esc(r.recomputed.slice(0,14))+'…',
+    const fromBundle = S.A && S.A.bundle;
+    h += row(fromBundle ? 'recomputed at export' : 'recomputed here',
+             esc(r.recomputed.slice(0,14))+'…',
              r.trace_digest===r.recomputed?'good':'bad');
     h += row('non-finite', r.non_finite, r.non_finite?'bad':'');
-    h += row('verify', r.verified?'VERIFIED':'FAILED', r.verified?'good':'bad');
+    h += row('verify',
+             r.verified ? (fromBundle ? 'VERIFIED when exported' : 'VERIFIED') : 'FAILED',
+             r.verified?'good':'bad');
+    if(fromBundle){
+      h += row('checked by', 'the CLI, not this page — a bundle carries no bytes to re-hash',
+               'warn');
+    }
   } else h += row('receipt','none','warn');
   const e=b.energy;
   if(e){
@@ -1095,6 +1110,17 @@ addEventListener('resize', relayout);
 /* ---------------- files ---------------- */
 const fail = m => { const b=el('err'); b.textContent=m; b.style.display='block'; };
 const clearFail = () => { el('err').style.display='none'; };
+const NOTED = new Set();
+/// A note the reader should see once, without the failure box taking the page over.
+function noteOnce(msg){
+  if(NOTED.has(msg)) return;
+  NOTED.add(msg);
+  const strip = el('strip');
+  if(strip && strip.style.display !== 'block'){
+    strip.style.display = 'block'; strip.className = '';
+    strip.textContent = msg;
+  }
+}
 
 /// Let the browser paint before a synchronous parse locks the main thread.
 const repaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
@@ -1124,6 +1150,38 @@ async function accept(slot, file){
       `\`verify\` and \`diff\` handle it at about 80 MB/s, or record it in shorter segments.`);
   }
   if(mb > 64){ label.textContent = `parsing ${mb.toFixed(0)} MB…`; await repaint(); }
+
+  // An exported bundle, not a recording. `ferroscope export` strides every lane down to what a
+  // screen can draw, so a bundle of a 2.6 GB run is a few hundred kilobytes — which is the
+  // whole answer to a recording the browser cannot hold: let the CLI do the reading. What a
+  // bundle cannot carry is the raw bytes, so comparison, verification and mesh attachments are
+  // not available from one, and each of those says so rather than failing obscurely.
+  if(/\.json$/i.test(file.name) || bytes[0] === 0x7b /* '{' */){
+    let b;
+    try { b = JSON.parse(new TextDecoder().decode(bytes)); }
+    catch(e){ label.textContent = was; return fail(`${file.name}: not a Ferroscope bundle (${e.message||e})`); }
+    if(b.format !== 'ferroscope.bundle.v1'){
+      label.textContent = was;
+      return fail(`${file.name} is JSON but not a Ferroscope bundle — produce one with ` +
+                  `\`ferroscope export run.mcap bundle.json\`.`);
+    }
+    if(slot !== 'A'){
+      label.textContent = was;
+      return fail('a bundle can only be opened as A: comparing needs the recordings themselves, ' +
+                  'which a bundle does not carry. Use `ferroscope diff a.mcap b.mcap`.');
+    }
+    S.A = {name:file.name, bytes:null, bundle:true};
+    S.B = null; el('slotB').classList.remove('loaded'); el('nmB').textContent = 'compare with…';
+    S.bundle = b;
+    S.span = b.span || [0,1];
+    el('slotA').classList.add('loaded');
+    label.textContent = `${file.name} · ${(b.messages||0).toLocaleString()} msgs · bundle`;
+    el('empty').style.display = 'none';
+    fitView(); paintTree(); buildLanes(); setT(S.span[0]);
+    compare();
+    return;
+  }
+
   if(slot==='A'){
     let json;
     try { json = fsOpen(bytes); } catch(e){ label.textContent = was; return fail('A: '+(e.message||e)); }
@@ -1144,6 +1202,13 @@ async function accept(slot, file){
 function compare(){
   const strip = el('strip');
   if(!S.A || !S.B){ strip.style.display='none'; S.div=null; S.verdict=null; return; }
+  if(!S.A.bytes || !S.B.bytes){
+    // Comparison recomputes both receipts from the bytes, and a bundle has none.
+    strip.style.display='block'; strip.className='';
+    strip.innerHTML = 'a bundle cannot be compared: the verdict is recomputed from the ' +
+      'recordings themselves, not from a summary of them. Use <b>ferroscope diff a.mcap b.mcap</b>.';
+    S.div=null; S.verdict=null; return;
+  }
   let v;
   try { v = JSON.parse(fsDiff(S.A.bytes, S.B.bytes, 0, 0)); }
   catch(e){ return fail('comparison: '+(e.message||e)); }
