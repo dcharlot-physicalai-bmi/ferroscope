@@ -1096,12 +1096,37 @@ addEventListener('resize', relayout);
 const fail = m => { const b=el('err'); b.textContent=m; b.style.display='block'; };
 const clearFail = () => { el('err').style.display='none'; };
 
+/// Let the browser paint before a synchronous parse locks the main thread.
+const repaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
 async function accept(slot, file){
   clearFail();
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mb = file.size / 1048576;
+  const label = el('nm'+slot);
+  const was = label.textContent;
+  // A big recording takes tens of seconds to read and parse, and every one of them used to be
+  // silent: measured, a 1.2 GB file is 43 s of a page that looks broken. Say what is happening,
+  // and paint it before the parse blocks the thread.
+  label.textContent = `reading ${mb.toFixed(0)} MB…`;
+  await repaint();
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch(e){
+    // Chrome refuses to read a file this large into one ArrayBuffer. Measured: 1.2 GB opens,
+    // 2.6 GB fails here — and it used to fail as an unhandled rejection, so the page sat
+    // there saying nothing at all.
+    label.textContent = was;
+    return fail(
+      `${file.name} is ${mb.toFixed(0)} MB and the browser could not read it into memory ` +
+      `(${e.name||'error'}). This page holds the whole recording at once by design — nothing ` +
+      `is uploaded — so a file this size belongs to the CLI: \`ferroscope inspect\`, ` +
+      `\`verify\` and \`diff\` handle it at about 80 MB/s, or record it in shorter segments.`);
+  }
+  if(mb > 64){ label.textContent = `parsing ${mb.toFixed(0)} MB…`; await repaint(); }
   if(slot==='A'){
     let json;
-    try { json = fsOpen(bytes); } catch(e){ return fail('A: '+(e.message||e)); }
+    try { json = fsOpen(bytes); } catch(e){ label.textContent = was; return fail('A: '+(e.message||e)); }
     S.A = {name:file.name, bytes};
     S.bundle = JSON.parse(json);
     S.span = S.bundle.span || [0,1];

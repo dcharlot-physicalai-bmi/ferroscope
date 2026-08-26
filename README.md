@@ -86,7 +86,7 @@ and regions, is in [docs/LANDSCAPE.md](docs/LANDSCAPE.md). The short version, fi
 | | what it does well | where it stops |
 |---|---|---|
 | **[Foxglove](https://foxglove.dev)** | The best panel-and-layout viewer in the field. MCAP is theirs and it is genuinely open (Apache-2.0). The SDK core is Rust, MIT. Live WebSocket streaming, teleop, a real data platform. | The app itself is proprietary: Studio 1.x (MPL-2.0) was frozen in February 2024 and the current product is closed. Cloud storage, seats, and device counts are metered. Visualization only: no physics, no scenario execution, no notion of whether a run reproduced. |
-| **[Rerun](https://rerun.io)** | Open-source core, Rust viewer that runs native *and* in a browser, an entity-component data model with real timelines, and a good embedding story. | Its own MCAP support is marked experimental; the viewer is bounded by RAM. It is a logging and visualization layer, by design, not a place where a run is *executed*, gated, or certified. |
+| **[Rerun](https://rerun.io)** | Open-source core, Rust viewer that runs native *and* in a browser, an entity-component data model with real timelines, and a good embedding story. | Its own MCAP support is marked experimental. It is a logging and visualization layer, by design, not a place where a run is *executed*, gated, or certified. (The "bounded by RAM" complaint that used to sit here has been struck: this viewer holds the whole recording in memory too. What it is bounded *at* is measured below.) |
 | **[NVIDIA Isaac Sim / Isaac Lab](https://developer.nvidia.com/isaac/sim)** | The strongest physics-and-rendering primitives available, GPU-parallel environments, OpenUSD throughout, an enormous asset ecosystem. | Apache-2.0 source that needs the Omniverse Kit SDK under NVIDIA's own license; redistributing it or offering it as a service to third parties pulls in NVIDIA AI Enterprise. Needs an RTX-class GPU. And Isaac Lab's own docs state the limitation plainly: GPU work scheduling reorders floating-point reductions, so *"experiments from the IsaacGym simulator are not perfectly reproducible on a different system."* |
 | **[Lichtblick](https://github.com/lichtblick-suite/lichtblick)** | An actively maintained community fork of Foxglove Studio, browser and desktop, preserving the open-core model. **The honest correction to the row above:** licence is not the differentiator here. | Like Foxglove, it is a viewer. No physics, no scenario execution, no determinism receipt, no energy ledger. |
 | **[Antioch](https://www.antioch.com/)** | The best-designed scenario model in the field, and the reason this repository has one. A scenario is a parameterized 3-D integration test; cases and grids turn it into many comparable runs; a verdict is named checks with measured details; suites are unions of selector clauses; history is queryable with `key:op:value` predicates; telemetry lands in Rerun. Every one of those ideas is worth porting, and this repository ports them. | The delivery, not the design. Its own documentation is the source: a run needs an ephemeral GPU VM, *"allocation is the slow step"*, and when none is warm the CLI *"polls up to 600 s"*. Simulator imports are banned at module scope because discovery must happen *"before requesting a machine"*. Cost is assignment-scoped, *"idle time included … there is no per-run or per-scenario cost figure to report"*. Reproduction means re-queueing saved images, and *"multi-machine interactive runs are not currently rerunnable"*: there is no digest and no divergence step. And *"the CLI has no `compare` command"*. |
@@ -102,6 +102,39 @@ a robot ships.**
 Ferroscope answers both, offline, from the recording, with no account and no daemon. The second one
 is not a guess about a competitor: Antioch's documentation says in as many words that the platform
 has no per-run cost figure to report.
+
+---
+
+## How big a recording, exactly
+
+Every viewer in this field is bounded by memory, this one included. The number is rarely stated,
+so here is this one's, measured rather than estimated — `ferroscope demo --steps N` on an M4, and
+the same files dropped on the page in headless Chrome:
+
+| recording | messages | `ferroscope verify` | peak RSS | browser viewer |
+|---|---|---|---|---|
+| 8 MB | 43 k | 0.08 s | 25 MB | opens in 1.3 s |
+| 136 MB | 681 k | 1.4 s | 300 MB | opens in 4.1 s |
+| 552 MB | 2.7 M | 6.8 s | 1.2 GB | opens in 13.3 s |
+| 1.2 GB | 6.0 M | 15.4 s | 2.6 GB | opens in 43 s |
+| 2.6 GB | 12.8 M | 65 s | 1.7 GB† | **refused** |
+
+Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
+roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
+machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
+RSS comes in *below* the 1.2 GB file's, because the memory is being compressed rather than held.
+Those two numbers are the measurement bending, not the program improving, and they are printed
+here as measured because the first draft of this table carried an extrapolation — 32 s and
+5.5 GB — that was wrong in both directions.
+
+In the browser the ceiling is Chrome's, not ours: past roughly 2 GB the File API will not hand a
+page one `ArrayBuffer`, and the read fails before any Ferroscope code runs.
+
+What matters is what happens *at* the ceiling. It used to be nothing at all: the rejection was
+unhandled, so the page sat silent — measured, three minutes of a tab that looks broken. It now
+refuses in a tenth of a second and says why, how big the file was, and that the CLI will do it.
+Above 64 MB the page also says `reading…` and `parsing…` rather than freezing mutely for the
+tens of seconds the work honestly takes.
 
 ---
 

@@ -50,6 +50,24 @@ jobs:
           grep -q "does not verify against its own receipt" viewer/index.html \
             || { echo "the viewer no longer tells the reader a file failed its receipt"; exit 1; }
           echo "the browser comparator verifies both files and says so"
+      - name: a file too large for the browser is refused, not silently dropped
+        # Measured: 1.2 GB opens, 2.6 GB is refused by Chrome's File API before any Ferroscope
+        # code runs. That rejection used to be an unhandled promise, so the page sat silent for
+        # minutes looking broken. The guard and its explanation are what turn a dead tab into an
+        # instruction, so they are gated rather than trusted.
+        run: |
+          grep -q "could not read it into memory" viewer/index.html \
+            || { echo "the viewer no longer explains an oversized file"; exit 1; }
+          # The read must be INSIDE a try, or the rejection escapes again.
+          python3 - <<'EOF'
+          import re, sys
+          src = open('viewer/index.html').read()
+          i = src.index('await file.arrayBuffer()')
+          before = src[max(0, i-400):i]
+          if 'try {' not in before:
+              print('file.arrayBuffer() is not guarded by a try'); sys.exit(1)
+          EOF
+          echo "an oversized recording is refused with a reason"
       - name: every comparator recomputes receipts, not just the one that was fixed
         # This project has now shipped the same defect on three surfaces: the CLI compared two
         # STORED digest strings, the wasm comparator had its own copy, and the scenario harness
