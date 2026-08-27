@@ -777,12 +777,30 @@ fn a_streamed_comparison_handles_a_run_that_stopped_early() {
 }
 
 #[test]
-fn a_streamed_comparison_refuses_what_it_cannot_pair() {
-    // The precondition is checked at every pair rather than assumed once. Two runs that do not
-    // present the same samples in the same order must be REFUSED — a comparator that silently
-    // paired the wrong samples would be worse than a slow one — so the caller falls back.
+fn a_streamed_comparison_matches_runs_that_do_not_emit_in_the_same_order() {
+    // The first version of this walked the two queues in lockstep and refused the moment their
+    // fronts disagreed. That is fine until a channel fires CONDITIONALLY — the fixture records a
+    // contact only past a threshold — so two runs that have genuinely diverged stop emitting the
+    // same samples at the same steps, which is exactly the pair anybody wants compared. Matching
+    // by STEP rather than by position handles it, and the answer has to stay the held one's.
     let a = record(11, None);
     let b = reordered(&a);
+    let (held, streamed) = both_ways(&a, &b);
+    let streamed = streamed.expect("streaming refused a pair it can match by step");
+    assert_eq!(
+        held, streamed,
+        "matching by step disagrees with matching by key"
+    );
+}
+
+#[test]
+fn a_streamed_comparison_refuses_what_it_cannot_pair() {
+    // What it still must refuse: a file whose steps do not advance. The walk matches a step's
+    // samples as a group and relies on both files being ordered; pairing across a file that
+    // goes backwards would be guesswork, and a comparator that silently paired the wrong
+    // samples would be worse than a slow one.
+    let a = record(11, None);
+    let b = backwards();
     assert!(
         ferroscope_schema::profile_streaming(
             || Ok(std::io::Cursor::new(a.clone())),
@@ -790,8 +808,34 @@ fn a_streamed_comparison_refuses_what_it_cannot_pair() {
             ferroscope_receipt::Tolerance::default(),
         )
         .is_none(),
-        "streaming paired two runs that do not line up"
+        "streaming paired a recording whose steps run backwards"
     );
+}
+
+/// A recording whose steps count DOWN — ordered, but not the way the walk assumes.
+fn backwards() -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    for i in 0..120u64 {
+        let step = 119 - i;
+        let t = Stamp::at(step * 1_000_000, step * 1_010_000, step);
+        rec.scalar("/err", t, step as f64, "m").unwrap();
+        rec.transform(
+            "/body",
+            t,
+            "world",
+            "body",
+            [step as f64, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
+    }
+    let spec = ferroscope_receipt::RunSpec::new("spring", 11)
+        .dt_ns(1_000_000)
+        .steps(120)
+        .integrator("semi-implicit-euler")
+        .solver("none")
+        .build("integration-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
 }
 
 /// The same spring run, cut short — a run that crashed half way, which is not an exotic case.

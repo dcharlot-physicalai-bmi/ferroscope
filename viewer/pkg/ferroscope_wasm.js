@@ -133,6 +133,151 @@ export class BundleStream {
 if (Symbol.dispose) BundleStream.prototype[Symbol.dispose] = BundleStream.prototype.free;
 
 /**
+ * Compare two recordings neither of which the browser can hold.
+ *
+ * [`diff`] takes both files as `Uint8Array`s, which stops working at about 2 GB apiece and
+ * stopped being possible at all once a large recording was opened in blocks: a page that
+ * streamed a file no longer has its bytes. This is the comparison with the same shape as
+ * [`BundleStream`] — pushed, not read.
+ *
+ * **Three passes**, and each one is there for a reason the file's layout forces:
+ *
+ * 1. the receipt of each run, which `seal` writes at the END of the file, so nothing can be
+ *    hashed until it has been read;
+ * 2. the digest recomputed at that precision, the energy ledger, and the component labels that
+ *    let the report say `effort[hip]` rather than `[5]`;
+ * 3. the two runs walked **together**, pair by pair, which is the comparison itself.
+ *
+ * Passes 1 and 2 read each file on its own; pass 3 reads both at once, and there the order
+ * matters: feed whichever side [`wants_a`](DiffStream::wants_a) or
+ * [`wants_b`](DiffStream::wants_b) asks for. Feeding a side that does not want a block is how a
+ * lockstep walk turns back into holding a file.
+ *
+ * The precondition is checked at every pair: two runs must present the same `(channel, step)`
+ * sequence in file order. Where they do not, [`finish`](DiffStream::finish) throws rather than
+ * answering, and the caller falls back to `diff` on the bytes if it still has them. A
+ * comparator that silently paired the wrong samples would be worse than a slow one.
+ */
+export class DiffStream {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        DiffStreamFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_diffstream_free(ptr, 0);
+    }
+    /**
+     * Say that A's bytes have run out for this pass.
+     */
+    end_a() {
+        wasm.diffstream_end_a(this.__wbg_ptr);
+    }
+    /**
+     * Say that B's bytes have run out for this pass.
+     */
+    end_b() {
+        wasm.diffstream_end_b(this.__wbg_ptr);
+    }
+    /**
+     * The comparison, as the same JSON [`diff`] returns. Consumes the stream.
+     * @returns {string}
+     */
+    finish() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr = this.__destroy_into_raw();
+            const ret = wasm.diffstream_finish(ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * @param {number} abs
+     * @param {number} rel
+     */
+    constructor(abs, rel) {
+        const ret = wasm.diffstream_new(abs, rel);
+        this.__wbg_ptr = ret;
+        DiffStreamFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * Which pass is being fed: 1 and 2 read each file alone, 3 walks them together.
+     * @returns {number}
+     */
+    pass() {
+        const ret = wasm.diffstream_pass(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Add the next block of recording A, in file order.
+     * @param {Uint8Array} block
+     * @returns {boolean}
+     */
+    push_a(block) {
+        const ptr0 = passArray8ToWasm0(block, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.diffstream_push_a(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * Add the next block of recording B, in file order.
+     * @param {Uint8Array} block
+     * @returns {boolean}
+     */
+    push_b(block) {
+        const ptr0 = passArray8ToWasm0(block, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.diffstream_push_b(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * Whether the two runs turned out not to line up, so the walk cannot answer.
+     * @returns {boolean}
+     */
+    refused() {
+        const ret = wasm.diffstream_refused(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * End this pass and begin the next. Push the same bytes again from the start.
+     */
+    rewind() {
+        wasm.diffstream_rewind(this.__wbg_ptr);
+    }
+    /**
+     * Whether side A wants another block right now.
+     * @returns {boolean}
+     */
+    wants_a() {
+        const ret = wasm.diffstream_wants_a(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Whether side B wants another block right now.
+     * @returns {boolean}
+     */
+    wants_b() {
+        const ret = wasm.diffstream_wants_b(this.__wbg_ptr);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) DiffStream.prototype[Symbol.dispose] = DiffStream.prototype.free;
+
+/**
  * The raw bytes of one attachment, by name.
  *
  * A glTF has no business being base64'd into a JSON document, so the viewer asks for the blob
@@ -510,6 +655,9 @@ function __wbg_get_imports() {
 const BundleStreamFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_bundlestream_free(ptr, 1));
+const DiffStreamFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_diffstream_free(ptr, 1));
 
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;

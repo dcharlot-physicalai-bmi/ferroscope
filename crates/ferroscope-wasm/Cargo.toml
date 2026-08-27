@@ -6,7 +6,11 @@ description = "Ferroscope in the browser: open a recording, verify its receipt, 
 # 0.1.10 adds `BundleStream`: push a recording through in `File.slice()` blocks, twice, and a
 # 2.6 GiB run that `file.arrayBuffer()` refuses outright opens in 78.8 s under 200 MB of heap
 # — with its receipt recomputed HERE rather than inherited from an export.
-version = "0.1.10"
+# 0.1.11 adds `DiffStream`: compare two recordings the browser cannot hold. Three passes each
+# — receipts, then digests and labels, then the two runs walked together — and the JSON it
+# returns is character for character what `diff` returns from bytes. Measured: two 1.3 GB
+# recordings compared in 122 s with a 108 MB heap.
+version = "0.1.11"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -29,6 +33,10 @@ ferroscope-receipt = { workspace = true }
 # with no request and nothing uploaded — the same claim the rest of the viewer already makes.
 ferroscope-scene = { workspace = true }
 ferroscope-phrase = { workspace = true }
+
+[dev-dependencies]
+# Only the tests need to WRITE a recording; the crate itself only reads them.
+ferroscope-ledger = { workspace = true }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz"]

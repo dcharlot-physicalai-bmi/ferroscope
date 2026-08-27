@@ -91,10 +91,15 @@ jobs:
               if 'try {' not in src[max(0, i-400):i]:
                   print(f'{needle} is not guarded by a try'); sys.exit(1)
           EOF
-          # What a streamed recording cannot do, it must SAY, rather than failing obscurely.
+          # A recording read in blocks CAN be compared -- the comparison reads both files
+          # itself -- so the page must drive that rather than refuse it.
+          grep -q "new DiffStream(" viewer/index.html \
+            || { echo "the viewer cannot compare a recording it read in blocks"; fail=1; }
+          grep -q "d.wants_a()" viewer/index.html \
+            || { echo "the viewer feeds the comparison without asking which side wants a block"; fail=1; }
+          # What it still cannot do, it must SAY, rather than failing obscurely.
           for needle in \
             "read in blocks" \
-            "cannot be compared here" \
             "the mesh bytes did not stay"; do
             grep -q "$needle" viewer/index.html \
               || { echo "the viewer no longer explains a block read: missing \"$needle\""; fail=1; }
@@ -884,15 +889,18 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - run: npm install --no-save puppeteer-core@25
-      - name: a recording read in blocks is the same recording
+      - name: a recording read in blocks is the same recording, and can be compared
         run: |
           cargo build --release -p ferroscope-cli
-          ./target/release/ferroscope demo blocks.mcap --steps 40000 > /dev/null
-          ls -l blocks.mcap
+          ./target/release/ferroscope demo blocks-a.mcap --steps 40000 --seed 7 > /dev/null
+          # A pair, not a file: the page now COMPARES two recordings it never held, and that
+          # needs a second run that diverges somewhere findable.
+          ./target/release/ferroscope demo blocks-b.mcap --steps 40000 --seed 7 --drift 20000 > /dev/null
+          ls -l blocks-a.mcap blocks-b.mcap
           CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser)"
           test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
           PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
-            node ci/viewer-blocks.mjs blocks.mcap "$CHROME"
+            node ci/viewer-blocks.mjs blocks-a.mcap blocks-b.mcap "$CHROME"
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

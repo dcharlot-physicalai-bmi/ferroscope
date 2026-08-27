@@ -760,81 +760,213 @@ where
     F: Fn() -> std::io::Result<R>,
     R: std::io::Read,
 {
-    use ferroscope_mcap::{Flow, Record};
+    let mut fold = VerifyFold::new();
+    pour_into(open().ok()?, |b| fold.push(b)).ok()?;
+    fold.rewind();
+    pour_into(open().ok()?, |b| fold.push(b)).ok()?;
+    fold.finish()
+}
 
-    // Pass one: the receipt, and nothing else. Payloads are not parsed at all.
-    let mut receipt: Option<Receipt> = None;
-    ferroscope_mcap::stream(open().ok()?, |rec| {
-        if let Record::Metadata { name, kv } = rec
-            && name == RECEIPT_BLOCK
-        {
-            receipt = Receipt::from_pairs(&kv);
-        }
-        Ok(Flow::Continue)
-    })
-    .ok()?;
-    let receipt = receipt?;
-
-    // Pass two: hash at the declared precision, and total the ledger.
-    let mut schemas: BTreeMap<u16, String> = BTreeMap::new();
-    let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
-    let mut digest = TraceDigest::new(receipt.precision);
-    let mut ledger = Ledger::new();
-    let mut count = 0usize;
-
-    ferroscope_mcap::stream(open().ok()?, |rec| {
-        match rec {
-            Record::Schema(sc) => {
-                schemas.insert(sc.id, sc.name);
-            }
-            Record::Channel(ch) => {
-                channels.insert(ch.id, (ch.topic, ch.schema_id));
-            }
-            Record::Message(m) => {
-                let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
-                    return Ok(Flow::Continue);
-                };
-                let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
-                // Events are excluded from the digest by construction, on every path.
-                if schema == "ferroscope.Event" {
-                    return Ok(Flow::Continue);
+/// Read a stream into a pushed fold, one block at a time.
+fn pour_into<R: std::io::Read>(
+    mut r: R,
+    mut push: impl FnMut(&[u8]) -> bool,
+) -> std::io::Result<()> {
+    let mut block = vec![0u8; 64 << 10];
+    loop {
+        match r.read(&mut block) {
+            Ok(0) => return Ok(()),
+            Ok(n) => {
+                if !push(&block[..n]) {
+                    return Ok(());
                 }
-                let Ok(text) = std::str::from_utf8(m.data) else {
-                    return Ok(Flow::Continue);
-                };
-                let Some(v) = json::parse(text) else {
-                    return Ok(Flow::Continue);
-                };
-                let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
-                digest.step(step, topic, &digest_values(schema, &v));
-                count += 1;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
 
-                if schema == "ferroscope.EnergySample" {
-                    let rail = match v.get("rail").and_then(|r| r.as_str()) {
-                        Some("compute") => Rail::Compute,
-                        Some("actuation") => Rail::Actuation,
-                        _ => Rail::Overhead,
+/// A receipt recomputed from PUSHED blocks, with the ledger and the payload labels alongside.
+///
+/// The pushed form of [`verify_streaming`], which is a loop over it. Two passes, for the reason
+/// that function gives: the receipt naming the precision to hash at is written by `seal` at the
+/// end of the file, so nothing can be hashed until it has been read. Push the file, call
+/// [`rewind`](VerifyFold::rewind), push it again, then [`finish`](VerifyFold::finish).
+///
+/// It picks up the channels' component labels on the way past, because the second pass parses
+/// every payload anyway and a separate pass to learn that a joint is called `hip` would be a
+/// third read of the file.
+pub struct VerifyFold {
+    feed: ferroscope_mcap::Feed,
+    schemas: BTreeMap<u16, String>,
+    channels: BTreeMap<u16, (String, u16)>,
+    receipt: Option<Receipt>,
+    /// Pass two only.
+    digest: Option<TraceDigest>,
+    ledger: Ledger,
+    count: usize,
+    joint_names: BTreeMap<String, Vec<String>>,
+    second: bool,
+    torn: bool,
+}
+
+impl Default for VerifyFold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VerifyFold {
+    pub fn new() -> Self {
+        Self {
+            feed: ferroscope_mcap::Feed::new(),
+            schemas: BTreeMap::new(),
+            channels: BTreeMap::new(),
+            receipt: None,
+            digest: None,
+            ledger: Ledger::new(),
+            count: 0,
+            joint_names: BTreeMap::new(),
+            second: false,
+            torn: false,
+        }
+    }
+
+    /// Add the next block, in file order. Returns false once this pass has all it needs.
+    pub fn push(&mut self, block: &[u8]) -> bool {
+        use ferroscope_mcap::{Flow, Record};
+        if self.torn || self.feed.finished() {
+            return false;
+        }
+        self.feed.push(block);
+        let (schemas, channels, receipt, digest, ledger, count, joint_names, second) = (
+            &mut self.schemas,
+            &mut self.channels,
+            &mut self.receipt,
+            &mut self.digest,
+            &mut self.ledger,
+            &mut self.count,
+            &mut self.joint_names,
+            self.second,
+        );
+        let outcome = self.feed.drain(&mut |rec| {
+            match rec {
+                Record::Schema(sc) => {
+                    schemas.insert(sc.id, sc.name);
+                }
+                Record::Channel(ch) => {
+                    channels.insert(ch.id, (ch.topic, ch.schema_id));
+                }
+                Record::Metadata { name, kv } if !second => {
+                    if name == RECEIPT_BLOCK {
+                        *receipt = Receipt::from_pairs(&kv);
+                    }
+                }
+                Record::Message(m) if second => {
+                    let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
+                        return Ok(Flow::Continue);
                     };
-                    let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
-                    let watts = v.get("watts").and_then(|w| w.as_f64()).unwrap_or(0.0);
-                    ledger.sample(rail, source, m.log_time, watts);
+                    let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+                    // Events are excluded from the digest by construction, on every path.
+                    if schema == "ferroscope.Event" {
+                        return Ok(Flow::Continue);
+                    }
+                    let Ok(text) = std::str::from_utf8(m.data) else {
+                        return Ok(Flow::Continue);
+                    };
+                    let Some(v) = json::parse(text) else {
+                        return Ok(Flow::Continue);
+                    };
+                    // Joint names live in the payload, so the FIRST message on a topic is the
+                    // source — and only the first.
+                    if schema == "ferroscope.JointState" && !joint_names.contains_key(topic) {
+                        let names = v
+                            .get("names")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .map(|e| e.as_str().unwrap_or("?").to_string())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        joint_names.insert(topic.clone(), names);
+                    }
+                    let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                    if let Some(d) = digest.as_mut() {
+                        d.step(step, topic, &digest_values(schema, &v));
+                        *count += 1;
+                    }
+                    if schema == "ferroscope.EnergySample" {
+                        let rail = match v.get("rail").and_then(|r| r.as_str()) {
+                            Some("compute") => Rail::Compute,
+                            Some("actuation") => Rail::Actuation,
+                            _ => Rail::Overhead,
+                        };
+                        let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
+                        let watts = v.get("watts").and_then(|w| w.as_f64()).unwrap_or(0.0);
+                        ledger.sample(rail, source, m.log_time, watts);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
+            Ok(Flow::Continue)
+        });
+        match outcome {
+            Ok(Flow::Stop) => false,
+            Ok(Flow::Continue) => true,
+            Err(_) => {
+                self.torn = true;
+                false
+            }
         }
-        Ok(Flow::Continue)
-    })
-    .ok()?;
+    }
 
-    let recomputed = digest.finish();
-    Some(Verification {
-        trace_matches: recomputed == receipt.trace_digest,
-        spec_matches: receipt.self_consistent(),
-        recomputed,
-        receipt,
-        quote: ledger.quote(),
-        messages: count,
-    })
+    /// End pass one and begin pass two. Push the same bytes again from the start.
+    pub fn rewind(&mut self) {
+        if self.torn || self.second {
+            return;
+        }
+        self.digest = self.receipt.as_ref().map(|r| TraceDigest::new(r.precision));
+        self.second = true;
+        self.feed = ferroscope_mcap::Feed::new();
+    }
+
+    /// The receipt the file carries, whether or not it recomputes.
+    pub fn receipt(&self) -> Option<&Receipt> {
+        self.receipt.as_ref()
+    }
+
+    /// Each channel's component labels, in the payload's own terms — `effort[hip]`, not `[5]`.
+    pub fn labels(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::new();
+        for (topic, schema_id) in self.channels.values() {
+            let schema = self.schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+            let joint = self.joint_names.get(topic).cloned().unwrap_or_default();
+            let labels = component_labels(schema, &joint);
+            if !labels.is_empty() {
+                out.insert(topic.clone(), labels);
+            }
+        }
+        out
+    }
+
+    /// The verification, or `None` when the file carries no receipt to check against.
+    pub fn finish(self) -> Option<Verification> {
+        if self.torn {
+            return None;
+        }
+        let receipt = self.receipt?;
+        let recomputed = self.digest?.finish();
+        Some(Verification {
+            trace_matches: recomputed == receipt.trace_digest,
+            spec_matches: receipt.self_consistent(),
+            recomputed,
+            receipt,
+            quote: self.ledger.quote(),
+            messages: self.count,
+        })
+    }
 }
 
 /// [`trace_from`] over a stream, so building a trajectory never holds the file.
@@ -1152,6 +1284,11 @@ struct SampleFeed {
     total: usize,
     last_step: u64,
     seen_channels: std::collections::BTreeSet<String>,
+    /// Whether this file's steps only ever advance. The walk matches a step's samples as a
+    /// group and relies on it; a file that goes backwards would have its samples skipped as
+    /// unmatchable while the held comparison, which matches on `(channel, step)` wherever they
+    /// lie, would pair them. Two answers to one question, so the walk refuses instead.
+    ordered: bool,
     done: bool,
     torn: bool,
 }
@@ -1166,6 +1303,7 @@ impl SampleFeed {
             total: 0,
             last_step: 0,
             seen_channels: std::collections::BTreeSet::new(),
+            ordered: true,
             done: false,
             torn: false,
         }
@@ -1178,13 +1316,14 @@ impl SampleFeed {
             return false;
         }
         self.feed.push(block);
-        let (schemas, channels, queue, total, last_step, seen) = (
+        let (schemas, channels, queue, total, last_step, seen, ordered) = (
             &mut self.schemas,
             &mut self.channels,
             &mut self.queue,
             &mut self.total,
             &mut self.last_step,
             &mut self.seen_channels,
+            &mut self.ordered,
         );
         let outcome = self.feed.drain(&mut |rec| {
             match rec {
@@ -1212,6 +1351,9 @@ impl SampleFeed {
                     };
                     let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
                     *total += 1;
+                    if step < *last_step {
+                        *ordered = false;
+                    }
                     *last_step = (*last_step).max(step);
                     if !seen.contains(topic.as_str()) {
                         seen.insert(topic.clone());
@@ -1269,7 +1411,9 @@ pub struct PairStream {
     refused: bool,
     /// `(channel, the side that is MISSING it)` -> `(first step, how many steps)`.
     gaps: BTreeMap<(String, &'static str), (u64, usize)>,
-    last_gap: BTreeMap<(String, &'static str), u64>,
+    /// The last step matched, so a file whose steps go backwards is refused rather than paired
+    /// by guesswork.
+    last_step: u64,
     a_ended: bool,
     b_ended: bool,
 }
@@ -1282,7 +1426,7 @@ impl PairStream {
             pair: ferroscope_receipt::Pairwise::new(tol),
             refused: false,
             gaps: BTreeMap::new(),
-            last_gap: BTreeMap::new(),
+            last_step: 0,
             a_ended: false,
             b_ended: false,
         }
@@ -1290,12 +1434,19 @@ impl PairStream {
 
     /// Whether side A wants another block. Feeding a side that does not want one is how a
     /// lockstep walk turns back into holding a file: the queue simply grows.
+    ///
+    /// A side also wants more while its front STEP is still incomplete, because a step's samples
+    /// are matched as a group and a half-read group cannot be matched against anything.
     pub fn wants_a(&self) -> bool {
-        !self.refused && !self.a_ended && self.fa.queue.len() < MATCH_QUEUE
+        !self.refused
+            && !self.a_ended
+            && (self.fa.queue.len() < MATCH_QUEUE || self.group_step(true).is_none())
     }
 
     pub fn wants_b(&self) -> bool {
-        !self.refused && !self.b_ended && self.fb.queue.len() < MATCH_QUEUE
+        !self.refused
+            && !self.b_ended
+            && (self.fb.queue.len() < MATCH_QUEUE || self.group_step(false).is_none())
     }
 
     /// Add the next block of A, in file order. Returns whether A wants another.
@@ -1330,56 +1481,175 @@ impl PairStream {
         self.match_up();
     }
 
+    /// The last step A recorded — what a page's timeline is scaled by.
+    pub fn a_last_step(&self) -> u64 {
+        self.fa.last_step
+    }
+
+    /// The last step B recorded.
+    pub fn b_last_step(&self) -> u64 {
+        self.fb.last_step
+    }
+
     /// Whether the two runs turned out not to line up.
     pub fn refused(&self) -> bool {
-        self.refused || self.fa.torn || self.fb.torn
+        self.refused || self.fa.torn || self.fb.torn || !self.fa.ordered || !self.fb.ordered
     }
 
     /// Pair off everything both sides can currently match.
+    ///
+    /// **By step, not by position.** The first version of this walked the two queues in
+    /// lockstep and refused the moment their fronts disagreed, which is fine until a channel
+    /// fires CONDITIONALLY: the demo records a contact only while the body is against its stop,
+    /// so two runs that have genuinely diverged stop emitting the same samples at the same
+    /// steps — and that is exactly the pair anybody wants compared. Measured, a 1.3 GB pair
+    /// perturbed at step 400,000 refused outright and fell back to 4 GB of trajectories.
+    ///
+    /// So a step is the unit. Both files emit samples in nondecreasing step order, so the
+    /// samples for one step form a complete group as soon as a later step appears; the two
+    /// groups are matched channel by channel, and whatever one side has and the other lacks is
+    /// a gap — which is precisely what the held comparison, matching on `(channel, step)`,
+    /// computes. Memory is one step's samples per side.
     fn match_up(&mut self) {
-        if self.refused {
-            return;
+        if !self.fa.ordered || !self.fb.ordered {
+            self.refused = true;
         }
-        while let (Some(sa), Some(sb)) = (self.fa.queue.front(), self.fb.queue.front()) {
-            if sa.step != sb.step || sa.channel != sb.channel {
-                self.refused = true;
-                return;
+        while !self.refused {
+            let a = self.group_step(true);
+            let b = self.group_step(false);
+            match (a, b) {
+                (Some(x), Some(y)) if x == y => self.pair_group(x),
+                (Some(x), Some(y)) if x < y => self.skip_group(true, x),
+                (Some(_), Some(y)) => self.skip_group(false, y),
+                // One side is spent, so nothing left on the other can ever find a partner.
+                (Some(x), None) if self.b_ended && self.fb.queue.is_empty() => {
+                    self.skip_group(true, x)
+                }
+                (None, Some(y)) if self.a_ended && self.fa.queue.is_empty() => {
+                    self.skip_group(false, y)
+                }
+                _ => return,
             }
-            let sa = self.fa.queue.pop_front().expect("front was Some");
-            let sb = self.fb.queue.pop_front().expect("front was Some");
-            self.pair.push(sa.step, &sa.channel, &sa.values, &sb.values);
-        }
-        // A side that has ended cannot supply a partner, so whatever the other side still holds
-        // is a tail the comparison cannot cover — which is exactly what the report calls a gap.
-        if self.b_ended && self.fb.queue.is_empty() {
-            self.drain_tail(true);
-        }
-        if self.a_ended && self.fa.queue.is_empty() {
-            self.drain_tail(false);
         }
     }
 
-    /// Move one side's unmatchable samples into the gap tally. A key is a `(channel, step)`:
-    /// several samples on one channel at one step are one gap, not several, which is how the
-    /// trace comparison counts them.
-    fn drain_tail(&mut self, from_a: bool) {
-        let (queue, missing) = if from_a {
-            (&mut self.fa.queue, "B")
+    /// The step of the front group, if that group is COMPLETE — a later step has arrived behind
+    /// it, or the file has ended. Matching half a step's samples would report gaps that are
+    /// only the reader's own impatience.
+    fn group_step(&self, from_a: bool) -> Option<u64> {
+        let (q, ended) = if from_a {
+            (&self.fa.queue, self.a_ended)
         } else {
-            (&mut self.fb.queue, "A")
+            (&self.fb.queue, self.b_ended)
         };
-        while let Some(s) = queue.pop_front() {
+        let first = q.front()?.step;
+        if ended || q.iter().any(|s| s.step != first) {
+            Some(first)
+        } else {
+            None
+        }
+    }
+
+    /// Take one step's samples off the front of a side.
+    fn take_group(&mut self, from_a: bool, step: u64) -> Vec<ferroscope_receipt::Sample> {
+        let q = if from_a {
+            &mut self.fa.queue
+        } else {
+            &mut self.fb.queue
+        };
+        let mut out = Vec::new();
+        while q.front().is_some_and(|s| s.step == step) {
+            out.push(q.pop_front().expect("front was Some"));
+        }
+        out
+    }
+
+    /// Match one step's samples on both sides, channel by channel.
+    fn pair_group(&mut self, step: u64) {
+        let ga = self.take_group(true, step);
+        let gb = self.take_group(false, step);
+        if ga.iter().any(|s| s.step < self.last_step) || gb.iter().any(|s| s.step < self.last_step)
+        {
+            // Steps going backwards means the files are not ordered the way this walk assumes,
+            // and guessing at the pairing is the one thing it must not do.
+            self.refused = true;
+            return;
+        }
+        self.last_step = step;
+
+        // B's samples for this step, by channel, in order.
+        let mut by_channel: BTreeMap<&str, std::collections::VecDeque<usize>> = BTreeMap::new();
+        for (i, s) in gb.iter().enumerate() {
+            by_channel.entry(s.channel.as_str()).or_default().push_back(i);
+        }
+        let mut used = vec![false; gb.len()];
+
+        // A in FILE ORDER: the verdict is "the first crossing encountered", so the order pairs
+        // are fed in is part of the answer.
+        for sa in &ga {
+            match by_channel
+                .get_mut(sa.channel.as_str())
+                .and_then(|q| q.pop_front())
+            {
+                Some(i) => {
+                    used[i] = true;
+                    let sb = &gb[i];
+                    self.pair.push(step, &sa.channel, &sa.values, &sb.values);
+                }
+                None => self.pair.unmatched_a(),
+            }
+        }
+
+        // Gaps, counted the way the held comparison counts them: per (channel, step), naming
+        // which side is missing it, or "count" when both have it and disagree on how many.
+        let mut na: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut nb: BTreeMap<&str, usize> = BTreeMap::new();
+        for s in &ga {
+            *na.entry(s.channel.as_str()).or_default() += 1;
+        }
+        for s in &gb {
+            *nb.entry(s.channel.as_str()).or_default() += 1;
+        }
+        for (ch, &count) in &na {
+            let other = nb.get(ch).copied().unwrap_or(0);
+            if other == 0 {
+                self.note_gap(ch, "B", step);
+            } else if other != count {
+                self.note_gap(ch, "count", step);
+            }
+        }
+        for ch in nb.keys() {
+            if !na.contains_key(ch) {
+                self.note_gap(ch, "A", step);
+            }
+        }
+        let _ = used;
+    }
+
+    /// One side has a step the other will never reach: every sample in it is unmatchable.
+    fn skip_group(&mut self, from_a: bool, step: u64) {
+        let g = self.take_group(from_a, step);
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for s in &g {
             if from_a {
                 self.pair.unmatched_a();
             }
-            let key = (s.channel, missing);
-            if self.last_gap.get(&key) != Some(&s.step) {
-                self.last_gap.insert(key.clone(), s.step);
-                let e = self.gaps.entry(key).or_insert((s.step, 0));
-                e.0 = e.0.min(s.step);
-                e.1 += 1;
-            }
+            seen.insert(s.channel.as_str());
         }
+        let side = if from_a { "B" } else { "A" };
+        let channels: Vec<String> = seen.into_iter().map(str::to_string).collect();
+        for ch in channels {
+            self.note_gap(&ch, side, step);
+        }
+    }
+
+    fn note_gap(&mut self, channel: &str, side: &'static str, step: u64) {
+        let e = self
+            .gaps
+            .entry((channel.to_string(), side))
+            .or_insert((step, 0));
+        e.0 = e.0.min(step);
+        e.1 += 1;
     }
 
     /// The report, or nothing if the two runs could not be walked together.

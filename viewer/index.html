@@ -319,7 +319,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import init, { open as fsOpen, open_prefix, diff as fsDiff, divergence_curve, attachment,
                version, scene_from_text, record_scene, record_scene_with, sweep_scene,
-               record_case, BundleStream }
+               record_case, BundleStream, DiffStream }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -1156,10 +1156,12 @@ const BLOCK = 8 * 1048576;
 /// HERE, from these bytes, in this browser.
 async function streamOpen(slot, file, label, was){
   if(slot !== 'A'){
-    label.textContent = was;
-    return fail(`${file.name} is ${(file.size/1048576).toFixed(0)} MB, which this page can only ` +
-      `read in blocks — and comparing needs both recordings held at once. Compare files this ` +
-      `size with \`ferroscope diff a.mcap b.mcap\`.`);
+    // B is only ever compared, and a comparison reads both files itself. There is nothing to
+    // fold here: take the handle and let `compare` walk it.
+    S.B = {name:file.name, bytes:null, streamed:true, file};
+    el('slotB').classList.add('loaded');
+    label.textContent = `${file.name} · ${(file.size/1048576).toFixed(0)} MB · read in blocks`;
+    return compare();
   }
   const s = new BundleStream();
   const total = file.size * 2;
@@ -1192,7 +1194,7 @@ async function streamOpen(slot, file, label, was){
   catch(e){ label.textContent = was; return fail(`${file.name}: ${e.message||e}`); }
   const secs = (performance.now() - t0) / 1000;
 
-  S.A = {name:file.name, bytes:null, streamed:true};
+  S.A = {name:file.name, bytes:null, streamed:true, file};
   S.B = null; el('slotB').classList.remove('loaded'); el('nmB').textContent = 'compare with…';
   S.bundle = JSON.parse(json);
   S.span = S.bundle.span || [0,1];
@@ -1200,12 +1202,13 @@ async function streamOpen(slot, file, label, was){
   el('empty').style.display = 'none';
   label.textContent = `${file.name} · ${S.bundle.messages.toLocaleString()} msgs · read in blocks`;
   fitView(); paintTree(); buildLanes(); setT(S.span[0]);
-  compare();
+  await compare();
   noteOnce(`${file.name} is ${(file.size/1048576).toFixed(0)} MB, past what this browser will ` +
     `hand over as one buffer, so it was read in ${(BLOCK/1048576)} MB blocks — twice, in ` +
     `${secs.toFixed(1)} s. The receipt below was recomputed from these bytes as they went ` +
-    `past. What needs the whole recording at once is not available: comparison, and meshes ` +
-    `carried as attachments.`);
+    `past. Comparing it with another recording works too, by reading both files again. What ` +
+    `does need the whole recording at once is meshes carried as attachments: the view draws ` +
+    `the primitives.`);
 }
 
 async function accept(slot, file){
@@ -1256,14 +1259,14 @@ async function accept(slot, file){
     label.textContent = `${file.name} · ${(b.messages||0).toLocaleString()} msgs · bundle`;
     el('empty').style.display = 'none';
     fitView(); paintTree(); buildLanes(); setT(S.span[0]);
-    compare();
+    compare().catch(e => fail('comparison: ' + (e.message || e)));
     return;
   }
 
   if(slot==='A'){
     let json;
     try { json = fsOpen(bytes); } catch(e){ label.textContent = was; return fail('A: '+(e.message||e)); }
-    S.A = {name:file.name, bytes};
+    S.A = {name:file.name, bytes, file};
     S.bundle = JSON.parse(json);
     S.span = S.bundle.span || [0,1];
     el('slotA').classList.add('loaded');
@@ -1271,30 +1274,95 @@ async function accept(slot, file){
     el('empty').style.display = 'none';
     fitView(); paintTree(); buildLanes(); setT(S.span[0]);
   } else {
-    S.B = {name:file.name, bytes};
+    S.B = {name:file.name, bytes, file};
     el('slotB').classList.add('loaded');
     el('nmB').textContent = file.name;
   }
-  compare();
+  await compare();
 }
-function compare(){
+/// Compare two recordings neither of which this page is holding.
+///
+/// Three passes over each file, and each one is forced by the format: the receipt `seal` writes
+/// at the END names the precision to recompute the digest at, so nothing can be hashed until it
+/// has been read; then the digest, the ledger and the component labels; then the two runs walked
+/// TOGETHER, pair by pair, which is the comparison. The third pass feeds whichever side asks,
+/// because feeding a side that does not want a block is how a lockstep walk turns back into
+/// holding a file.
+async function streamedDiff(fa, fb){
+  const strip = el('strip');
+  const d = new DiffStream(0, 0);
+  const total = (fa.size + fb.size) * 3;
+  let read = 0, painted = 0;
+  const say = async (what) => {
+    strip.style.display='block'; strip.className='';
+    strip.textContent = `comparing ${what} · ${(100*read/total).toFixed(0)}%`;
+    await repaint();
+  };
+  const feed = async (file, which) => {
+    for(let at = 0; at < file.size; at += BLOCK){
+      const end = Math.min(at + BLOCK, file.size);
+      const blk = new Uint8Array(await file.slice(at, end).arrayBuffer());
+      read += blk.length;
+      const more = which === 'a' ? d.push_a(blk) : d.push_b(blk);
+      if(read - painted > 64 * 1048576){ painted = read; await say(`pass ${d.pass()} of 3`); }
+      if(!more) break;
+    }
+  };
+  await say('pass 1 of 3');
+  for(let pass = 0; pass < 2; pass++){ await feed(fa, 'a'); await feed(fb, 'b'); d.rewind(); }
+  // Pass three: lockstep.
+  let ia = 0, ib = 0;
+  while(!d.refused()){
+    let moved = false;
+    if(d.wants_a()){
+      if(ia < fa.size){
+        const end = Math.min(ia + BLOCK, fa.size);
+        const blk = new Uint8Array(await fa.slice(ia, end).arrayBuffer());
+        read += blk.length; ia = end; d.push_a(blk); moved = true;
+      } else d.end_a();
+    }
+    if(d.wants_b()){
+      if(ib < fb.size){
+        const end = Math.min(ib + BLOCK, fb.size);
+        const blk = new Uint8Array(await fb.slice(ib, end).arrayBuffer());
+        read += blk.length; ib = end; d.push_b(blk); moved = true;
+      } else d.end_b();
+    }
+    if(read - painted > 64 * 1048576){ painted = read; await say('pass 3 of 3'); }
+    if(!moved) break;
+  }
+  return JSON.parse(d.finish());
+}
+
+async function compare(){
   const strip = el('strip');
   if(!S.A || !S.B){ strip.style.display='none'; S.div=null; S.verdict=null; return; }
-  if(!S.A.bytes || !S.B.bytes){
-    // Comparison recomputes both receipts from the bytes, and neither a bundle nor a recording
-    // read in blocks still has them.
-    const streamed = (S.A && S.A.streamed) || (S.B && S.B.streamed);
+  if(S.A.bundle || S.B.bundle){
+    // A bundle is a summary. The verdict is recomputed from the recordings themselves.
     strip.style.display='block'; strip.className='';
-    strip.innerHTML = streamed
-      ? 'a recording read in blocks cannot be compared here: a verdict is recomputed from both ' +
-        'recordings at once, and this page held neither. Use <b>ferroscope diff a.mcap b.mcap</b>.'
-      : 'a bundle cannot be compared: the verdict is recomputed from the ' +
-        'recordings themselves, not from a summary of them. Use <b>ferroscope diff a.mcap b.mcap</b>.';
+    strip.innerHTML = 'a bundle cannot be compared: the verdict is recomputed from the ' +
+      'recordings themselves, not from a summary of them. Use <b>ferroscope diff a.mcap b.mcap</b>.';
     S.div=null; S.verdict=null; return;
   }
   let v;
-  try { v = JSON.parse(fsDiff(S.A.bytes, S.B.bytes, 0, 0)); }
-  catch(e){ return fail('comparison: '+(e.message||e)); }
+  if(S.A.bytes && S.B.bytes){
+    try { v = JSON.parse(fsDiff(S.A.bytes, S.B.bytes, 0, 0)); }
+    catch(e){ return fail('comparison: '+(e.message||e)); }
+  } else if(S.A.file && S.B.file){
+    // One of them was read in blocks, so this page has no bytes to hand the comparator. Walk
+    // both files instead — the same fold, fed rather than read.
+    try { v = await streamedDiff(S.A.file, S.B.file); }
+    catch(e){
+      strip.style.display='block'; strip.className='';
+      strip.textContent = String(e.message || e);
+      S.div=null; S.verdict=null; return;
+    }
+  } else {
+    strip.style.display='block'; strip.className='';
+    strip.innerHTML = 'this comparison needs both recordings, and one of them is no longer ' +
+      'available to re-read. Use <b>ferroscope diff a.mcap b.mcap</b>.';
+    S.div=null; S.verdict=null; return;
+  }
   S.verdict = v;
   strip.style.display='block';
   strip.className = v.kind==='incomparable' ? '' : (v.reproduced ? 'good' : 'bad');
@@ -1445,7 +1513,7 @@ function liveRefresh(final){
   if (!LIVE.fitted){ fitView(); LIVE.fitted = true; }
   // Follow: pin the clock to the newest frame while data still arrives.
   setT(final ? S.span[0] : S.span[1]);
-  if (final) compare();
+  if (final) compare().catch(e => fail('comparison: ' + (e.message || e)));
 }
 
 function liveStop(msg){

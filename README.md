@@ -159,14 +159,21 @@ That was wrong about the question. Deciding **where** two runs parted is a fold 
 samples is seen once, in file order, and nothing ever looks backwards — and holding the traces was
 an artifact of building them before comparing them. Walking both files at once and feeding the
 pairs straight in takes a 527 MB pair from **2.34 GB to 39–61 MB**, byte-identical output, for the
-same time within noise (medians 36.7 s and 32.4 s over five alternating runs).
+same time within noise (medians 36.7 s and 32.4 s over five alternating runs). A **1.3 GB pair**
+goes from 4,057 MB to **95 MB**.
 
-The precondition is stated rather than assumed: the two runs must present the same `(channel,
-step)` sequence in file order, which two runs of one spec do, and which is **checked at every
-pair**. Where they do not — different channel sets, a different emission order — the lockstep walk
-**refuses** and the caller falls back to building both trajectories. A comparator that silently
-paired the wrong samples would be worse than a slow one. A run that stopped early is handled in
-the fast path, because its leftover tail is exactly what the report already calls a gap.
+The unit is a **step**, and it took a measurement to find out why. The first version walked the
+two files position by position and refused the moment they disagreed — which is fine until a
+channel fires *conditionally*. The demo records a contact only while the body is against its stop,
+so two runs that have genuinely diverged stop emitting the same samples at the same steps, and
+that is exactly the pair anybody wants compared: the 1.3 GB pair refused outright and fell back to
+4 GB of trajectories. Matching a whole step's samples as a group, channel by channel, handles it
+and agrees with the held comparison answer for answer — because the held comparison matches on
+`(channel, step)` too.
+
+What it still refuses is a file whose steps do not advance, because the walk relies on that and
+the held comparison does not; there the caller falls back to building both trajectories. A
+comparator that silently paired the wrong samples would be worse than a slow one.
 
 `inspect` is the other end of the table: it parses no payloads at all, so it is a single pass that
 touches almost nothing.
@@ -233,11 +240,30 @@ the door exists.
 asking for the whole file is a measurement taken on one machine, and a reader whose machine has
 less to spare should not have to discover that by watching a tab die.
 
-What a block read cannot do, it says. The bytes did not stay, so comparison — which recomputes
-both receipts from the recordings themselves — and mesh attachments are unavailable, and each
-says so rather than failing obscurely. What it *can* do, and a bundle cannot, is verify: the
-digest is recomputed from those bytes as they go past, in that browser, and the receipt panel is
-entitled to say **recomputed here**.
+**And two of them can be compared.** That was the last thing a block read could not do — `diff`
+takes bytes, and a streamed recording has none — so the comparison reads both files itself.
+Three passes each, and each one is forced by the file's layout: the receipt `seal` writes at the
+*end* names the precision to recompute the digest at; then the digest, the ledger and the
+component labels that let the report say `effort[knee]` rather than `[5]`; then the two runs
+walked **together**, pair by pair.
+
+Measured, in Chrome, on two 1.3 GB recordings — 2.6 GB the page never held:
+
+| | |
+|---|---|
+| compared in | **122 s** |
+| JS heap | **108 MB** |
+| answer | diverged at step 400,066, `/robot/joints` `effort[knee]` |
+
+The perturbation was injected at step 400,000. And the comparison a page makes this way is
+**character for character** the comparison it makes from bytes it holds — checked in a real
+browser by a CI job, because two comparators is how this project has repeatedly ended up with two
+answers to one question.
+
+What a block read still cannot do, it says: mesh attachments need the whole recording, so the
+3-D view draws the primitives and notes why. What it *can* do, and a bundle cannot, is verify:
+the digest is recomputed from those bytes as they go past, in that browser, and the receipt panel
+is entitled to say **recomputed here**.
 
 **A bundle is still the faster door.** `ferroscope export` strides every lane down to what a
 screen can actually draw:

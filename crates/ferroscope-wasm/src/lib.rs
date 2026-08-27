@@ -227,14 +227,210 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
     // messages hold. A page that says "reproduced" has to have checked.
     let va = verify(a);
     let vb = verify(b);
+
+    let p = ferroscope_receipt::profile(&ta, &tb, tol);
+    let steps = ta.samples.iter().map(|s| s.step).max().unwrap_or(0);
+    let labels = ferroscope_schema::channel_labels(a);
+    Ok(diff_json(&p, &va, &vb, &ra, &rb, &labels, steps))
+}
+
+/// Compare two recordings neither of which the browser can hold.
+///
+/// [`diff`] takes both files as `Uint8Array`s, which stops working at about 2 GB apiece and
+/// stopped being possible at all once a large recording was opened in blocks: a page that
+/// streamed a file no longer has its bytes. This is the comparison with the same shape as
+/// [`BundleStream`] — pushed, not read.
+///
+/// **Three passes**, and each one is there for a reason the file's layout forces:
+///
+/// 1. the receipt of each run, which `seal` writes at the END of the file, so nothing can be
+///    hashed until it has been read;
+/// 2. the digest recomputed at that precision, the energy ledger, and the component labels that
+///    let the report say `effort[hip]` rather than `[5]`;
+/// 3. the two runs walked **together**, pair by pair, which is the comparison itself.
+///
+/// Passes 1 and 2 read each file on its own; pass 3 reads both at once, and there the order
+/// matters: feed whichever side [`wants_a`](DiffStream::wants_a) or
+/// [`wants_b`](DiffStream::wants_b) asks for. Feeding a side that does not want a block is how a
+/// lockstep walk turns back into holding a file.
+///
+/// The precondition is checked at every pair: two runs must present the same `(channel, step)`
+/// sequence in file order. Where they do not, [`finish`](DiffStream::finish) throws rather than
+/// answering, and the caller falls back to `diff` on the bytes if it still has them. A
+/// comparator that silently paired the wrong samples would be worse than a slow one.
+#[wasm_bindgen]
+pub struct DiffStream {
+    tol: Tolerance,
+    fa: ferroscope_schema::VerifyFold,
+    fb: ferroscope_schema::VerifyFold,
+    walk: Option<ferroscope_schema::PairStream>,
+    /// 0 and 1 are the two verification passes; 2 is the lockstep walk.
+    phase: u8,
+    va: Option<ferroscope_schema::Verification>,
+    vb: Option<ferroscope_schema::Verification>,
+    ra: Option<ferroscope_receipt::Receipt>,
+    rb: Option<ferroscope_receipt::Receipt>,
+    labels: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[wasm_bindgen]
+impl DiffStream {
+    #[wasm_bindgen(constructor)]
+    pub fn new(abs: f64, rel: f64) -> DiffStream {
+        DiffStream {
+            tol: Tolerance {
+                abs: if abs > 0.0 { abs } else { 1e-9 },
+                rel: if rel > 0.0 { rel } else { 1e-9 },
+            },
+            fa: ferroscope_schema::VerifyFold::new(),
+            fb: ferroscope_schema::VerifyFold::new(),
+            walk: None,
+            phase: 0,
+            va: None,
+            vb: None,
+            ra: None,
+            rb: None,
+            labels: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Which pass is being fed: 1 and 2 read each file alone, 3 walks them together.
+    pub fn pass(&self) -> u32 {
+        self.phase as u32 + 1
+    }
+
+    /// Whether side A wants another block right now.
+    pub fn wants_a(&self) -> bool {
+        match &self.walk {
+            None => true,
+            Some(w) => w.wants_a(),
+        }
+    }
+
+    /// Whether side B wants another block right now.
+    pub fn wants_b(&self) -> bool {
+        match &self.walk {
+            None => true,
+            Some(w) => w.wants_b(),
+        }
+    }
+
+    /// Add the next block of recording A, in file order.
+    pub fn push_a(&mut self, block: &[u8]) -> bool {
+        match &mut self.walk {
+            None => self.fa.push(block),
+            Some(w) => w.push_a(block),
+        }
+    }
+
+    /// Add the next block of recording B, in file order.
+    pub fn push_b(&mut self, block: &[u8]) -> bool {
+        match &mut self.walk {
+            None => self.fb.push(block),
+            Some(w) => w.push_b(block),
+        }
+    }
+
+    /// Say that A's bytes have run out for this pass.
+    pub fn end_a(&mut self) {
+        if let Some(w) = &mut self.walk {
+            w.end_a();
+        }
+    }
+
+    /// Say that B's bytes have run out for this pass.
+    pub fn end_b(&mut self) {
+        if let Some(w) = &mut self.walk {
+            w.end_b();
+        }
+    }
+
+    /// End this pass and begin the next. Push the same bytes again from the start.
+    pub fn rewind(&mut self) {
+        match self.phase {
+            0 => {
+                self.fa.rewind();
+                self.fb.rewind();
+                self.phase = 1;
+            }
+            1 => {
+                // The verifications are finished before the walk starts, because the walk needs
+                // nothing from them and holding two folds open costs two of everything.
+                self.ra = self.fa.receipt().cloned();
+                self.rb = self.fb.receipt().cloned();
+                self.labels = self.fa.labels();
+                let (fa, fb) = (
+                    std::mem::take(&mut self.fa),
+                    std::mem::take(&mut self.fb),
+                );
+                self.va = fa.finish();
+                self.vb = fb.finish();
+                self.walk = Some(ferroscope_schema::PairStream::new(self.tol));
+                self.phase = 2;
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the two runs turned out not to line up, so the walk cannot answer.
+    pub fn refused(&self) -> bool {
+        self.walk.as_ref().is_some_and(|w| w.refused())
+    }
+
+    /// The comparison, as the same JSON [`diff`] returns. Consumes the stream.
+    pub fn finish(mut self) -> Result<String, JsValue> {
+        if self.phase < 2 {
+            return Err(JsValue::from_str(
+                "the recordings were not read three times: a comparison needs a pass for the \
+                 receipts, a pass to recompute them, and a pass that walks both runs together. \
+                 Call rewind() between them.",
+            ));
+        }
+        let walk = self
+            .walk
+            .take()
+            .ok_or_else(|| JsValue::from_str("the comparison never started"))?;
+        let steps = walk.a_last_step();
+        let p = walk.finish().ok_or_else(|| {
+            JsValue::from_str(
+                "these two runs cannot be walked together: they do not record the same things in \
+                 the same order, so pairing them up would be guesswork. Compare them with \
+                 `ferroscope diff a.mcap b.mcap`, which builds both trajectories.",
+            )
+        })?;
+        Ok(diff_json(
+            &p,
+            &self.va,
+            &self.vb,
+            &self.ra,
+            &self.rb,
+            &self.labels,
+            steps,
+        ))
+    }
+}
+
+/// The comparison, as the JSON a page draws.
+///
+/// One builder, two callers: [`diff`] hands it a comparison made from two recordings held whole,
+/// and [`DiffStream`] hands it one made by walking both files. A second builder would be a
+/// second definition of what the page is being told — the failure this project has shipped once
+/// per comparator.
+#[allow(clippy::too_many_arguments)]
+fn diff_json(
+    p: &ferroscope_receipt::Profile,
+    va: &Option<ferroscope_schema::Verification>,
+    vb: &Option<ferroscope_schema::Verification>,
+    ra: &Option<ferroscope_receipt::Receipt>,
+    rb: &Option<ferroscope_receipt::Receipt>,
+    labels: &std::collections::BTreeMap<String, Vec<String>>,
+    steps: u64,
+) -> String {
     let a_ok = va.as_ref().is_some_and(|v| v.ok());
     let b_ok = vb.as_ref().is_some_and(|v| v.ok());
     let trustworthy = a_ok && b_ok;
-
-    let p = ferroscope_receipt::profile(&ta, &tb, tol);
     let verdict = &p.verdict;
 
-    let steps = ta.samples.iter().map(|s| s.step).max().unwrap_or(0);
     let (kind, step, channel, index, xa, xb, absd, reld) = match verdict {
         Verdict::BitExact => ("bit-exact", -1i64, String::new(), -1i64, 0.0, 0.0, 0.0, 0.0),
         Verdict::IdenticalAtPrecision { .. } => (
@@ -301,7 +497,6 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         }
     };
 
-    let labels = ferroscope_schema::channel_labels(a);
     let name_of = |ch: &str, i: usize| -> String {
         labels
             .get(ch)
@@ -385,7 +580,7 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
         _ => "[]".to_string(),
     };
 
-    Ok(format!(
+    format!(
         "{{\"kind\":\"{kind}\",\"reproduced\":{},\"verified_a\":{a_ok},\"verified_b\":{b_ok},\
           \"trustworthy\":{trustworthy},\"text\":\"{}\",\
           \"step\":{step},\"steps\":{steps},\"channel\":\"{}\",\"index\":{index},\
@@ -419,7 +614,7 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
             (Some(x), Some(y)) => x.spec_digest == y.spec_digest,
             _ => false,
         },
-    ))
+    )
 }
 
 fn json_strings(v: &[String]) -> String {

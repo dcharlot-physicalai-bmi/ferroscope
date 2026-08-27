@@ -20,8 +20,12 @@ import { extname, basename, resolve } from 'node:path';
 const puppeteer = (await import(process.env.PUPPETEER || 'puppeteer-core')).default;
 
 const file = process.argv[2];
-if (!file) { console.error('usage: node ci/viewer-blocks.mjs <recording.mcap> [chrome]'); process.exit(2); }
-const CHROME = process.argv[3] || process.env.CHROME
+const fileB = process.argv[3];
+if (!file || !fileB) {
+  console.error('usage: node ci/viewer-blocks.mjs <a.mcap> <b.mcap> [chrome]');
+  process.exit(2);
+}
+const CHROME = process.argv[4] || process.env.CHROME
   || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 const TYPES = { '.html':'text/html', '.js':'text/javascript', '.wasm':'application/wasm',
@@ -33,6 +37,7 @@ const root = resolve(new URL('../viewer', import.meta.url).pathname);
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const path = url.pathname === '/fixture.mcap' ? resolve(file)
+             : url.pathname === '/fixture-b.mcap' ? resolve(fileB)
              : resolve(root, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
   try {
     const st = statSync(path);
@@ -157,6 +162,94 @@ try {
     else ok(`${name} read: the receipt was recomputed here, not inherited`);
     if (/recomputed at export/.test(r.text)) fail(`${name} read: reported as a bundle`);
   }
+  // ---- 3. comparing two recordings the page never held ------------------------------------
+  // The last thing a block read could not do. `diff` takes bytes and a streamed recording has
+  // none, so the comparison reads both files itself -- three passes each, the third with both
+  // walked together. It must come out the SAME as the comparison made from the bytes.
+  {
+    const page = await browser.newPage();
+    page.on('pageerror', e => fail(`compare: page error: ${e.message}`));
+    await page.goto(`${base}/index.html`, { waitUntil: 'load' });
+    await page.addScriptTag({ type: 'module', content: `
+      import init, { diff, DiffStream } from './pkg/ferroscope_wasm.js';
+      await init();
+      window.__D = { diff, DiffStream };
+    `});
+    await page.waitForFunction('window.__D', { timeout: 60000 });
+    const r = await page.evaluate(async () => {
+      const bytes = new Uint8Array(await (await fetch('/fixture.mcap')).arrayBuffer());
+      const other = new Uint8Array(await (await fetch('/fixture-b.mcap')).arrayBuffer());
+      const held = window.__D.diff(bytes, other, 0, 0);
+
+      const fa = new Blob([bytes]), fb = new Blob([other]);
+      const BLOCK = 8 * 1048576;
+      const d = new window.__D.DiffStream(0, 0);
+      const feed = async (blob, which) => {
+        for (let at = 0; at < blob.size; at += BLOCK) {
+          const b = new Uint8Array(await blob.slice(at, Math.min(at + BLOCK, blob.size)).arrayBuffer());
+          if (!(which === 'a' ? d.push_a(b) : d.push_b(b))) break;
+        }
+      };
+      for (let p = 0; p < 2; p++) { await feed(fa, 'a'); await feed(fb, 'b'); d.rewind(); }
+      let ia = 0, ib = 0;
+      while (!d.refused()) {
+        let moved = false;
+        if (d.wants_a()) {
+          if (ia < fa.size) { const e = Math.min(ia + BLOCK, fa.size);
+            d.push_a(new Uint8Array(await fa.slice(ia, e).arrayBuffer())); ia = e; moved = true; }
+          else d.end_a();
+        }
+        if (d.wants_b()) {
+          if (ib < fb.size) { const e = Math.min(ib + BLOCK, fb.size);
+            d.push_b(new Uint8Array(await fb.slice(ib, e).arrayBuffer())); ib = e; moved = true; }
+          else d.end_b();
+        }
+        if (!moved) break;
+      }
+      const streamed = d.finish();
+      return { same: held === streamed, held: held.slice(0, 160), streamed: streamed.slice(0, 160) };
+    });
+    if (!r.same) {
+      fail('the streamed comparison differs from the held one');
+      console.error(`   held    : ${r.held}`);
+      console.error(`   streamed: ${r.streamed}`);
+    } else ok('the streamed comparison is the same comparison, character for character');
+    await page.close();
+  }
+
+  // And the page must actually drive it: open a second recording in block mode and require a
+  // verdict on the strip rather than a refusal.
+  {
+    const page = await browser.newPage();
+    page.on('pageerror', e => fail(`compare page: ${e.message}`));
+    await page.goto(`${base}/index.html?blocks`, { waitUntil: 'load' });
+    await page.waitForSelector('#fileA', { timeout: 60000 });
+    await (await page.$('#fileA')).uploadFile(resolve(file));
+    await page.waitForFunction(() => document.getElementById('tree').textContent.length > 20,
+      { timeout: 600000, polling: 500 }).catch(() => {});
+    // Clear the strip first: opening A leaves a note in it, and a wait that merely required
+    // "the strip says something" would pass on that note without B ever being compared.
+    await page.evaluate(() => {
+      const s = document.getElementById('strip');
+      s.textContent = ''; s.style.display = 'none'; s.className = '';
+    });
+    await (await page.$('#fileB')).uploadFile(resolve(fileB));
+    await page.waitForFunction(
+      () => { const s = document.getElementById('strip');
+              return s && s.textContent.length > 0 && !/^comparing /.test(s.textContent); },
+      { timeout: 600000, polling: 250 }).catch(() => {});
+    const strip = await page.evaluate(() => ({
+      text: document.getElementById('strip').textContent,
+      cls: document.getElementById('strip').className,
+    }));
+    if (/cannot be compared|no longer available/.test(strip.text))
+      fail(`the page refused to compare two block-read recordings: ${strip.text}`);
+    else if (!/vs/.test(strip.text))
+      fail(`the page produced no verdict: ${strip.text.slice(0, 120)}`);
+    else ok(`the page compared two block-read recordings: ${strip.text.slice(0, 90)}`);
+    await page.close();
+  }
+
   if (!/read in blocks/.test(blocks.label)) fail('the viewer did not say it read the file in blocks');
   else ok('the viewer said it read the file in blocks');
   if (/read in blocks/.test(whole.label)) fail('a whole-file read claimed to be a block read');

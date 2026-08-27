@@ -18,7 +18,12 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.16 turns the streaming comparison inside out into `PairStream`, which is PUSHED: feed
 # both files as their blocks arrive rather than reading them. `profile_streaming` is a loop
 # over it, so a browser and the CLI compare two runs the same way.
-version = "0.1.16"
+# 0.1.17: `PairStream` matches by STEP rather than by position. A channel that fires
+# conditionally (a contact, while the body is against its stop) makes two genuinely diverged
+# runs stop emitting the same samples at the same steps — the exact pair anybody wants
+# compared — and position matching refused it: a 1.3 GB pair fell back to 4 GB of trajectories
+# and now costs 95 MB. `VerifyFold` is the pushed form of `verify_streaming`.
+version = "0.1.17"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
