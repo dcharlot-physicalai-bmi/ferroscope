@@ -1249,6 +1249,175 @@ impl SampleFeed {
 /// far fewer than this, so in practice a side is refilled once per block rather than per sample.
 const MATCH_QUEUE: usize = 4096;
 
+/// Two recordings compared as their bytes arrive, holding neither trajectory.
+///
+/// The pushed form of [`profile_streaming`], for the same reason
+/// [`BundleFold`](crate::BundleFold) is the pushed form of the bundle: a browser cannot hand out
+/// a [`Read`](std::io::Read), it hands over `File.slice()` blocks when they are ready. Feed both
+/// sides, alternating as [`wants_a`](PairStream::wants_a) and [`wants_b`](PairStream::wants_b)
+/// ask, say when each file has ended, and take the report.
+///
+/// The precondition is checked at every pair rather than assumed once: the two runs must present
+/// the same `(channel, step)` sequence in file order. Where they do not,
+/// [`refused`](PairStream::refused) goes true and [`finish`](PairStream::finish) yields nothing —
+/// the caller falls back to building both trajectories. A comparator that silently paired the
+/// wrong samples would be worse than a slow one.
+pub struct PairStream {
+    fa: SampleFeed,
+    fb: SampleFeed,
+    pair: ferroscope_receipt::Pairwise,
+    refused: bool,
+    /// `(channel, the side that is MISSING it)` -> `(first step, how many steps)`.
+    gaps: BTreeMap<(String, &'static str), (u64, usize)>,
+    last_gap: BTreeMap<(String, &'static str), u64>,
+    a_ended: bool,
+    b_ended: bool,
+}
+
+impl PairStream {
+    pub fn new(tol: ferroscope_receipt::Tolerance) -> Self {
+        Self {
+            fa: SampleFeed::new(),
+            fb: SampleFeed::new(),
+            pair: ferroscope_receipt::Pairwise::new(tol),
+            refused: false,
+            gaps: BTreeMap::new(),
+            last_gap: BTreeMap::new(),
+            a_ended: false,
+            b_ended: false,
+        }
+    }
+
+    /// Whether side A wants another block. Feeding a side that does not want one is how a
+    /// lockstep walk turns back into holding a file: the queue simply grows.
+    pub fn wants_a(&self) -> bool {
+        !self.refused && !self.a_ended && self.fa.queue.len() < MATCH_QUEUE
+    }
+
+    pub fn wants_b(&self) -> bool {
+        !self.refused && !self.b_ended && self.fb.queue.len() < MATCH_QUEUE
+    }
+
+    /// Add the next block of A, in file order. Returns whether A wants another.
+    pub fn push_a(&mut self, block: &[u8]) -> bool {
+        if !self.refused && !self.fa.push(block) {
+            self.a_ended = true;
+        }
+        self.match_up();
+        self.wants_a()
+    }
+
+    /// Add the next block of B, in file order. Returns whether B wants another.
+    pub fn push_b(&mut self, block: &[u8]) -> bool {
+        if !self.refused && !self.fb.push(block) {
+            self.b_ended = true;
+        }
+        self.match_up();
+        self.wants_b()
+    }
+
+    /// Say that A's bytes have run out.
+    pub fn end_a(&mut self) {
+        self.a_ended = true;
+        self.fa.ended();
+        self.match_up();
+    }
+
+    /// Say that B's bytes have run out.
+    pub fn end_b(&mut self) {
+        self.b_ended = true;
+        self.fb.ended();
+        self.match_up();
+    }
+
+    /// Whether the two runs turned out not to line up.
+    pub fn refused(&self) -> bool {
+        self.refused || self.fa.torn || self.fb.torn
+    }
+
+    /// Pair off everything both sides can currently match.
+    fn match_up(&mut self) {
+        if self.refused {
+            return;
+        }
+        while let (Some(sa), Some(sb)) = (self.fa.queue.front(), self.fb.queue.front()) {
+            if sa.step != sb.step || sa.channel != sb.channel {
+                self.refused = true;
+                return;
+            }
+            let sa = self.fa.queue.pop_front().expect("front was Some");
+            let sb = self.fb.queue.pop_front().expect("front was Some");
+            self.pair.push(sa.step, &sa.channel, &sa.values, &sb.values);
+        }
+        // A side that has ended cannot supply a partner, so whatever the other side still holds
+        // is a tail the comparison cannot cover — which is exactly what the report calls a gap.
+        if self.b_ended && self.fb.queue.is_empty() {
+            self.drain_tail(true);
+        }
+        if self.a_ended && self.fa.queue.is_empty() {
+            self.drain_tail(false);
+        }
+    }
+
+    /// Move one side's unmatchable samples into the gap tally. A key is a `(channel, step)`:
+    /// several samples on one channel at one step are one gap, not several, which is how the
+    /// trace comparison counts them.
+    fn drain_tail(&mut self, from_a: bool) {
+        let (queue, missing) = if from_a {
+            (&mut self.fa.queue, "B")
+        } else {
+            (&mut self.fb.queue, "A")
+        };
+        while let Some(s) = queue.pop_front() {
+            if from_a {
+                self.pair.unmatched_a();
+            }
+            let key = (s.channel, missing);
+            if self.last_gap.get(&key) != Some(&s.step) {
+                self.last_gap.insert(key.clone(), s.step);
+                let e = self.gaps.entry(key).or_insert((s.step, 0));
+                e.0 = e.0.min(s.step);
+                e.1 += 1;
+            }
+        }
+    }
+
+    /// The report, or nothing if the two runs could not be walked together.
+    pub fn finish(mut self) -> Option<ferroscope_receipt::Profile> {
+        if self.refused() {
+            return None;
+        }
+        self.end_a();
+        self.end_b();
+        if self.refused() {
+            return None;
+        }
+        let structural = ferroscope_receipt::Structural {
+            a_last_step: self.fa.last_step,
+            b_last_step: self.fb.last_step,
+            only_in_a: self
+                .fa
+                .seen_channels
+                .difference(&self.fb.seen_channels)
+                .cloned()
+                .collect(),
+            only_in_b: self
+                .fb
+                .seen_channels
+                .difference(&self.fa.seen_channels)
+                .cloned()
+                .collect(),
+            gaps: self
+                .gaps
+                .into_iter()
+                .map(|((ch, side), (first, n))| (ch, first, n, side))
+                .collect(),
+            ..Default::default()
+        };
+        Some(self.pair.finish(structural, self.fa.total, self.fb.total))
+    }
+}
+
 /// Compare two recordings **without holding either trajectory**.
 ///
 /// `diff` was the last read verb that still bought its answer with memory, and the reason was
@@ -1265,6 +1434,8 @@ const MATCH_QUEUE: usize = 4096;
 ///
 /// Memory is bounded by the channel count, the per-channel divergence history the shape
 /// classifier needs, and one match queue per side — not by the two recordings.
+///
+/// This is a loop over [`PairStream`], which is the same fold pushed rather than pulled.
 pub fn profile_streaming<FA, RA, FB, RB>(
     open_a: FA,
     open_b: FB,
@@ -1276,139 +1447,37 @@ where
     FB: Fn() -> std::io::Result<RB>,
     RB: std::io::Read,
 {
-    use ferroscope_receipt::{Pairwise, Structural};
-
     let mut ra = open_a().ok()?;
     let mut rb = open_b().ok()?;
-    let mut fa = SampleFeed::new();
-    let mut fb = SampleFeed::new();
-    let mut pair = Pairwise::new(tol);
+    let mut s = PairStream::new(tol);
     let mut block = vec![0u8; 64 << 10];
 
-    // Refill one side until it has samples to match or the file is spent.
-    fn refill<R: std::io::Read>(
-        r: &mut R,
-        f: &mut SampleFeed,
-        block: &mut [u8],
-    ) -> std::io::Result<()> {
-        while f.queue.len() < MATCH_QUEUE && !f.done {
-            match r.read(block) {
+    while !s.refused() && (s.wants_a() || s.wants_b()) {
+        for side in [true, false] {
+            let want = if side { s.wants_a() } else { s.wants_b() };
+            if !want {
+                continue;
+            }
+            let r: &mut dyn std::io::Read = if side { &mut ra } else { &mut rb };
+            match r.read(&mut block) {
                 Ok(0) => {
-                    f.ended();
+                    if side {
+                        s.end_a();
+                    } else {
+                        s.end_b();
+                    }
                 }
                 Ok(n) => {
-                    f.push(&block[..n]);
+                    if side {
+                        s.push_a(&block[..n]);
+                    } else {
+                        s.push_b(&block[..n]);
+                    }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
+                Err(_) => return None,
             }
-        }
-        Ok(())
-    }
-
-    loop {
-        refill(&mut ra, &mut fa, &mut block).ok()?;
-        refill(&mut rb, &mut fb, &mut block).ok()?;
-        if fa.torn || fb.torn {
-            return None;
-        }
-        if fa.queue.is_empty() || fb.queue.is_empty() {
-            break;
-        }
-        while let (Some(sa), Some(sb)) = (fa.queue.front(), fb.queue.front()) {
-            // The precondition, checked at every pair rather than assumed once.
-            if sa.step != sb.step || sa.channel != sb.channel {
-                return None;
-            }
-            let sa = fa.queue.pop_front().expect("front was Some");
-            let sb = fb.queue.pop_front().expect("front was Some");
-            pair.push(sa.step, &sa.channel, &sa.values, &sb.values);
         }
     }
-
-    // One side ran out. Anything left on the other is a tail the comparison cannot cover, and
-    // the report calls that a gap. Both queues being empty with both files spent is the clean
-    // case and leaves the structure empty.
-    let mut structural = Structural {
-        a_last_step: fa.last_step,
-        b_last_step: fb.last_step,
-        only_in_a: fa
-            .seen_channels
-            .difference(&fb.seen_channels)
-            .cloned()
-            .collect(),
-        only_in_b: fb
-            .seen_channels
-            .difference(&fa.seen_channels)
-            .cloned()
-            .collect(),
-        ..Default::default()
-    };
-
-    // Drain both tails, counting the keys each side has that the other does not. A key is a
-    // (channel, step): several samples on one channel at one step are one gap, not several,
-    // which is how the trace comparison counts them.
-    let mut gaps: BTreeMap<(String, &'static str), (u64, usize)> = BTreeMap::new();
-    let mut tail = |r: &mut dyn std::io::Read,
-                    f: &mut SampleFeed,
-                    side: &'static str,
-                    pair: &mut Pairwise|
-     -> Option<()> {
-        let mut last: BTreeMap<String, u64> = BTreeMap::new();
-        let mut block = vec![0u8; 64 << 10];
-        loop {
-            while f.queue.len() < MATCH_QUEUE && !f.done {
-                match r.read(&mut block) {
-                    Ok(0) => f.ended(),
-                    Ok(n) => {
-                        f.push(&block[..n]);
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(_) => return None,
-                }
-            }
-            if f.torn {
-                return None;
-            }
-            if f.queue.is_empty() {
-                return Some(());
-            }
-            while let Some(s) = f.queue.pop_front() {
-                if side == "A" {
-                    // A sample A has and B does not: excluded from the verdict, exactly as the
-                    // trace comparison counts it.
-                    pair.unmatched_a();
-                }
-                if last.get(&s.channel) != Some(&s.step) {
-                    last.insert(s.channel.clone(), s.step);
-                    let e = gaps
-                        .entry((s.channel.clone(), if side == "A" { "B" } else { "A" }))
-                        .or_insert((s.step, 0));
-                    e.0 = e.0.min(s.step);
-                    e.1 += 1;
-                }
-            }
-        }
-    };
-    tail(&mut ra, &mut fa, "A", &mut pair)?;
-    tail(&mut rb, &mut fb, "B", &mut pair)?;
-    // The channel sets are only complete once both files have been read to the end.
-    structural.a_last_step = fa.last_step;
-    structural.b_last_step = fb.last_step;
-    structural.only_in_a = fa
-        .seen_channels
-        .difference(&fb.seen_channels)
-        .cloned()
-        .collect();
-    structural.only_in_b = fb
-        .seen_channels
-        .difference(&fa.seen_channels)
-        .cloned()
-        .collect();
-    structural.gaps = gaps
-        .into_iter()
-        .map(|((ch, side), (first, n))| (ch, first, n, side))
-        .collect();
-
-    Some(pair.finish(structural, fa.total, fb.total))
+    s.finish()
 }

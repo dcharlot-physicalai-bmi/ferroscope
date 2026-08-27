@@ -15,7 +15,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.15 adds `profile_streaming`: compare two recordings by walking both files at once,
 # holding neither trajectory. Refuses any pair whose samples do not line up rather than
 # guessing which sample belongs with which. `receipt_streaming` reads a receipt and no payloads.
-version = "0.1.15"
+# 0.1.16 turns the streaming comparison inside out into `PairStream`, which is PUSHED: feed
+# both files as their blocks arrive rather than reading them. `profile_streaming` is a loop
+# over it, so a browser and the CLI compare two runs the same way.
+version = "0.1.16"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
