@@ -234,6 +234,98 @@ pub fn diff(a: &[u8], b: &[u8], abs: f64, rel: f64) -> Result<String, JsValue> {
     Ok(diff_json(&p, &va, &vb, &ra, &rb, &labels, steps))
 }
 
+/// Pull one attachment out of a recording the browser cannot hold.
+///
+/// The last thing a block read could not do. A glTF mesh travels inside the recording as an
+/// attachment, and an attachment is the one record that must be materialised whole — so a page
+/// that read the file in blocks and kept only the lanes has the geometry's *declaration* and not
+/// its bytes, and the 3-D view falls back to primitives.
+///
+/// One pass, and it stops the moment it finds what it was asked for: attachments are written
+/// near the front, so in practice this reads a small prefix of the file rather than all of it.
+/// Memory is one attachment plus one block, which is the honest bound — a mesh has to be whole
+/// to be a mesh.
+///
+/// ```js
+/// const s = new AttachmentStream('robot.glb');
+/// for (let at = 0; at < file.size; at += BLOCK) {
+///   const b = new Uint8Array(await file.slice(at, at + BLOCK).arrayBuffer());
+///   if (!s.push(b)) break;            // found it, or the file ended
+/// }
+/// const bytes = s.take();             // throws, naming what the file does carry
+/// ```
+#[wasm_bindgen]
+pub struct AttachmentStream {
+    want: String,
+    feed: ferroscope_schema::mcap::Feed,
+    found: Option<Vec<u8>>,
+    /// Every attachment name seen, so a miss can say what the recording does carry rather than
+    /// only that it does not carry this.
+    seen: Vec<String>,
+    torn: bool,
+}
+
+#[wasm_bindgen]
+impl AttachmentStream {
+    #[wasm_bindgen(constructor)]
+    pub fn new(name: &str) -> AttachmentStream {
+        AttachmentStream {
+            want: name.to_string(),
+            feed: ferroscope_schema::mcap::Feed::new(),
+            found: None,
+            seen: Vec::new(),
+            torn: false,
+        }
+    }
+
+    /// Add the next block, in file order. Returns `false` once there is no reason to read on —
+    /// the attachment has been found, the file has ended, or the bytes did not parse.
+    pub fn push(&mut self, block: &[u8]) -> bool {
+        use ferroscope_schema::mcap::{Flow, Record};
+        if self.found.is_some() || self.torn || self.feed.finished() {
+            return false;
+        }
+        self.feed.push(block);
+        let (want, found, seen) = (&self.want, &mut self.found, &mut self.seen);
+        let outcome = self.feed.drain(&mut |rec| {
+            if let Record::Attachment(a) = rec {
+                seen.push(a.name.clone());
+                if a.name == *want {
+                    *found = Some(a.data);
+                    // Nothing after this record can change the answer.
+                    return Ok(Flow::Stop);
+                }
+            }
+            Ok(Flow::Continue)
+        });
+        match outcome {
+            Ok(Flow::Stop) => false,
+            Ok(Flow::Continue) => true,
+            Err(_) => {
+                self.torn = true;
+                false
+            }
+        }
+    }
+
+    /// Whether the attachment has been found, so a caller can stop reading.
+    pub fn ready(&self) -> bool {
+        self.found.is_some()
+    }
+
+    /// The attachment's bytes. Consumes the stream.
+    pub fn take(self) -> Result<Vec<u8>, JsValue> {
+        match self.found {
+            Some(d) => Ok(d),
+            None => Err(JsValue::from_str(&format!(
+                "no attachment named {:?}; this recording carries [{}]",
+                self.want,
+                self.seen.join(", ")
+            ))),
+        }
+    }
+}
+
 /// Compare two recordings neither of which the browser can hold.
 ///
 /// [`diff`] takes both files as `Uint8Array`s, which stops working at about 2 GB apiece and

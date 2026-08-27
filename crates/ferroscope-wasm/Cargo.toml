@@ -10,7 +10,10 @@ description = "Ferroscope in the browser: open a recording, verify its receipt, 
 # — receipts, then digests and labels, then the two runs walked together — and the JSON it
 # returns is character for character what `diff` returns from bytes. Measured: two 1.3 GB
 # recordings compared in 122 s with a 108 MB heap.
-version = "0.1.11"
+# 0.1.12 adds `AttachmentStream`: pull one mesh out of a recording the browser cannot hold.
+# A glTF has to be whole to be a mesh, so a block read kept the declaration and not the bytes;
+# this goes back to the file and stops at the attachment — 2.0% of the file for a 76 KB mesh.
+version = "0.1.12"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

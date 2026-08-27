@@ -319,7 +319,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import init, { open as fsOpen, open_prefix, diff as fsDiff, divergence_curve, attachment,
                version, scene_from_text, record_scene, record_scene_with, sweep_scene,
-               record_case, BundleStream, DiffStream }
+               record_case, BundleStream, DiffStream, AttachmentStream }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -397,12 +397,24 @@ function shapeScale(shape, sz){
 async function meshFromAttachment(name){
   if(MESHES.has(name)) return MESHES.get(name);
   const promise = (async () => {
-    if(!S.A.bytes) throw new Error(S.A.streamed
-      ? 'meshes travel inside the recording as attachments, and a recording read in blocks was ' +
-        'never held whole — the primitives draw, the mesh bytes did not stay'
-      : 'meshes travel inside the recording as attachments, and a bundle does not carry their ' +
-        'bytes — open the .mcap itself to see them');
-    const bytes = attachment(S.A.bytes, name);          // throws with the available names
+    let bytes;
+    if(S.A.bytes){
+      bytes = attachment(S.A.bytes, name);              // throws with the available names
+    } else if(S.A.streamed && S.A.file){
+      // A recording read in blocks kept its lanes, not its bytes — and a mesh is the one record
+      // that has to be whole to be a mesh. So go back to the file for it: one more pass, which
+      // stops at the attachment rather than reading to the end, because attachments are written
+      // near the front.
+      const s = new AttachmentStream(name);
+      for(let at = 0; at < S.A.file.size; at += BLOCK){
+        const end = Math.min(at + BLOCK, S.A.file.size);
+        if(!s.push(new Uint8Array(await S.A.file.slice(at, end).arrayBuffer()))) break;
+      }
+      bytes = s.take();                                 // throws with the available names
+    } else {
+      throw new Error('meshes travel inside the recording as attachments, and a bundle does not ' +
+        'carry their bytes — open the .mcap itself to see them');
+    }
     const gltf = await GLTF.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
     const group = gltf.scene;
     group.traverse(o => {
@@ -416,6 +428,14 @@ async function meshFromAttachment(name){
     return group;
   })();
   MESHES.set(name, promise);
+  // What the 3-D view actually got, where a check can see it: a note can be missed, suppressed
+  // or reworded, and "the page did not complain" is not evidence that a mesh arrived.
+  promise.then(() => {
+    document.body.dataset.meshes = String((+document.body.dataset.meshes || 0) + 1);
+  }, () => {
+    document.body.dataset.meshesFailed =
+      String((+document.body.dataset.meshesFailed || 0) + 1);
+  });
   return promise;
 }
 
@@ -547,8 +567,8 @@ function syncScene(){
         }).catch(e => {
           if(S.A && S.A.bundle){ noteOnce('meshes are not carried in a bundle: this view draws ' +
             'the primitives, and the .mcap itself has the mesh bytes'); return; }
-          if(S.A && S.A.streamed){ noteOnce('this recording was read in blocks and its mesh ' +
-            'attachments were not kept: the view draws the primitives'); return; }
+          if(S.A && S.A.streamed){ noteOnce('this recording was read in blocks, and going back ' +
+            'to the file for its mesh did not find one: the view draws the primitives'); return; }
           fail('mesh "'+g.mesh+'": '+(e.message||e));
         });
       }
@@ -1116,11 +1136,21 @@ const fail = m => { const b=el('err'); b.textContent=m; b.style.display='block';
 const clearFail = () => { el('err').style.display='none'; };
 const NOTED = new Set();
 /// A note the reader should see once, without the failure box taking the page over.
+///
+/// It used to write only into an empty strip, which meant the SECOND note of a session was
+/// silently dropped — and the second note is the interesting one, because by then something has
+/// already happened. A page that says nothing is the failure this viewer has shipped before, so
+/// notes now accumulate: the strip keeps what is already there and the new note joins it.
 function noteOnce(msg){
   if(NOTED.has(msg)) return;
   NOTED.add(msg);
   const strip = el('strip');
-  if(strip && strip.style.display !== 'block'){
+  if(!strip) return;
+  const showing = strip.style.display === 'block' && strip.textContent.trim().length > 0;
+  if(showing && !/^comparing /.test(strip.textContent)){
+    strip.appendChild(document.createElement('br'));
+    strip.appendChild(document.createTextNode(msg));
+  } else {
     strip.style.display = 'block'; strip.className = '';
     strip.textContent = msg;
   }
@@ -1206,9 +1236,8 @@ async function streamOpen(slot, file, label, was){
   noteOnce(`${file.name} is ${(file.size/1048576).toFixed(0)} MB, past what this browser will ` +
     `hand over as one buffer, so it was read in ${(BLOCK/1048576)} MB blocks — twice, in ` +
     `${secs.toFixed(1)} s. The receipt below was recomputed from these bytes as they went ` +
-    `past. Comparing it with another recording works too, by reading both files again. What ` +
-    `does need the whole recording at once is meshes carried as attachments: the view draws ` +
-    `the primitives.`);
+    `past. Comparing it with another recording works too, and so do the meshes it carries: ` +
+    `both go back to the file for what they need rather than asking for it all at once.`);
 }
 
 async function accept(slot, file){

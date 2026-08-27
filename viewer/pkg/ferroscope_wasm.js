@@ -1,4 +1,85 @@
 /**
+ * Pull one attachment out of a recording the browser cannot hold.
+ *
+ * The last thing a block read could not do. A glTF mesh travels inside the recording as an
+ * attachment, and an attachment is the one record that must be materialised whole — so a page
+ * that read the file in blocks and kept only the lanes has the geometry's *declaration* and not
+ * its bytes, and the 3-D view falls back to primitives.
+ *
+ * One pass, and it stops the moment it finds what it was asked for: attachments are written
+ * near the front, so in practice this reads a small prefix of the file rather than all of it.
+ * Memory is one attachment plus one block, which is the honest bound — a mesh has to be whole
+ * to be a mesh.
+ *
+ * ```js
+ * const s = new AttachmentStream('robot.glb');
+ * for (let at = 0; at < file.size; at += BLOCK) {
+ *   const b = new Uint8Array(await file.slice(at, at + BLOCK).arrayBuffer());
+ *   if (!s.push(b)) break;            // found it, or the file ended
+ * }
+ * const bytes = s.take();             // throws, naming what the file does carry
+ * ```
+ */
+export class AttachmentStream {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        AttachmentStreamFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_attachmentstream_free(ptr, 0);
+    }
+    /**
+     * @param {string} name
+     */
+    constructor(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.attachmentstream_new(ptr0, len0);
+        this.__wbg_ptr = ret;
+        AttachmentStreamFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * Add the next block, in file order. Returns `false` once there is no reason to read on —
+     * the attachment has been found, the file has ended, or the bytes did not parse.
+     * @param {Uint8Array} block
+     * @returns {boolean}
+     */
+    push(block) {
+        const ptr0 = passArray8ToWasm0(block, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.attachmentstream_push(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * Whether the attachment has been found, so a caller can stop reading.
+     * @returns {boolean}
+     */
+    ready() {
+        const ret = wasm.attachmentstream_ready(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * The attachment's bytes. Consumes the stream.
+     * @returns {Uint8Array}
+     */
+    take() {
+        const ptr = this.__destroy_into_raw();
+        const ret = wasm.attachmentstream_take(ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+}
+if (Symbol.dispose) AttachmentStream.prototype[Symbol.dispose] = AttachmentStream.prototype.free;
+
+/**
  * Open a recording the browser cannot hold, a block at a time.
  *
  * [`open`] takes the whole file as one `Uint8Array`, which is what a browser hands over and is
@@ -652,6 +733,9 @@ function __wbg_get_imports() {
     };
 }
 
+const AttachmentStreamFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_attachmentstream_free(ptr, 1));
 const BundleStreamFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_bundlestream_free(ptr, 1));

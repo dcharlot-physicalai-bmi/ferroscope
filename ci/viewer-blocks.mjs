@@ -139,10 +139,16 @@ try {
          || (window.__rejections || []).length > 0,
       { timeout: 240000, polling: 500 })
       .catch(() => {});   // a page that never draws is a failure to REPORT, not to throw
+    // Meshes arrive after the tree does; give them a bounded chance rather than racing them.
+    await page.waitForFunction(
+      () => (+document.body.dataset.meshes || 0) + (+document.body.dataset.meshesFailed || 0) > 0,
+      { timeout: 60000, polling: 250 }).catch(() => {});
     const state = await page.evaluate(() => ({
       label: document.getElementById('nmA').textContent,
       tree: document.getElementById('tree').textContent.length,
       text: document.body.innerText,
+      meshes: +document.body.dataset.meshes || 0,
+      meshFailed: +document.body.dataset.meshesFailed || 0,
       rejections: window.__rejections || [],
     }));
     await page.close();
@@ -153,6 +159,13 @@ try {
   const blocks = await drive('?blocks');
   for (const [name, r] of [['whole-file', whole], ['block', blocks]]) {
     for (const e of r.errors) fail(`${name} read: page error: ${e}`);
+    // What the 3-D view ACTUALLY got. The first version of this checked that no complaint
+    // appeared on the page, and passed a build with the mesh path disabled: the complaint was
+    // real but a note already occupied the strip, so it was silently dropped. "The page did not
+    // complain" is not evidence.
+    if (r.meshFailed > 0) fail(`${name} read: ${r.meshFailed} mesh(es) failed to load`);
+    else if (!(r.meshes > 0)) fail(`${name} read: the 3-D view loaded no mesh at all`);
+    else ok(`${name} read: the 3-D view loaded ${r.meshes} mesh(es)`);
     if (r.tree < 20) fail(`${name} read: the topic tree is empty (${r.tree} chars)`);
     else ok(`${name} read: topic tree populated (${r.tree} chars)`);
     if (!/VERIFIED/.test(r.text)) fail(`${name} read: the receipt panel does not report VERIFIED`);
@@ -247,6 +260,51 @@ try {
     else if (!/vs/.test(strip.text))
       fail(`the page produced no verdict: ${strip.text.slice(0, 120)}`);
     else ok(`the page compared two block-read recordings: ${strip.text.slice(0, 90)}`);
+    await page.close();
+  }
+
+  // ---- 4. a mesh, out of a recording the page never held -----------------------------------
+  // A glTF has to be WHOLE to be a mesh, so the lanes a block read keeps are not enough. Going
+  // back to the file for it is one more pass, and it must produce the same bytes the whole-file
+  // reader produces.
+  {
+    const page = await browser.newPage();
+    page.on('pageerror', e => fail(`mesh: page error: ${e.message}`));
+    await page.goto(`${base}/index.html`, { waitUntil: 'load' });
+    await page.addScriptTag({ type: 'module', content: `
+      import init, { attachment, AttachmentStream, open } from './pkg/ferroscope_wasm.js';
+      await init();
+      window.__M = { attachment, AttachmentStream, open };
+    `});
+    await page.waitForFunction('window.__M', { timeout: 60000 });
+    const r = await page.evaluate(async () => {
+      const bytes = new Uint8Array(await (await fetch('/fixture.mcap')).arrayBuffer());
+      // Whatever mesh this recording declares — read it out of the bundle rather than guessing.
+      const b = JSON.parse(window.__M.open(bytes));
+      const name = (b.geometry || []).map(g => g.mesh).find(Boolean);
+      if (!name) return { skipped: true };
+      const held = window.__M.attachment(bytes, name);
+      const blob = new Blob([bytes]);
+      const BLOCK = 1 << 20;
+      const s = new window.__M.AttachmentStream(name);
+      let fed = 0;
+      for (let at = 0; at < blob.size; at += BLOCK) {
+        const blk = new Uint8Array(await blob.slice(at, Math.min(at + BLOCK, blob.size)).arrayBuffer());
+        fed += blk.length;
+        if (!s.push(blk)) break;
+      }
+      const got = s.take();
+      let same = held.length === got.length;
+      for (let i = 0; same && i < held.length; i++) if (held[i] !== got[i]) same = false;
+      return { name, same, bytes: got.length, fed, total: blob.size };
+    });
+    if (r.skipped) console.log('  --  this recording declares no mesh; nothing to pull');
+    else if (!r.same) fail(`the mesh pulled in blocks differs from the one read whole (${r.name})`);
+    else {
+      ok(`pulled ${r.name} (${r.bytes} bytes) out of a recording read in blocks`);
+      if (r.fed >= r.total) fail('pulling the mesh read the whole file rather than stopping at it');
+      else ok(`stopped after ${(100 * r.fed / r.total).toFixed(1)}% of the file`);
+    }
     await page.close();
   }
 

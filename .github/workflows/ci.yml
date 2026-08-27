@@ -97,13 +97,16 @@ jobs:
             || { echo "the viewer cannot compare a recording it read in blocks"; fail=1; }
           grep -q "d.wants_a()" viewer/index.html \
             || { echo "the viewer feeds the comparison without asking which side wants a block"; fail=1; }
-          # What it still cannot do, it must SAY, rather than failing obscurely.
-          for needle in \
-            "read in blocks" \
-            "the mesh bytes did not stay"; do
-            grep -q "$needle" viewer/index.html \
-              || { echo "the viewer no longer explains a block read: missing \"$needle\""; fail=1; }
-          done
+          # A mesh has to be WHOLE to be a mesh, so a block read kept the declaration and not
+          # the bytes. The page must go back to the file for it rather than drawing a box.
+          grep -q "new AttachmentStream(" viewer/index.html \
+            || { echo "the viewer cannot get a mesh out of a recording it read in blocks"; fail=1; }
+          grep -q "read in blocks" viewer/index.html \
+            || { echo "the viewer no longer says it read the file in blocks"; fail=1; }
+          # A second note used to be dropped when the strip was already showing one, which is how
+          # a page ends up saying nothing about the thing that just failed.
+          grep -q "strip.appendChild" viewer/index.html \
+            || { echo "notes are back to overwriting or being swallowed"; fail=1; }
           # A recording read in blocks is verified HERE, unlike a bundle, and the page must not
           # blur the two: `recomputed at export` belongs to bundles only.
           grep -q "S.A.streamed" viewer/index.html \

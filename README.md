@@ -260,10 +260,16 @@ The perturbation was injected at step 400,000. And the comparison a page makes t
 browser by a CI job, because two comparators is how this project has repeatedly ended up with two
 answers to one question.
 
-What a block read still cannot do, it says: mesh attachments need the whole recording, so the
-3-D view draws the primitives and notes why. What it *can* do, and a bundle cannot, is verify:
-the digest is recomputed from those bytes as they go past, in that browser, and the receipt panel
-is entitled to say **recomputed here**.
+**And the meshes come too.** A glTF has to be whole to be a mesh, so the lanes a block read keeps
+are not enough — the 3-D view had the geometry's *declaration* and not its bytes, and drew
+primitives. It now goes back to the file for the attachment, and stops at it: measured, **2.0% of
+the file read** to pull a 76 KB mesh, because geometry is declared before it moves and the glTF in
+a recording this project writes sits at byte 1,543 of 1.8 MB.
+
+What a block read *can* do that a bundle cannot is verify: the digest is recomputed from those
+bytes as they go past, in that browser, and the receipt panel is entitled to say **recomputed
+here**. So the only thing left that a bundle has over the recording itself is speed — a tenth of a
+second against a minute and a half — and a file small enough to send to somebody.
 
 **A bundle is still the faster door.** `ferroscope export` strides every lane down to what a
 screen can actually draw:

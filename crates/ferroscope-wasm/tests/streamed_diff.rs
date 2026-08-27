@@ -192,3 +192,95 @@ fn a_streamed_comparison_will_not_answer_after_too_few_passes() {
     d.rewind();
     assert_eq!(d.pass(), 3, "rewind did not begin the walk");
 }
+
+/// A recording carrying a mesh, the way `demo` and `urdf` do — mesh FIRST.
+///
+/// The order is the point, not decoration: in a recording this project writes, the glTF sits at
+/// byte 1,543 of 1.8 MB, because geometry is declared before it moves. The first draft of this
+/// fixture attached at the end and made the early-stop test fail for a reason that had nothing
+/// to do with the code under test.
+fn with_attachment(payload: &[u8]) -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    rec.attach(
+        "robot.glb",
+        "model/gltf-binary",
+        payload,
+        Stamp::at(0, 0, 0),
+    )
+    .unwrap();
+    for step in 0..4_000u64 {
+        let t = Stamp::at(step * 1_000_000, step * 1_000_000, step);
+        rec.scalar("/err", t, step as f64, "m").unwrap();
+    }
+    let spec = ferroscope_receipt::RunSpec::new("spring", 1)
+        .dt_ns(1_000_000)
+        .steps(4_000)
+        .integrator("none")
+        .solver("none")
+        .build("wasm-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
+}
+
+#[test]
+fn a_mesh_can_be_pulled_from_a_recording_read_in_blocks() {
+    // The last thing a block read could not do. A glTF mesh has to be WHOLE to be a mesh, so a
+    // page that kept only the lanes has the geometry's declaration and not its bytes — and the
+    // 3-D view fell back to primitives. Going back to the file for it is one more pass.
+    let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let file = with_attachment(&payload);
+    let held = ferroscope_wasm::attachment(&file, "robot.glb").expect("held attachment");
+    assert_eq!(held, payload, "the fixture's own attachment does not round-trip");
+
+    // Every block size, because nothing makes `File.slice()` land on a record boundary and an
+    // attachment is the one record big enough to span many blocks.
+    for block in [1usize, 997, 65536, file.len()] {
+        let mut s = ferroscope_wasm::AttachmentStream::new("robot.glb");
+        for part in file.chunks(block) {
+            if !s.push(part) {
+                break;
+            }
+        }
+        assert!(s.ready(), "the mesh was not found at block size {block}");
+        assert_eq!(
+            s.take().expect("streamed attachment"),
+            payload,
+            "the mesh differs when the bytes arrive {block} at a time"
+        );
+    }
+}
+
+#[test]
+fn pulling_a_mesh_stops_at_the_attachment_rather_than_reading_on() {
+    // Attachments are written near the front, so asking for one should not cost a whole pass
+    // over a long recording. This is the difference between a mesh appearing and a page pausing.
+    let payload: Vec<u8> = (0..50_000u32).map(|i| (i % 251) as u8).collect();
+    let file = with_attachment(&payload);
+    let mut s = ferroscope_wasm::AttachmentStream::new("robot.glb");
+    let mut fed = 0usize;
+    for part in file.chunks(4096) {
+        fed += part.len();
+        if !s.push(part) {
+            break;
+        }
+    }
+    assert!(s.ready(), "the mesh was not found");
+    assert!(
+        fed * 2 < file.len(),
+        "reading did not stop at the attachment: {fed} of {} bytes",
+        file.len()
+    );
+}
+
+#[test]
+fn a_missing_mesh_names_what_the_recording_does_carry() {
+    // "not found" sends a reader looking in the wrong place. What the file DOES carry is the
+    // useful half of the answer, and the streamed path has to say it too.
+    let file = with_attachment(b"glTF and then some");
+    let mut s = ferroscope_wasm::AttachmentStream::new("nothing.glb");
+    for part in file.chunks(4096) {
+        if !s.push(part) {
+            break;
+        }
+    }
+    assert!(!s.ready(), "found an attachment that is not there");
+}
