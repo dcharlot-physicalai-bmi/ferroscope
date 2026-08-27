@@ -395,18 +395,17 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         }
     }
 
-    // Streamed, like every other read verb. Comparison genuinely needs both TRACES in hand —
-    // it is the one question here that is not a fold — but it never needs the raw bytes, and
-    // those are the larger half.
+    // Streamed, like every other read verb — and since 0.1.22 without either trajectory in
+    // memory either. Deciding where two runs parted IS a fold over pairs in file order; holding
+    // the two traces was an artifact of building them before comparing them.
     let open_a = || std::fs::File::open(a_path);
     let open_b = || std::fs::File::open(b_path);
-    let read_trace = |path: &str, f: std::io::Result<std::fs::File>| {
+    let read_receipt = |path: &str, f: std::io::Result<std::fs::File>| {
         let file = f.map_err(|e| format!("cannot read {path}: {e}"))?;
-        ferroscope_schema::trace_from_streaming(file)
-            .ok_or_else(|| format!("{path} is not a readable Ferroscope recording"))
+        Ok::<_, String>(ferroscope_schema::receipt_streaming(file))
     };
-    let (ra, ta) = read_trace(a_path, open_a())?;
-    let (rb, tb) = read_trace(b_path, open_b())?;
+    let ra = read_receipt(a_path, open_a())?;
+    let rb = read_receipt(b_path, open_b())?;
 
     // Recompute both receipts BEFORE comparing anything. This used to be skipped entirely: the
     // fast path compared two digest strings read straight out of metadata, so two files whose
@@ -499,7 +498,22 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         }
     }
 
-    let p = ferroscope_receipt::profile(&ta, &tb, tol);
+    // The lockstep walk refuses any pair whose samples do not line up, rather than guessing at
+    // which sample belongs with which. When it does, fall back to building both trajectories:
+    // slower and heavier, but it can pair anything.
+    let p = match ferroscope_schema::profile_streaming(open_a, open_b, tol) {
+        Some(p) => p,
+        None => {
+            let read_trace = |path: &str, f: std::io::Result<std::fs::File>| {
+                let file = f.map_err(|e| format!("cannot read {path}: {e}"))?;
+                ferroscope_schema::trace_from_streaming(file)
+                    .ok_or_else(|| format!("{path} is not a readable Ferroscope recording"))
+            };
+            let (_, ta) = read_trace(a_path, open_a())?;
+            let (_, tb) = read_trace(b_path, open_b())?;
+            ferroscope_receipt::profile(&ta, &tb, tol)
+        }
+    };
     let labels = open_a()
         .map(ferroscope_schema::channel_labels_streaming)
         .unwrap_or_default();

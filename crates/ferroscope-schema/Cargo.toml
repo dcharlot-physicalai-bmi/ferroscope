@@ -12,7 +12,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # recording the browser will not hand over as one buffer. `bundle_streaming` is now this fold
 # with a file loop around it, and a fold whose second pass sees a different recording than its
 # first refuses rather than emitting partial lanes.
-version = "0.1.14"
+# 0.1.15 adds `profile_streaming`: compare two recordings by walking both files at once,
+# holding neither trajectory. Refuses any pair whose samples do not line up rather than
+# guessing which sample belongs with which. `receipt_streaming` reads a receipt and no payloads.
+version = "0.1.15"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

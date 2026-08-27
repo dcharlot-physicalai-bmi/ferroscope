@@ -143,21 +143,33 @@ Memory is bounded by the energy-sample count rather than by the file, not by not
 keeps each sample to compute its own coverage verdict, so a 2.6 GB run costs about 116 MB. That
 is a bound worth stating rather than rounding to "constant".
 
-**Every read verb streams now.** Measured on a 552 MB recording, each against the binary from
-before it was changed:
+**Every read verb streams now, and none of them holds the recording.** Measured on a 552 MB
+recording — 527 MB for the `diff` pair — each against the binary from before it was changed:
 
 | verb | streaming | slurping | |
 |---|---|---|---|
 | `inspect` | 2.9 s · **2 MB** | 2.8 s · 1160 MB | 580× less, same speed |
 | `verify` | 32–39 s · **32–47 MB** | 26–28 s · 1081–1200 MB | 35× less, 1.35× slower |
 | `export` | 186 s · **45 MB** | 255 s · 1924 MB | 43× less, and faster |
-| `diff` | 223 s · **2357 MB** | 224 s · 4179 MB | 1.8 GB less, same speed |
+| `diff` † | 27–38 s · **39–61 MB** | 28–61 s · 2336–2349 MB | 45× less, same speed |
 
-`diff` is the honest outlier and the reason it is in the table. Comparing two runs needs both
-*trajectories* in hand — it is the one question here that is not a fold — so its floor is the two
-traces, not the two files. What streaming removes is the 1.1 GB of raw bytes per file that it
-never needed. `inspect` is the other end: it parses no payloads at all, so it is a single pass
-that touches almost nothing.
+† `diff` was the last one, and for a while it was in this table as the honest outlier: comparing
+two runs needs both *trajectories*, so its floor was the two traces rather than the two files.
+That was wrong about the question. Deciding **where** two runs parted is a fold — each pair of
+samples is seen once, in file order, and nothing ever looks backwards — and holding the traces was
+an artifact of building them before comparing them. Walking both files at once and feeding the
+pairs straight in takes a 527 MB pair from **2.34 GB to 39–61 MB**, byte-identical output, for the
+same time within noise (medians 36.7 s and 32.4 s over five alternating runs).
+
+The precondition is stated rather than assumed: the two runs must present the same `(channel,
+step)` sequence in file order, which two runs of one spec do, and which is **checked at every
+pair**. Where they do not — different channel sets, a different emission order — the lockstep walk
+**refuses** and the caller falls back to building both trajectories. A comparator that silently
+paired the wrong samples would be worse than a slow one. A run that stopped early is handled in
+the fast path, because its leftover tail is exactly what the report already calls a gap.
+
+`inspect` is the other end of the table: it parses no payloads at all, so it is a single pass that
+touches almost nothing.
 
 The browser column's last row used to read **refused**, and the section after this one is how it
 stopped saying that. The `peak RSS` column is the *slice* reader — the one the page still uses

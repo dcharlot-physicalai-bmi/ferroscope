@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{Tolerance, Trace, Verdict, compare};
+use crate::{Comparison, Tolerance, Trace, Verdict};
 
 /// Steps after the onset below which no shape is claimed.
 const MIN_SHAPE_STEPS: usize = 20;
@@ -135,7 +135,9 @@ pub struct Structural {
 }
 
 /// The full answer: the headline verdict, plus where and how.
-#[derive(Clone, Debug)]
+// PartialEq is what holds the two comparison paths equal: the held comparison and the streamed
+// one must produce the SAME profile, not merely a similar-looking report.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     /// The same verdict [`compare`] gives, computed over the samples both runs share.
     pub verdict: Verdict,
@@ -175,6 +177,237 @@ fn key_by(t: &Trace) -> Keyed<'_> {
 /// counts: 4409 vs 4396", two integers and nowhere to go — into a location. A run that stopped
 /// early, a run with an added debug channel, and a run whose contact threshold moved all
 /// produced that identical refusal, and all three want different next actions.
+/// One channel's divergence history, accumulated a sample at a time.
+struct Acc {
+    onset: Option<(u64, f64, f64)>,
+    worst_rel: f64,
+    worst_rel_step: u64,
+    worst_abs: f64,
+    worst_index: usize,
+    a_at_worst: f64,
+    b_at_worst: f64,
+    first_crossing: Option<u64>,
+    /// (step, |Δ|) — turned into a scaled series once the channel's scale is known.
+    series: Vec<(u64, f64)>,
+    scale: f64,
+}
+
+impl Default for Acc {
+    fn default() -> Self {
+        Self {
+            onset: None,
+            worst_rel: 0.0,
+            worst_rel_step: 0,
+            worst_abs: 0.0,
+            worst_index: 0,
+            a_at_worst: 0.0,
+            b_at_worst: 0.0,
+            first_crossing: None,
+            series: Vec::new(),
+            scale: 0.0,
+        }
+    }
+}
+
+/// The divergence profile, accumulated one matched pair at a time.
+///
+/// [`profile`] is a loop over this, the same way [`compare`] is a loop over [`Comparison`], and
+/// for the same reason: everything the report says about *where* and *how big* is a fold over
+/// pairs in file order. Holding the two trajectories was an artifact of building them first.
+///
+/// What is NOT a fold, and so is not in here, is discovering the STRUCTURE of the two runs —
+/// which channels only one of them has, where their samples do not line up. The caller knows
+/// that: [`profile`] reads it off the two key maps it built anyway, and a streaming caller
+/// learns it from the walk. It arrives here as a finished [`Structural`].
+///
+/// Memory is bounded by the number of channels and by the per-channel history the shape
+/// classifier needs — a `(step, |Δ|)` pair per differing sample, 16 bytes — rather than by the
+/// two recordings, which is a bound worth stating rather than rounding to "constant".
+pub struct Pairwise {
+    tol: Tolerance,
+    cmp: Comparison,
+    acc: BTreeMap<String, Acc>,
+    shared: usize,
+    /// Samples A had that could not be paired. Named separately from
+    /// [`Structural::excluded_samples`], which counts both sides, because the report's
+    /// "everything lined up" test is written against this one.
+    excluded: usize,
+}
+
+impl Pairwise {
+    pub fn new(tol: Tolerance) -> Self {
+        Self {
+            tol,
+            cmp: Comparison::new(tol),
+            acc: BTreeMap::new(),
+            shared: 0,
+            excluded: 0,
+        }
+    }
+
+    /// Note a sample on A's side that has no partner on B's.
+    pub fn unmatched_a(&mut self) {
+        self.excluded += 1;
+    }
+
+    /// Feed one matched pair, in file order.
+    pub fn push(&mut self, step: u64, channel: &str, xs: &[f64], ys: &[f64]) {
+        // Feed the shared pair to the ordinary comparator, so the headline verdict comes from
+        // one implementation rather than two that could drift apart.
+        self.cmp.push(step, channel, xs, ys);
+        self.shared += 1;
+        if xs.len() != ys.len() {
+            self.excluded += 1;
+            return;
+        }
+
+        let mut step_abs = 0.0f64;
+        let mut differed = false;
+        let e = self.acc.entry(channel.to_string()).or_default();
+        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            // The channel's own scale, from both runs, whether or not this value differs:
+            // it is what a difference on this channel should be judged against.
+            e.scale = e.scale.max(x.abs()).max(y.abs());
+            if x.to_bits() != y.to_bits() {
+                differed = true;
+            }
+            let abs = (x - y).abs();
+            if abs == 0.0 {
+                continue;
+            }
+            let denom = x.abs().max(y.abs());
+            let rel = if denom > 0.0 { abs / denom } else { 0.0 };
+            step_abs = step_abs.max(abs);
+            if e.onset.is_none() {
+                e.onset = Some((step, abs, rel));
+            }
+            if rel > e.worst_rel {
+                e.worst_rel = rel;
+                e.worst_rel_step = step;
+                e.worst_abs = abs;
+                e.worst_index = i;
+                e.a_at_worst = x;
+                e.b_at_worst = y;
+            }
+            if abs > self.tol.abs && rel > self.tol.rel && e.first_crossing.is_none() {
+                e.first_crossing = Some(step);
+            }
+        }
+        if differed && e.onset.is_none() {
+            // Bits differ but the subtraction is zero (+0.0 against -0.0).
+            e.onset = Some((step, 0.0, 0.0));
+        }
+        if e.onset.is_some() {
+            e.series.push((step, step_abs));
+        }
+    }
+
+    /// How many pairs have been matched so far.
+    pub fn shared(&self) -> usize {
+        self.shared
+    }
+
+    /// Whether the verdict is already decided, so a caller reading two streams can stop rather
+    /// than reading the rest of both files for an answer that cannot change. The rest of the
+    /// report — extent, shape — still wants the whole walk, so this is a caller's choice.
+    pub fn verdict_settled(&self) -> bool {
+        self.cmp.settled()
+    }
+
+    /// Say the two runs cannot be compared at all.
+    pub fn incomparable(&mut self, reason: String) {
+        self.cmp.incomparable(reason);
+    }
+
+    /// Turn the accumulated history into the report. `structural` carries what the caller
+    /// discovered about the two runs' shape; `a_total` and `b_total` are how many samples each
+    /// run recorded, which is what turns a shared count into a coverage statement.
+    pub fn finish(self, mut structural: Structural, a_total: usize, b_total: usize) -> Profile {
+        structural.shared_samples = self.shared;
+        // Both sides. `excluded` counted only samples A had and B lacked; a sample B recorded
+        // and A did not is equally outside the verdict, and a coverage line that ignores it
+        // overstates what the comparison covered.
+        structural.excluded_samples = (a_total - self.shared) + (b_total - self.shared);
+
+        let verdict = self.cmp.finish();
+        let excluded = self.excluded;
+
+        let mut channels: Vec<ChannelDivergence> = self
+            .acc
+            .into_iter()
+            .filter_map(|(ch, e)| {
+                let (onset_step, onset_abs, onset_rel) = e.onset?;
+                // |Δ| against the channel's own scale. Where the scale is zero the channel is
+                // all zeros, and any difference on it is total.
+                let scaled = |d: f64| {
+                    if e.scale > 0.0 {
+                        d / e.scale
+                    } else if d > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                };
+                let (worst_scaled, worst_scaled_step) =
+                    e.series.iter().map(|(st, d)| (scaled(*d), *st)).fold(
+                        (0.0f64, onset_step),
+                        |acc, x| if x.0 > acc.0 { x } else { acc },
+                    );
+                Some(ChannelDivergence {
+                    channel: ch,
+                    onset_step,
+                    onset_abs,
+                    onset_rel,
+                    worst_rel: e.worst_rel,
+                    worst_rel_step: e.worst_rel_step,
+                    worst_abs: e.worst_abs,
+                    worst_scaled,
+                    worst_scaled_step,
+                    scale: e.scale,
+                    worst_index: e.worst_index,
+                    a_at_worst: e.a_at_worst,
+                    b_at_worst: e.b_at_worst,
+                    first_crossing_step: e.first_crossing,
+                    shape: shape_of(
+                        &e.series
+                            .iter()
+                            .map(|(st, d)| (*st, scaled(*d)))
+                            .collect::<Vec<_>>(),
+                    ),
+                })
+            })
+            .collect();
+        channels.sort_by(|x, y| {
+            y.worst_scaled
+                .partial_cmp(&x.worst_scaled)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| x.onset_step.cmp(&y.onset_step))
+        });
+
+        let onset = channels
+            .iter()
+            .min_by_key(|c| c.onset_step)
+            .map(|c| (c.channel.clone(), c.onset_step));
+        let crossing = channels.iter().filter_map(|c| c.first_crossing_step).min();
+
+        let clean = structural.only_in_a.is_empty()
+            && structural.only_in_b.is_empty()
+            && structural.gaps.is_empty()
+            && excluded == 0;
+
+        Profile {
+            verdict,
+            onset,
+            crossing,
+            channels,
+            structural: if clean { None } else { Some(structural) },
+        }
+    }
+}
+
 pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
     let ka = key_by(a);
     let kb = key_by(b);
@@ -226,23 +459,7 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
         .collect();
 
     // Walk the intersection, accumulating per-channel history.
-    struct Acc {
-        onset: Option<(u64, f64, f64)>,
-        worst_rel: f64,
-        worst_rel_step: u64,
-        worst_abs: f64,
-        worst_index: usize,
-        a_at_worst: f64,
-        b_at_worst: f64,
-        first_crossing: Option<u64>,
-        /// (step, |Δ|) — turned into a scaled series once the channel's scale is known.
-        series: Vec<(u64, f64)>,
-        scale: f64,
-    }
-    let mut acc: BTreeMap<&str, Acc> = BTreeMap::new();
-    let mut shared_a = Trace::default();
-    let mut shared_b = Trace::default();
-    let mut excluded = 0usize;
+    let mut pair = Pairwise::new(tol);
     // Walk A in FILE ORDER, not in key order. The shared traces are handed to compare(), whose
     // answer is "the first crossing encountered", so rebuilding them channel-major silently
     // changed the headline: it named a crossing at step 434 while the earliest crossing in the
@@ -254,159 +471,12 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
         let nth = seen.entry(k).or_insert(0);
         let i = *nth;
         *nth += 1;
-        let Some(vb) = kb.get(&k).and_then(|v| v.get(i)) else {
-            excluded += 1;
-            continue;
-        };
-        {
-            let xs = &sa.values;
-            let ys = *vb;
-            // Feed the shared pair to the ordinary comparator, so the headline verdict comes
-            // from one implementation rather than two that could drift apart.
-            shared_a.push(k.1, k.0, xs.clone());
-            shared_b.push(k.1, k.0, ys.clone());
-            if xs.len() != ys.len() {
-                excluded += 1;
-                continue;
-            }
-
-            let mut step_abs = 0.0f64;
-            let mut differed = false;
-            let e = acc.entry(k.0).or_insert(Acc {
-                onset: None,
-                worst_rel: 0.0,
-                worst_rel_step: 0,
-                worst_abs: 0.0,
-                worst_index: 0,
-                a_at_worst: 0.0,
-                b_at_worst: 0.0,
-                first_crossing: None,
-                series: Vec::new(),
-                scale: 0.0,
-            });
-            for (i, (&x, &y)) in xs.iter().zip(ys.iter()).enumerate() {
-                if !x.is_finite() || !y.is_finite() {
-                    continue;
-                }
-                // The channel's own scale, from both runs, whether or not this value differs:
-                // it is what a difference on this channel should be judged against.
-                e.scale = e.scale.max(x.abs()).max(y.abs());
-                if x.to_bits() != y.to_bits() {
-                    differed = true;
-                }
-                let abs = (x - y).abs();
-                if abs == 0.0 {
-                    continue;
-                }
-                let denom = x.abs().max(y.abs());
-                let rel = if denom > 0.0 { abs / denom } else { 0.0 };
-                step_abs = step_abs.max(abs);
-                if e.onset.is_none() {
-                    e.onset = Some((k.1, abs, rel));
-                }
-                if rel > e.worst_rel {
-                    e.worst_rel = rel;
-                    e.worst_rel_step = k.1;
-                    e.worst_abs = abs;
-                    e.worst_index = i;
-                    e.a_at_worst = x;
-                    e.b_at_worst = y;
-                }
-                if abs > tol.abs && rel > tol.rel && e.first_crossing.is_none() {
-                    e.first_crossing = Some(k.1);
-                }
-            }
-            if differed && e.onset.is_none() {
-                // Bits differ but the subtraction is zero (+0.0 against -0.0).
-                e.onset = Some((k.1, 0.0, 0.0));
-            }
-            if e.onset.is_some() {
-                e.series.push((k.1, step_abs));
-            }
+        match kb.get(&k).and_then(|v| v.get(i)) {
+            Some(vb) => pair.push(sa.step, &sa.channel, &sa.values, vb),
+            None => pair.unmatched_a(),
         }
     }
-    structural.shared_samples = shared_a.samples.len();
-    // Both sides. `excluded` counted only samples A had and B lacked; a sample B recorded and A
-    // did not is equally outside the verdict, and a coverage line that ignores it overstates
-    // what the comparison covered.
-    let _ = excluded;
-    structural.excluded_samples =
-        (a.samples.len() - shared_a.samples.len()) + (b.samples.len() - shared_b.samples.len());
-
-    let verdict = compare(&shared_a, &shared_b, tol);
-
-    let mut channels: Vec<ChannelDivergence> = acc
-        .into_iter()
-        .filter_map(|(ch, e)| {
-            let (onset_step, onset_abs, onset_rel) = e.onset?;
-            // |Δ| against the channel's own scale. Where the scale is zero the channel is all
-            // zeros, and any difference on it is total.
-            let scaled = |d: f64| {
-                if e.scale > 0.0 {
-                    d / e.scale
-                } else if d > 0.0 {
-                    1.0
-                } else {
-                    0.0
-                }
-            };
-            let (worst_scaled, worst_scaled_step) =
-                e.series.iter().map(|(st, d)| (scaled(*d), *st)).fold(
-                    (0.0f64, onset_step),
-                    |acc, x| if x.0 > acc.0 { x } else { acc },
-                );
-            Some(ChannelDivergence {
-                channel: ch.to_string(),
-                onset_step,
-                onset_abs,
-                onset_rel,
-                worst_rel: e.worst_rel,
-                worst_rel_step: e.worst_rel_step,
-                worst_abs: e.worst_abs,
-                worst_scaled,
-                worst_scaled_step,
-                scale: e.scale,
-                worst_index: e.worst_index,
-                a_at_worst: e.a_at_worst,
-                b_at_worst: e.b_at_worst,
-                first_crossing_step: e.first_crossing,
-                // Shape is judged on the SCALED series for the same reason the ranking is: a
-                // signal crossing zero makes the pointwise relative difference spike, and a
-                // shape fitted to those spikes describes the zero crossings, not the run.
-                shape: shape_of(
-                    &e.series
-                        .iter()
-                        .map(|(st, d)| (*st, scaled(*d)))
-                        .collect::<Vec<_>>(),
-                ),
-            })
-        })
-        .collect();
-    channels.sort_by(|x, y| {
-        y.worst_scaled
-            .partial_cmp(&x.worst_scaled)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| x.onset_step.cmp(&y.onset_step))
-    });
-
-    let onset = channels
-        .iter()
-        .min_by_key(|c| c.onset_step)
-        .map(|c| (c.channel.clone(), c.onset_step));
-    let crossing = channels.iter().filter_map(|c| c.first_crossing_step).min();
-
-    let clean = structural.only_in_a.is_empty()
-        && structural.only_in_b.is_empty()
-        && structural.gaps.is_empty()
-        && excluded == 0;
-
-    Profile {
-        verdict,
-        onset,
-        crossing,
-        channels,
-        structural: if clean { None } else { Some(structural) },
-    }
+    pair.finish(structural, a.samples.len(), b.samples.len())
 }
 
 /// Classify a `(step, relative difference)` series from its onset.

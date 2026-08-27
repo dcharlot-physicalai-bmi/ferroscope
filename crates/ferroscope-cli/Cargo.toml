@@ -20,7 +20,11 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.12: `live` binds 8737 (the port the viewer's live button dials) instead of an ephemeral
 # one, reports the span it can actually pace, cannot panic on --rate/--hold, and tells the
 # truth about how many viewers received the sealed file.
-version = "0.1.21"
+# 0.1.22: `diff` no longer holds either trajectory. Deciding WHERE two runs parted is a fold
+# over pairs in file order, so both files are walked at once and the pairs fed straight in:
+# 2.34 GB to 39-61 MB on a 527 MB pair, byte-identical output. Pairs that do not line up are
+# refused and fall back to building both traces rather than being paired by guesswork.
+version = "0.1.22"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

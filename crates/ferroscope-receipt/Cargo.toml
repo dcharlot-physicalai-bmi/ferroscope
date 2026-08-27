@@ -4,7 +4,10 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # 0.1.1: the comparator reports independent absolute/relative worsts, names the largest
 # difference in a diverging sample rather than the first in emit order, and gains profile():
 # onset, shape, ranked extent, structural localisation, and spec field differences.
-version = "0.1.4"
+# 0.1.5 adds `Comparison` and `Pairwise`: the verdict and the divergence profile as folds over
+# matched pairs. `compare` and `profile` are loops over them, so a streaming comparator and a
+# held one cannot become two answers to one question.
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -837,11 +837,11 @@ where
     })
 }
 
-/// [`trace_from`] over a stream, so comparing two recordings never holds either file.
+/// [`trace_from`] over a stream, so building a trajectory never holds the file.
 ///
-/// The trace itself is proportional to the run — comparison needs both trajectories in hand,
-/// which is the one question in this crate that is not a fold — but the raw bytes are not, and
-/// they are the larger half.
+/// The trace itself is still proportional to the run. [`profile_streaming`] is the way to
+/// compare two recordings without building either one; this remains the fallback for the pairs
+/// it refuses, and the way to get a trajectory when something other than a comparison wants it.
 pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, Trace)> {
     use ferroscope_mcap::{Flow, Record};
 
@@ -1115,4 +1115,300 @@ pub fn component_labels(schema: &str, joint_names: &[String]) -> Vec<String> {
         "ferroscope.Scalar" => vec!["value".into()],
         _ => Vec::new(),
     }
+}
+
+/// Read only the receipt out of a recording, parsing no payloads at all.
+///
+/// The cheapest read there is: every message is skipped by opcode, so this costs one pass over
+/// the bytes and nothing else. It exists because [`profile_streaming`] never builds a trace, and
+/// the receipt used to arrive as a by-product of building one.
+pub fn receipt_streaming<R: std::io::Read>(r: R) -> Option<Receipt> {
+    use ferroscope_mcap::{Flow, Record};
+    let mut receipt = None;
+    ferroscope_mcap::stream(r, |rec| {
+        if let Record::Metadata { name, kv } = rec
+            && name == RECEIPT_BLOCK
+        {
+            receipt = Receipt::from_pairs(&kv);
+        }
+        Ok(Flow::Continue)
+    })
+    .ok()?;
+    receipt
+}
+
+/// One recording's comparable samples, produced a block at a time.
+///
+/// The half of a streaming comparison that reads a file: push blocks in, take [`Sample`]s out in
+/// file order. Two of these, advanced together, is what lets two recordings be compared without
+/// either trajectory being held.
+struct SampleFeed {
+    feed: ferroscope_mcap::Feed,
+    schemas: BTreeMap<u16, String>,
+    channels: BTreeMap<u16, (String, u16)>,
+    queue: std::collections::VecDeque<ferroscope_receipt::Sample>,
+    /// Every sample this file produced, whether or not it found a partner. It is what turns a
+    /// shared count into a statement about coverage.
+    total: usize,
+    last_step: u64,
+    seen_channels: std::collections::BTreeSet<String>,
+    done: bool,
+    torn: bool,
+}
+
+impl SampleFeed {
+    fn new() -> Self {
+        Self {
+            feed: ferroscope_mcap::Feed::new(),
+            schemas: BTreeMap::new(),
+            channels: BTreeMap::new(),
+            queue: std::collections::VecDeque::new(),
+            total: 0,
+            last_step: 0,
+            seen_channels: std::collections::BTreeSet::new(),
+            done: false,
+            torn: false,
+        }
+    }
+
+    /// Add the next block. Returns false once this file has no more to give.
+    fn push(&mut self, block: &[u8]) -> bool {
+        use ferroscope_mcap::{Flow, Record};
+        if self.done {
+            return false;
+        }
+        self.feed.push(block);
+        let (schemas, channels, queue, total, last_step, seen) = (
+            &mut self.schemas,
+            &mut self.channels,
+            &mut self.queue,
+            &mut self.total,
+            &mut self.last_step,
+            &mut self.seen_channels,
+        );
+        let outcome = self.feed.drain(&mut |rec| {
+            match rec {
+                Record::Schema(sc) => {
+                    schemas.insert(sc.id, sc.name);
+                }
+                Record::Channel(ch) => {
+                    channels.insert(ch.id, (ch.topic, ch.schema_id));
+                }
+                Record::Message(m) => {
+                    let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
+                        return Ok(Flow::Continue);
+                    };
+                    let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+                    // Events carry no numbers and are outside the comparison, exactly as they
+                    // are outside the digest — a log line must not move a reproduction verdict.
+                    if schema == "ferroscope.Event" {
+                        return Ok(Flow::Continue);
+                    }
+                    let Ok(text) = std::str::from_utf8(m.data) else {
+                        return Ok(Flow::Continue);
+                    };
+                    let Some(v) = json::parse(text) else {
+                        return Ok(Flow::Continue);
+                    };
+                    let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                    *total += 1;
+                    *last_step = (*last_step).max(step);
+                    if !seen.contains(topic.as_str()) {
+                        seen.insert(topic.clone());
+                    }
+                    queue.push_back(ferroscope_receipt::Sample {
+                        step,
+                        channel: topic.clone(),
+                        values: digest_values(schema, &v),
+                    });
+                }
+                _ => {}
+            }
+            Ok(Flow::Continue)
+        });
+        match outcome {
+            Ok(Flow::Stop) => {
+                self.done = true;
+                false
+            }
+            Ok(Flow::Continue) => true,
+            Err(_) => {
+                self.torn = true;
+                self.done = true;
+                false
+            }
+        }
+    }
+
+    fn ended(&mut self) {
+        self.done = true;
+    }
+}
+
+/// How many samples to keep queued on each side before matching. One block of records is worth
+/// far fewer than this, so in practice a side is refilled once per block rather than per sample.
+const MATCH_QUEUE: usize = 4096;
+
+/// Compare two recordings **without holding either trajectory**.
+///
+/// `diff` was the last read verb that still bought its answer with memory, and the reason was
+/// never the question — deciding where two runs parted is a fold over pairs, and
+/// [`Pairwise`](ferroscope_receipt::Pairwise) is that fold — it was that the traces were built
+/// first. This walks both files at once and feeds the pairs straight in.
+///
+/// The precondition is stated rather than assumed: the two runs must present the **same
+/// (channel, step) sequence in file order**, which two runs of one spec do. Where they do not,
+/// this returns `None` and the caller falls back to the trace comparison rather than guessing —
+/// a comparator that silently pairs the wrong samples would be worse than a slow one. One run
+/// stopping early is handled here, because it is common and because the leftover tail is
+/// exactly what the report already calls a gap.
+///
+/// Memory is bounded by the channel count, the per-channel divergence history the shape
+/// classifier needs, and one match queue per side — not by the two recordings.
+pub fn profile_streaming<FA, RA, FB, RB>(
+    open_a: FA,
+    open_b: FB,
+    tol: ferroscope_receipt::Tolerance,
+) -> Option<ferroscope_receipt::Profile>
+where
+    FA: Fn() -> std::io::Result<RA>,
+    RA: std::io::Read,
+    FB: Fn() -> std::io::Result<RB>,
+    RB: std::io::Read,
+{
+    use ferroscope_receipt::{Pairwise, Structural};
+
+    let mut ra = open_a().ok()?;
+    let mut rb = open_b().ok()?;
+    let mut fa = SampleFeed::new();
+    let mut fb = SampleFeed::new();
+    let mut pair = Pairwise::new(tol);
+    let mut block = vec![0u8; 64 << 10];
+
+    // Refill one side until it has samples to match or the file is spent.
+    fn refill<R: std::io::Read>(
+        r: &mut R,
+        f: &mut SampleFeed,
+        block: &mut [u8],
+    ) -> std::io::Result<()> {
+        while f.queue.len() < MATCH_QUEUE && !f.done {
+            match r.read(block) {
+                Ok(0) => {
+                    f.ended();
+                }
+                Ok(n) => {
+                    f.push(&block[..n]);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    loop {
+        refill(&mut ra, &mut fa, &mut block).ok()?;
+        refill(&mut rb, &mut fb, &mut block).ok()?;
+        if fa.torn || fb.torn {
+            return None;
+        }
+        if fa.queue.is_empty() || fb.queue.is_empty() {
+            break;
+        }
+        while let (Some(sa), Some(sb)) = (fa.queue.front(), fb.queue.front()) {
+            // The precondition, checked at every pair rather than assumed once.
+            if sa.step != sb.step || sa.channel != sb.channel {
+                return None;
+            }
+            let sa = fa.queue.pop_front().expect("front was Some");
+            let sb = fb.queue.pop_front().expect("front was Some");
+            pair.push(sa.step, &sa.channel, &sa.values, &sb.values);
+        }
+    }
+
+    // One side ran out. Anything left on the other is a tail the comparison cannot cover, and
+    // the report calls that a gap. Both queues being empty with both files spent is the clean
+    // case and leaves the structure empty.
+    let mut structural = Structural {
+        a_last_step: fa.last_step,
+        b_last_step: fb.last_step,
+        only_in_a: fa
+            .seen_channels
+            .difference(&fb.seen_channels)
+            .cloned()
+            .collect(),
+        only_in_b: fb
+            .seen_channels
+            .difference(&fa.seen_channels)
+            .cloned()
+            .collect(),
+        ..Default::default()
+    };
+
+    // Drain both tails, counting the keys each side has that the other does not. A key is a
+    // (channel, step): several samples on one channel at one step are one gap, not several,
+    // which is how the trace comparison counts them.
+    let mut gaps: BTreeMap<(String, &'static str), (u64, usize)> = BTreeMap::new();
+    let mut tail = |r: &mut dyn std::io::Read,
+                    f: &mut SampleFeed,
+                    side: &'static str,
+                    pair: &mut Pairwise|
+     -> Option<()> {
+        let mut last: BTreeMap<String, u64> = BTreeMap::new();
+        let mut block = vec![0u8; 64 << 10];
+        loop {
+            while f.queue.len() < MATCH_QUEUE && !f.done {
+                match r.read(&mut block) {
+                    Ok(0) => f.ended(),
+                    Ok(n) => {
+                        f.push(&block[..n]);
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => return None,
+                }
+            }
+            if f.torn {
+                return None;
+            }
+            if f.queue.is_empty() {
+                return Some(());
+            }
+            while let Some(s) = f.queue.pop_front() {
+                if side == "A" {
+                    // A sample A has and B does not: excluded from the verdict, exactly as the
+                    // trace comparison counts it.
+                    pair.unmatched_a();
+                }
+                if last.get(&s.channel) != Some(&s.step) {
+                    last.insert(s.channel.clone(), s.step);
+                    let e = gaps
+                        .entry((s.channel.clone(), if side == "A" { "B" } else { "A" }))
+                        .or_insert((s.step, 0));
+                    e.0 = e.0.min(s.step);
+                    e.1 += 1;
+                }
+            }
+        }
+    };
+    tail(&mut ra, &mut fa, "A", &mut pair)?;
+    tail(&mut rb, &mut fb, "B", &mut pair)?;
+    // The channel sets are only complete once both files have been read to the end.
+    structural.a_last_step = fa.last_step;
+    structural.b_last_step = fb.last_step;
+    structural.only_in_a = fa
+        .seen_channels
+        .difference(&fb.seen_channels)
+        .cloned()
+        .collect();
+    structural.only_in_b = fb
+        .seen_channels
+        .difference(&fa.seen_channels)
+        .cloned()
+        .collect();
+    structural.gaps = gaps
+        .into_iter()
+        .map(|((ch, side), (first, n))| (ch, first, n, side))
+        .collect();
+
+    Some(pair.finish(structural, fa.total, fb.total))
 }

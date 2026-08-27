@@ -44,7 +44,7 @@ mod profile;
 mod sha256;
 
 pub use profile::{
-    ChannelDivergence, FieldDiff, Profile, Shape, Structural, declared_fields, profile,
+    ChannelDivergence, FieldDiff, Pairwise, Profile, Shape, Structural, declared_fields, profile,
     spec_differences,
 };
 pub use sha256::{Sha256, hex, sha256};
@@ -582,43 +582,97 @@ impl fmt::Display for Verdict {
 /// experiment?), then non-finite values (a NaN is never "within tolerance"), then the first
 /// real divergence, then the worst survivor.
 pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
+    let mut c = Comparison::new(tol);
     if a.samples.len() != b.samples.len() {
-        return Verdict::Incomparable {
-            reason: format!(
-                "different sample counts: {} vs {}",
-                a.samples.len(),
-                b.samples.len()
-            ),
-        };
+        c.incomparable(format!(
+            "different sample counts: {} vs {}",
+            a.samples.len(),
+            b.samples.len()
+        ));
+        return c.finish();
     }
-
-    let mut any_bit_difference = false;
-    let mut first_bit_diff: Option<(u64, String)> = None;
-    let mut max_abs = 0.0f64;
-    let mut worst_step = 0u64;
-    let mut worst_channel = String::new();
-    let mut max_rel = 0.0f64;
-    let mut rel_step = 0u64;
-    let mut rel_channel = String::new();
-
     for (sa, sb) in a.samples.iter().zip(&b.samples) {
         if sa.step != sb.step || sa.channel != sb.channel {
-            return Verdict::Incomparable {
-                reason: format!(
-                    "sample order differs: step {} {} vs step {} {}",
-                    sa.step, sa.channel, sb.step, sb.channel
-                ),
-            };
+            c.incomparable(format!(
+                "sample order differs: step {} {} vs step {} {}",
+                sa.step, sa.channel, sb.step, sb.channel
+            ));
+            break;
         }
-        if sa.values.len() != sb.values.len() {
-            return Verdict::Incomparable {
+        c.push(sa.step, &sa.channel, &sa.values, &sb.values);
+    }
+    c.finish()
+}
+
+/// The verdict, accumulated one matched pair at a time.
+///
+/// [`compare`] is a loop over this, and that is the point: deciding whether two runs reproduced
+/// is a **fold** — each pair is seen once, in file order, and nothing ever looks backwards — so
+/// it does not need the two trajectories in memory to run. Holding them was an artifact of
+/// building the traces first. Fed from two streams instead, a pair of recordings larger than
+/// the machine can be compared.
+///
+/// Pairs must arrive in file order and must already agree on step and channel: this takes the
+/// shared intersection of two runs, not the two files.
+pub struct Comparison {
+    tol: Tolerance,
+    /// The first terminal verdict wins, because [`compare`] returns on the first one it meets.
+    /// Once set, further pairs change nothing.
+    settled: Option<Verdict>,
+    any_bit_difference: bool,
+    first_bit_diff: Option<(u64, String)>,
+    max_abs: f64,
+    worst_step: u64,
+    worst_channel: String,
+    max_rel: f64,
+    rel_step: u64,
+    rel_channel: String,
+}
+
+impl Comparison {
+    pub fn new(tol: Tolerance) -> Self {
+        Self {
+            tol,
+            settled: None,
+            any_bit_difference: false,
+            first_bit_diff: None,
+            max_abs: 0.0,
+            worst_step: 0,
+            worst_channel: String::new(),
+            max_rel: 0.0,
+            rel_step: 0,
+            rel_channel: String::new(),
+        }
+    }
+
+    /// Whether a terminal verdict has already been reached, so a caller reading two streams can
+    /// stop rather than reading the rest of both files for an answer that cannot change.
+    pub fn settled(&self) -> bool {
+        self.settled.is_some()
+    }
+
+    /// Say the two runs cannot be compared at all, with the reason a reader needs.
+    pub fn incomparable(&mut self, reason: String) {
+        if self.settled.is_none() {
+            self.settled = Some(Verdict::Incomparable { reason });
+        }
+    }
+
+    /// Feed one matched pair.
+    pub fn push(&mut self, step: u64, channel: &str, xs: &[f64], ys: &[f64]) {
+        if self.settled.is_some() {
+            return;
+        }
+        if xs.len() != ys.len() {
+            self.settled = Some(Verdict::Incomparable {
                 reason: format!(
                     "channel {} has {} values in one run and {} in the other",
-                    sa.channel,
-                    sa.values.len(),
-                    sb.values.len()
+                    channel,
+                    xs.len(),
+                    ys.len()
                 ),
-            };
+            });
+            return;
         }
         // The worst crossing IN THIS SAMPLE, not the first one in file order. Emit order is an
         // artifact of how the recorder happened to pack a payload, and reporting by it pointed
@@ -626,21 +680,22 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
         // demo pair it named a hip velocity at rel 3.7e-8 while the injected perturbation —
         // the contact force, in the same message — differed at rel 1e-4.
         let mut crossing: Option<(usize, f64, f64, f64, f64)> = None;
-        for (i, (&x, &y)) in sa.values.iter().zip(&sb.values).enumerate() {
+        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
             if !x.is_finite() || !y.is_finite() {
-                return Verdict::NonFinite {
-                    step: sa.step,
-                    channel: sa.channel.clone(),
+                self.settled = Some(Verdict::NonFinite {
+                    step,
+                    channel: channel.to_string(),
                     index: i,
                     which: if !x.is_finite() { "A" } else { "B" },
-                };
+                });
+                return;
             }
             if x.to_bits() != y.to_bits() {
-                any_bit_difference = true;
+                self.any_bit_difference = true;
                 // Bits can differ while the subtraction is exactly zero (+0.0 against -0.0),
                 // and that case used to leave the worst-channel name empty in the verdict.
-                if first_bit_diff.is_none() {
-                    first_bit_diff = Some((sa.step, sa.channel.clone()));
+                if self.first_bit_diff.is_none() {
+                    self.first_bit_diff = Some((step, channel.to_string()));
                 }
             }
             let abs = (x - y).abs();
@@ -649,56 +704,64 @@ pub fn compare(a: &Trace, b: &Trace, tol: Tolerance) -> Verdict {
             }
             let denom = x.abs().max(y.abs());
             let rel = if denom > 0.0 { abs / denom } else { 0.0 };
-            if abs > tol.abs && rel > tol.rel && crossing.is_none_or(|(_, _, _, _, r)| rel > r) {
+            if abs > self.tol.abs
+                && rel > self.tol.rel
+                && crossing.is_none_or(|(_, _, _, _, r)| rel > r)
+            {
                 crossing = Some((i, x, y, abs, rel));
             }
-            if abs > max_abs {
-                max_abs = abs;
-                worst_step = sa.step;
-                worst_channel = sa.channel.clone();
+            if abs > self.max_abs {
+                self.max_abs = abs;
+                self.worst_step = step;
+                self.worst_channel = channel.to_string();
             }
-            if rel > max_rel {
-                max_rel = rel;
-                rel_step = sa.step;
-                rel_channel = sa.channel.clone();
+            if rel > self.max_rel {
+                self.max_rel = rel;
+                self.rel_step = step;
+                self.rel_channel = channel.to_string();
             }
         }
         if let Some((index, a, b, abs, rel)) = crossing {
-            return Verdict::Diverged {
-                step: sa.step,
-                channel: sa.channel.clone(),
+            self.settled = Some(Verdict::Diverged {
+                step,
+                channel: channel.to_string(),
                 index,
                 a,
                 b,
                 abs,
                 rel,
-            };
+            });
         }
     }
 
-    if !any_bit_difference {
-        Verdict::BitExact
-    } else {
-        // A difference that is real but subtracts to zero still has a location.
-        if worst_channel.is_empty()
-            && let Some((step, ch)) = first_bit_diff
-        {
-            worst_step = step;
-            worst_channel = ch.clone();
-            rel_step = step;
-            rel_channel = ch;
+    /// The verdict over everything pushed.
+    pub fn finish(mut self) -> Verdict {
+        if let Some(v) = self.settled {
+            return v;
         }
-        if rel_channel.is_empty() {
-            rel_step = worst_step;
-            rel_channel = worst_channel.clone();
+        if !self.any_bit_difference {
+            return Verdict::BitExact;
+        }
+        // A difference that is real but subtracts to zero still has a location.
+        if self.worst_channel.is_empty()
+            && let Some((step, ch)) = self.first_bit_diff
+        {
+            self.worst_step = step;
+            self.worst_channel = ch.clone();
+            self.rel_step = step;
+            self.rel_channel = ch;
+        }
+        if self.rel_channel.is_empty() {
+            self.rel_step = self.worst_step;
+            self.rel_channel = self.worst_channel.clone();
         }
         Verdict::WithinTolerance {
-            max_abs,
-            at_step: worst_step,
-            channel: worst_channel,
-            max_rel,
-            rel_step,
-            rel_channel,
+            max_abs: self.max_abs,
+            at_step: self.worst_step,
+            channel: self.worst_channel,
+            max_rel: self.max_rel,
+            rel_step: self.rel_step,
+            rel_channel: self.rel_channel,
         }
     }
 }

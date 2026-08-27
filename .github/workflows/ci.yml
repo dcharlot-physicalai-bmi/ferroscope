@@ -929,6 +929,40 @@ jobs:
           $B diff a.mcap b.mcap                 # exit 0: same spec, two platforms, one answer
           rc=0; $B diff a.mcap c.mcap > /dev/null || rc=$?   # exit 1: located divergence
           test "$rc" -eq 1 || { echo "a diverged pair must exit 1, got $rc"; exit 1; }
+      - name: comparing two runs does not hold either of them
+        # The claim, gated where it can actually fail. `diff` used to build both trajectories,
+        # which cost 2.34 GB on a 527 MB pair; walking both files at once costs 39-61 MB. A
+        # regression here would be silent -- the ANSWER would stay right and only the memory
+        # would move -- so nothing but a measurement catches it.
+        #
+        # And the fallback has to still be there: two runs that do not line up must be compared
+        # by building the traces rather than paired by guesswork, so the second case below is a
+        # structurally different pair and must still produce a report.
+        run: |
+          B=target/release/ferroscope
+          $B demo big-a.mcap --steps 120000 --seed 7 > /dev/null
+          $B demo big-b.mcap --steps 120000 --seed 7 --drift 60000 > /dev/null
+          bytes=$(stat -c%s big-a.mcap)
+          echo "each recording is $((bytes / 1048576)) MB"
+          /usr/bin/time -v $B diff big-a.mcap big-b.mcap > /dev/null 2> time.txt || true
+          kb=$(awk '/Maximum resident set size/ {print $NF}' time.txt)
+          echo "diff peak RSS: $((kb / 1024)) MB"
+          # Generous by design: the point is that it does not scale with the recordings, and a
+          # binary that went back to building both traces would be several times the file.
+          limit=$((bytes / 1024 / 2))
+          test "$kb" -lt "$limit" \
+            || { echo "diff held $((kb / 1024)) MB, over half of one $((bytes / 1048576)) MB recording -- it is building trajectories again"; exit 1; }
+          # The fallback: a pair that cannot be walked in lockstep must still be answered.
+          # A described scene shares no channel with the demo, so the lockstep walk refuses it
+          # at the first pair and the trace comparison takes over.
+          $B say "a crate falls beside a sweeping arm" other.mcap > /dev/null
+          rc=0; $B diff big-a.mcap other.mcap > fallback.txt 2>&1 || rc=$?
+          grep -q "the specs differ" fallback.txt \
+            || { echo "the fallback comparison did not report"; cat fallback.txt; exit 1; }
+          grep -q "gap " fallback.txt \
+            || { echo "the fallback comparison reported no structure"; cat fallback.txt; exit 1; }
+          echo "comparison is a fold, and what it cannot pair it refuses rather than guessing"
+
       - name: the documented exit codes are the contract
         # README and `usage` promise 0 yes / 1 no / 2 could-not-answer, and a CI gate written
         # against this tool is only as good as that promise. Exits 0 and 1 are covered above;

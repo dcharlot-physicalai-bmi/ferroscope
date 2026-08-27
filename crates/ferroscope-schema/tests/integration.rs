@@ -728,3 +728,155 @@ fn a_pushed_fold_refuses_two_passes_over_different_bytes() {
         "a fold whose second pass saw half the recording produced a bundle"
     );
 }
+
+/// Compare two recordings both ways: by building the trajectories, and by walking both files.
+fn both_ways(a: &[u8], b: &[u8]) -> (ferroscope_receipt::Profile, Option<ferroscope_receipt::Profile>) {
+    let tol = ferroscope_receipt::Tolerance::default();
+    let ta = ferroscope_schema::trace_from(a).expect("trace a").1;
+    let tb = ferroscope_schema::trace_from(b).expect("trace b").1;
+    let held = ferroscope_receipt::profile(&ta, &tb, tol);
+    let streamed = ferroscope_schema::profile_streaming(
+        || Ok(std::io::Cursor::new(a.to_vec())),
+        || Ok(std::io::Cursor::new(b.to_vec())),
+        tol,
+    );
+    (held, streamed)
+}
+
+#[test]
+fn a_streamed_comparison_is_the_same_comparison() {
+    // `diff` was the last verb that bought its answer with memory, and the reason was never the
+    // question: deciding where two runs parted is a fold over pairs in file order. This is what
+    // says the fold and the held comparison agree — not "about the same", the same Profile.
+    for (name, a, b) in [
+        ("identical", record(11, None), record(11, None)),
+        ("perturbed", record(11, None), record(11, Some(60))),
+        ("perturbed late", record(3, None), record(3, Some(180))),
+        ("different seeds", record(11, None), record(12, None)),
+    ] {
+        let (held, streamed) = both_ways(&a, &b);
+        let streamed = streamed.unwrap_or_else(|| panic!("{name}: streaming refused an aligned pair"));
+        assert_eq!(held, streamed, "{name}: the two comparisons disagree");
+    }
+}
+
+#[test]
+fn a_streamed_comparison_handles_a_run_that_stopped_early() {
+    // A run that crashed half way is not an exotic case, and its tail is exactly what the report
+    // already calls a gap. The streaming walk has to arrive at the same structure as the held
+    // one, including which side is missing what.
+    let whole = record(11, None);
+    let short = record_steps(11, 120);
+    let (held, streamed) = both_ways(&whole, &short);
+    let streamed = streamed.expect("streaming refused a prefix-aligned pair");
+    assert!(
+        held.structural.is_some(),
+        "the fixture is not actually a short run"
+    );
+    assert_eq!(held, streamed, "the two comparisons disagree about a short run");
+}
+
+#[test]
+fn a_streamed_comparison_refuses_what_it_cannot_pair() {
+    // The precondition is checked at every pair rather than assumed once. Two runs that do not
+    // present the same samples in the same order must be REFUSED — a comparator that silently
+    // paired the wrong samples would be worse than a slow one — so the caller falls back.
+    let a = record(11, None);
+    let b = reordered(&a);
+    assert!(
+        ferroscope_schema::profile_streaming(
+            || Ok(std::io::Cursor::new(a.clone())),
+            || Ok(std::io::Cursor::new(b.clone())),
+            ferroscope_receipt::Tolerance::default(),
+        )
+        .is_none(),
+        "streaming paired two runs that do not line up"
+    );
+}
+
+/// The same spring run, cut short — a run that crashed half way, which is not an exotic case.
+///
+/// Byte for byte the same generator as [`record_with_production`], including the contacts it
+/// only records past a threshold and the events it drops every fifty steps. A fixture that
+/// merely *resembled* the main one would be a different pair of runs, not a shorter one: the
+/// first draft left out contacts entirely and produced two runs with different channel sets,
+/// which is the case the streaming walk is supposed to refuse.
+fn record_steps(seed: u64, steps: u64) -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    let mut x = 0.2f64;
+    let mut v = 0.0f64;
+    for step in 0..steps {
+        let t = Stamp::at(step * 1_000_000, step * 1_010_000, step);
+        let f = -40.0 * x;
+        v += f * 1e-3;
+        x += v * 1e-3;
+        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        rec.joints(
+            "/joints",
+            t,
+            &JointState {
+                names: vec!["slide".into()],
+                position: vec![x],
+                velocity: vec![v],
+                effort: vec![f],
+            },
+        )
+        .unwrap();
+        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0).unwrap();
+        rec.energy("/energy/motor", t, Rail::Actuation, "motor", f.abs() * 2.0)
+            .unwrap();
+        rec.scalar("/err", t, x, "m").unwrap();
+        if step % 50 == 0 {
+            rec.event("/log", t, "info", "tick").unwrap();
+        }
+        if x.abs() > 0.15 {
+            rec.contact(
+                "/contacts",
+                t,
+                &Contact {
+                    body_a: "body".into(),
+                    body_b: "stop".into(),
+                    point: [x, 0.0, 0.0],
+                    normal: [1.0, 0.0, 0.0],
+                    force_n: f.abs(),
+                    penetration_m: x.abs() - 0.15,
+                },
+            )
+            .unwrap();
+        }
+    }
+    let spec = ferroscope_receipt::RunSpec::new("spring", seed)
+        .dt_ns(1_000_000)
+        .steps(steps)
+        .integrator("semi-implicit-euler")
+        .solver("none")
+        .build("integration-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
+}
+
+/// The same run with its channels emitted in a different order — the case a lockstep walk must
+/// refuse rather than pair up wrongly.
+fn reordered(_original: &[u8]) -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    let mut x = 0.2f64;
+    let mut v = 0.0f64;
+    for step in 0..120u64 {
+        let t = Stamp::at(step * 1_000_000, step * 1_010_000, step);
+        let f = -40.0 * x;
+        v += f * 1e-3;
+        x += v * 1e-3;
+        // `/err` first, `/body` last: the same numbers, a different file order.
+        rec.scalar("/err", t, x, "m").unwrap();
+        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0).unwrap();
+        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+            .unwrap();
+    }
+    let spec = ferroscope_receipt::RunSpec::new("spring", 11)
+        .dt_ns(1_000_000)
+        .steps(120)
+        .integrator("semi-implicit-euler")
+        .solver("none")
+        .build("integration-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
+}
