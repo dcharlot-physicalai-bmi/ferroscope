@@ -129,6 +129,12 @@ try {
     });
     await page.goto(`${base}/index.html${query}`, { waitUntil: 'load' });
     await page.waitForSelector('#fileA', { timeout: 60000 });
+    // The file input is in the static HTML; its handler is not. A change event fired before the
+    // module attaches is simply LOST, which reads exactly like a page that ignored the file —
+    // and that is what a slower machine, or a network, produces. `#ver` is written on the line
+    // after `await init()`, so it is the honest readiness signal.
+    await page.waitForFunction(() => /^v\d/.test(document.getElementById('ver').textContent),
+      { timeout: 120000, polling: 250 });
     const input = await page.$('#fileA');
     await input.uploadFile(resolve(file));
     // Wait for the page to be DRAWN, not merely labelled: a label set before the panels are
@@ -237,6 +243,12 @@ try {
     page.on('pageerror', e => fail(`compare page: ${e.message}`));
     await page.goto(`${base}/index.html?blocks`, { waitUntil: 'load' });
     await page.waitForSelector('#fileA', { timeout: 60000 });
+    // The file input is in the static HTML; its handler is not. A change event fired before the
+    // module attaches is simply LOST, which reads exactly like a page that ignored the file —
+    // and that is what a slower machine, or a network, produces. `#ver` is written on the line
+    // after `await init()`, so it is the honest readiness signal.
+    await page.waitForFunction(() => /^v\d/.test(document.getElementById('ver').textContent),
+      { timeout: 120000, polling: 250 });
     await (await page.$('#fileA')).uploadFile(resolve(file));
     await page.waitForFunction(() => document.getElementById('tree').textContent.length > 20,
       { timeout: 600000, polling: 500 }).catch(() => {});
