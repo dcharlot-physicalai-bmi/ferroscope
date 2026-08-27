@@ -244,7 +244,7 @@ fn push_channel(log: &mut Log, ch: Channel) {
     }
 }
 
-fn parse_schema(body: &[u8]) -> Result<Schema> {
+pub(crate) fn parse_schema(body: &[u8]) -> Result<Schema> {
     let mut b = Cur::new(body);
     Ok(Schema {
         id: b.u16()?,
@@ -254,7 +254,7 @@ fn parse_schema(body: &[u8]) -> Result<Schema> {
     })
 }
 
-fn parse_channel(body: &[u8]) -> Result<Channel> {
+pub(crate) fn parse_channel(body: &[u8]) -> Result<Channel> {
     let mut b = Cur::new(body);
     Ok(Channel {
         id: b.u16()?,
@@ -265,7 +265,7 @@ fn parse_channel(body: &[u8]) -> Result<Channel> {
     })
 }
 
-fn parse_message(body: &[u8]) -> Result<Message> {
+pub(crate) fn parse_message(body: &[u8]) -> Result<Message> {
     let mut b = Cur::new(body);
     Ok(Message {
         channel_id: b.u16()?,
@@ -276,7 +276,7 @@ fn parse_message(body: &[u8]) -> Result<Message> {
     })
 }
 
-fn parse_attachment(body: &[u8]) -> Result<Attachment> {
+pub(crate) fn parse_attachment(body: &[u8]) -> Result<Attachment> {
     let mut b = Cur::new(body);
     let log_time = b.u64()?;
     let create_time = b.u64()?;

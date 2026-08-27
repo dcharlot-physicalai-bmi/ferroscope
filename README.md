@@ -119,7 +119,21 @@ the same files dropped on the page in headless Chrome:
 | 1.2 GB | 6.0 M | 15.4 s | 2.6 GB | opens in 43 s |
 | 2.6 GB | 12.8 M | 65 s | 1.7 GB† | **refused** |
 
-Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
+**`verify` no longer holds the file at all.** Recomputing a receipt is a fold — hash each payload
+in file order, total the ledger, compare at the end — so it streams. Measured on the 552 MB row,
+alternating both binaries three times: **32–47 MB peak RSS against 1.1–1.2 GB, about 35× less,
+for about 1.35× the time** (26–28 s to 32–39 s). The time is the second pass, and the second pass
+is not optional: the receipt is written by `seal`, so it sits at the *end* of the file, and the
+digest cannot start until it knows the precision the receipt declares. The first draft buffered
+messages until the block arrived, which is the whole recording — the exact thing the function
+exists not to do.
+
+Memory is bounded by the energy-sample count rather than by the file, not by nothing: the ledger
+keeps each sample to compute its own coverage verdict, so a 2.6 GB run costs about 116 MB. That
+is a bound worth stating rather than rounding to "constant".
+
+The figures below are the *slice* reader, which is what `inspect`, `export` and the browser still
+use. Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
 roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
 machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
 RSS comes in *below* the 1.2 GB file's, because the memory is being compressed rather than held.

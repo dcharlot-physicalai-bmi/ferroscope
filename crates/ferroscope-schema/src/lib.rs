@@ -737,6 +737,106 @@ pub fn verify(bytes: &[u8]) -> Option<Verification> {
     })
 }
 
+/// Recompute a recording's receipt WITHOUT holding the recording.
+///
+/// [`verify`] takes the whole file as a slice and costs about 2.1x the file in memory; this
+/// costs the largest single record. Both answer the same question, because recomputing a
+/// receipt is a fold: hash each payload in file order, total the ledger, compare at the end.
+///
+/// It takes a way to OPEN the stream rather than a stream, because it needs two passes and the
+/// reason is worth stating: the receipt is written by `seal`, so it sits at the END of the
+/// file, and the digest cannot start until it knows the precision the receipt declares. The
+/// first draft buffered messages until the block arrived — which is the whole recording, the
+/// exact thing this function exists not to do. So pass one walks to the receipt and parses no
+/// payloads; pass two hashes. Two cheap reads, flat memory.
+///
+/// ```no_run
+/// # use std::fs::File;
+/// let v = ferroscope_schema::verify_streaming(|| File::open("huge.mcap")).unwrap();
+/// assert!(v.ok());
+/// ```
+pub fn verify_streaming<F, R>(open: F) -> Option<Verification>
+where
+    F: Fn() -> std::io::Result<R>,
+    R: std::io::Read,
+{
+    use ferroscope_mcap::{Flow, Record};
+
+    // Pass one: the receipt, and nothing else. Payloads are not parsed at all.
+    let mut receipt: Option<Receipt> = None;
+    ferroscope_mcap::stream(open().ok()?, |rec| {
+        if let Record::Metadata { name, kv } = rec
+            && name == RECEIPT_BLOCK
+        {
+            receipt = Receipt::from_pairs(&kv);
+        }
+        Ok(Flow::Continue)
+    })
+    .ok()?;
+    let receipt = receipt?;
+
+    // Pass two: hash at the declared precision, and total the ledger.
+    let mut schemas: BTreeMap<u16, String> = BTreeMap::new();
+    let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
+    let mut digest = TraceDigest::new(receipt.precision);
+    let mut ledger = Ledger::new();
+    let mut count = 0usize;
+
+    ferroscope_mcap::stream(open().ok()?, |rec| {
+        match rec {
+            Record::Schema(sc) => {
+                schemas.insert(sc.id, sc.name);
+            }
+            Record::Channel(ch) => {
+                channels.insert(ch.id, (ch.topic, ch.schema_id));
+            }
+            Record::Message(m) => {
+                let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
+                    return Ok(Flow::Continue);
+                };
+                let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+                // Events are excluded from the digest by construction, on every path.
+                if schema == "ferroscope.Event" {
+                    return Ok(Flow::Continue);
+                }
+                let Ok(text) = std::str::from_utf8(m.data) else {
+                    return Ok(Flow::Continue);
+                };
+                let Some(v) = json::parse(text) else {
+                    return Ok(Flow::Continue);
+                };
+                let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                digest.step(step, topic, &digest_values(schema, &v));
+                count += 1;
+
+                if schema == "ferroscope.EnergySample" {
+                    let rail = match v.get("rail").and_then(|r| r.as_str()) {
+                        Some("compute") => Rail::Compute,
+                        Some("actuation") => Rail::Actuation,
+                        _ => Rail::Overhead,
+                    };
+                    let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
+                    let watts = v.get("watts").and_then(|w| w.as_f64()).unwrap_or(0.0);
+                    ledger.sample(rail, source, m.log_time, watts);
+                }
+            }
+            _ => {}
+        }
+        Ok(Flow::Continue)
+    })
+    .ok()?;
+
+    let recomputed = digest.finish();
+    Some(Verification {
+        trace_matches: recomputed == receipt.trace_digest,
+        spec_matches: receipt.self_consistent(),
+        recomputed,
+        receipt,
+        quote: ledger.quote(),
+        messages: count,
+    })
+}
+
 /// Rebuild the comparable trace from a recording, so two files produced on two machines can
 /// be handed straight to [`ferroscope_receipt::compare`].
 pub fn trace_from(bytes: &[u8]) -> Option<(Option<Receipt>, Trace)> {

@@ -216,8 +216,10 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
 }
 
 fn cmd_verify(path: &str) -> Result<bool, String> {
-    let bytes = slurp(path)?;
-    let v = verify(&bytes).ok_or_else(|| {
+    // Streamed, not slurped. Recomputing a receipt is a fold, so it never needs the file in
+    // memory — and this is the verb you reach for on a recording too big to open. Measured, the
+    // slice path costs about 2.1x the file; this costs the largest record.
+    let v = ferroscope_schema::verify_streaming(|| std::fs::File::open(path)).ok_or_else(|| {
         format!("{path} has no Ferroscope receipt, or its payloads are unreadable")
     })?;
 

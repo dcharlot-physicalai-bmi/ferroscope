@@ -399,3 +399,75 @@ fn the_same_schema_on_one_topic_is_still_fine() {
         3
     );
 }
+
+#[test]
+fn streaming_verify_agrees_with_the_slice_verify() {
+    // Two verifiers are two definitions of the receipt unless something holds them equal.
+    let bytes = record(7, None);
+    let slice = ferroscope_schema::verify(&bytes).expect("slice verify");
+    let streamed = ferroscope_schema::verify_streaming(|| Ok(std::io::Cursor::new(bytes.clone())))
+        .expect("streaming verify");
+
+    assert_eq!(slice.recomputed, streamed.recomputed, "digests differ");
+    assert_eq!(slice.receipt.trace_digest, streamed.receipt.trace_digest);
+    assert_eq!(slice.ok(), streamed.ok());
+    assert_eq!(slice.messages, streamed.messages, "message counts differ");
+    assert_eq!(
+        slice.quote.total_j, streamed.quote.total_j,
+        "ledgers differ"
+    );
+    assert_eq!(slice.quote.compute_j, streamed.quote.compute_j);
+    assert_eq!(slice.quote.actuation_j, streamed.quote.actuation_j);
+    assert!(streamed.ok(), "a good file must verify on both paths");
+}
+
+#[test]
+fn streaming_verify_catches_a_tampered_payload() {
+    // Tamper a real MESSAGE payload. The first `"watts":` in the file is inside the JSON SCHEMA
+    // text — `"watts":{"type":"number"}` — and editing that is not editing a recorded number, so
+    // the file still verifies and should. A payload is the occurrence followed by a digit or a
+    // minus sign.
+    let mut bytes = record(7, None);
+    let needle = b"\"watts\":";
+    let at = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| *w == needle)
+        .map(|(i, _)| i)
+        .find(|i| {
+            let c = bytes[i + needle.len()];
+            c.is_ascii_digit() || c == b'-'
+        })
+        .expect("no watts VALUE in the fixture, only schema text");
+    let digit = bytes[at + needle.len()..]
+        .iter()
+        .position(|c| c.is_ascii_digit())
+        .expect("digit")
+        + at
+        + needle.len();
+    bytes[digit] = if bytes[digit] == b'9' {
+        b'1'
+    } else {
+        bytes[digit] + 1
+    };
+
+    // Both paths must refuse, and refuse the same way — either the chunk CRC catches the edit
+    // or the recomputed digest does. Asserting them together is what keeps the two verifiers
+    // from drifting into two different standards of evidence.
+    let streamed = ferroscope_schema::verify_streaming(|| Ok(std::io::Cursor::new(bytes.clone())));
+    let sliced = ferroscope_schema::verify(&bytes);
+    let accepted = |v: &Option<ferroscope_schema::Verification>| v.as_ref().is_some_and(|x| x.ok());
+    assert!(
+        !accepted(&streamed),
+        "streaming verify accepted a tampered payload"
+    );
+    assert!(
+        !accepted(&sliced),
+        "slice verify accepted a tampered payload"
+    );
+    assert_eq!(
+        accepted(&streamed),
+        accepted(&sliced),
+        "the two verifiers disagree about a tampered file"
+    );
+}

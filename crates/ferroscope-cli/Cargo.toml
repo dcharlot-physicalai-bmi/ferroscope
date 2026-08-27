@@ -20,7 +20,7 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.12: `live` binds 8737 (the port the viewer's live button dials) instead of an ephemeral
 # one, reports the span it can actually pace, cannot panic on --rate/--hold, and tells the
 # truth about how many viewers received the sealed file.
-version = "0.1.18"
+version = "0.1.19"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

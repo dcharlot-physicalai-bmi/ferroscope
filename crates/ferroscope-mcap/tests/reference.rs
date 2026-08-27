@@ -339,3 +339,73 @@ fn record_spans_refuse_a_length_no_machine_could_hold() {
         );
     }
 }
+
+#[test]
+fn the_streaming_reader_sees_what_the_slice_reader_sees() {
+    // Two readers are two definitions of the format unless something holds them equal. This is
+    // that something: the same file, walked both ways, must yield the same messages in the same
+    // order with the same bytes.
+    let bytes = sample();
+    let whole = read(&bytes).expect("slice read");
+
+    let mut streamed: Vec<(u16, u64, u64, Vec<u8>)> = Vec::new();
+    let mut schemas = 0usize;
+    let mut channels = 0usize;
+    let mut attachments = 0usize;
+    let n = ferroscope_mcap::stream(std::io::Cursor::new(&bytes), |rec| {
+        match rec {
+            ferroscope_mcap::Record::Message(m) => {
+                streamed.push((m.channel_id, m.log_time, m.publish_time, m.data.to_vec()))
+            }
+            ferroscope_mcap::Record::Schema(_) => schemas += 1,
+            ferroscope_mcap::Record::Channel(_) => channels += 1,
+            ferroscope_mcap::Record::Attachment(_) => attachments += 1,
+            _ => {}
+        }
+        Ok(ferroscope_mcap::Flow::Continue)
+    })
+    .expect("stream read");
+
+    assert!(n > 0, "no records streamed");
+    assert_eq!(
+        streamed.len(),
+        whole.messages.len(),
+        "message count differs between readers"
+    );
+    for ((cid, lt, pt, data), b) in streamed.iter().zip(&whole.messages) {
+        assert_eq!(*cid, b.channel_id);
+        assert_eq!(*lt, b.log_time);
+        assert_eq!(*pt, b.publish_time);
+        assert_eq!(data, &b.data, "payload differs at log_time {lt}");
+    }
+    assert!(schemas >= whole.schemas.len(), "schemas missed");
+    assert!(channels >= whole.channels.len(), "channels missed");
+    assert_eq!(attachments, whole.attachments.len(), "attachments missed");
+}
+
+#[test]
+fn a_streaming_visitor_can_stop_early() {
+    let bytes = sample();
+    let mut seen = 0usize;
+    ferroscope_mcap::stream(std::io::Cursor::new(&bytes), |rec| {
+        if let ferroscope_mcap::Record::Message(_) = rec {
+            seen += 1;
+            if seen == 2 {
+                return Ok(ferroscope_mcap::Flow::Stop);
+            }
+        }
+        Ok(ferroscope_mcap::Flow::Continue)
+    })
+    .expect("stream read");
+    assert_eq!(seen, 2, "Stop did not stop the walk");
+}
+
+#[test]
+fn the_streaming_reader_refuses_a_file_that_is_not_one() {
+    assert!(
+        ferroscope_mcap::stream(std::io::Cursor::new(b"not an mcap file at all"), |_| Ok(
+            ferroscope_mcap::Flow::Continue
+        ))
+        .is_err()
+    );
+}
