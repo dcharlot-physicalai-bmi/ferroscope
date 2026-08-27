@@ -471,3 +471,35 @@ fn streaming_verify_catches_a_tampered_payload() {
         "the two verifiers disagree about a tampered file"
     );
 }
+
+#[test]
+fn the_streaming_bundle_is_byte_identical_to_the_slice_bundle() {
+    // Two bundle paths are two definitions of what a bundle is unless something holds them
+    // equal — the failure this project has had once per comparator. Byte-identity is the
+    // strongest form of that check available, and it is achievable because the stride is
+    // computed from counts rather than discovered on the way through.
+    let bytes = record(11, None);
+    let sliced = ferroscope_schema::bundle(&bytes).expect("slice bundle");
+    let streamed = ferroscope_schema::bundle_streaming(|| Ok(std::io::Cursor::new(bytes.clone())))
+        .expect("streaming bundle");
+    assert_eq!(
+        sliced.len(),
+        streamed.len(),
+        "bundle sizes differ: {} vs {}",
+        sliced.len(),
+        streamed.len()
+    );
+    assert_eq!(sliced, streamed, "the two bundle paths disagree");
+}
+
+#[test]
+fn the_streaming_bundle_carries_the_receipt_it_recomputed() {
+    let bytes = record(11, None);
+    let streamed = ferroscope_schema::bundle_streaming(|| Ok(std::io::Cursor::new(bytes.clone())))
+        .expect("streaming bundle");
+    assert!(
+        streamed.contains("\"verified\":true"),
+        "a good recording's bundle must say it verified"
+    );
+    assert!(streamed.contains("\"receipt\""), "receipt missing");
+}

@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-cli"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-live",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-schema"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",

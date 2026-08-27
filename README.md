@@ -128,6 +128,17 @@ digest cannot start until it knows the precision the receipt declares. The first
 messages until the block arrived, which is the whole recording — the exact thing the function
 exists not to do.
 
+**`export` streams too**, which matters more, because it is the verb that turns a recording the
+browser refuses into one it opens. Measured on the same 552 MB file, alternating both binaries:
+**45 MB peak RSS against 1924 MB, and *faster* — 186 s against 255 s.** Faster because the
+streaming pass parses each payload once and feeds both the lanes and the digest, where the old
+path parsed for the bundle and again for the receipt.
+
+The two paths produce **byte-identical bundles**, and a test asserts it. That is achievable
+because the stride is computed from message counts in the first pass and applied on the way in:
+`stride()` keeps indices 0, k, 2k…, so keeping every k-th message selects the identical subset.
+One accumulator serves both readers, so a bundle has one definition rather than two.
+
 Memory is bounded by the energy-sample count rather than by the file, not by nothing: the ledger
 keeps each sample to compute its own coverage verdict, so a 2.6 GB run costs about 116 MB. That
 is a bound worth stating rather than rounding to "constant".

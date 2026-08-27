@@ -26,7 +26,7 @@ mod urdf;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{Tolerance, Verdict};
-use ferroscope_schema::{bundle, mcap, trace_from, verify};
+use ferroscope_schema::{mcap, trace_from, verify};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -605,8 +605,10 @@ fn print_energy_delta(a: &ferroscope_ledger::Quote, b: &ferroscope_ledger::Quote
 }
 
 fn cmd_export(path: &str, out: &str) -> Result<bool, String> {
-    let bytes = slurp(path)?;
-    let bundle = bundle(&bytes).ok_or_else(|| format!("cannot read {path}"))?;
+    // Streamed, like verify. This is the verb you reach for on a recording the browser cannot
+    // open, so it is the last one that should need the file in memory.
+    let bundle = ferroscope_schema::bundle_streaming(|| std::fs::File::open(path))
+        .ok_or_else(|| format!("cannot read {path}"))?;
     std::fs::write(out, &bundle).map_err(|e| format!("cannot write {out}: {e}"))?;
     println!("wrote {out} ({} bytes)", bundle.len());
     Ok(true)
