@@ -3,7 +3,10 @@ name = "ferroscope-wasm"
 description = "Ferroscope in the browser: open a recording, verify its receipt, and diff two runs, entirely client-side. No server, no upload, no account."
 # 0.1.1 tracks the bundle gaining geometry and frame tracks for the 3-D panel.
 # 0.1.2 adds the attachment() accessor the 3-D panel loads glTF through.
-version = "0.1.9"
+# 0.1.10 adds `BundleStream`: push a recording through in `File.slice()` blocks, twice, and a
+# 2.6 GiB run that `file.arrayBuffer()` refuses outright opens in 78.8 s under 200 MB of heap
+# — with its receipt recomputed HERE rather than inherited from an export.
+version = "0.1.10"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

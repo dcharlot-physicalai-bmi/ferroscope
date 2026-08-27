@@ -73,122 +73,307 @@ fn bundle_log(log: mcap::Log, v: Option<crate::Verification>) -> Option<String> 
 ///
 /// Takes a way to OPEN the stream rather than a stream, for the same reason
 /// [`crate::verify_streaming`] does: the receipt is written by `seal` and so lives at the end.
+///
+/// The fold itself is [`BundleFold`], which is also what the browser drives; this is the loop
+/// that feeds it from a file.
 pub fn bundle_streaming<F, R>(open: F) -> Option<String>
 where
     F: Fn() -> std::io::Result<R>,
     R: std::io::Read,
 {
-    use ferroscope_mcap::{Flow, Record};
+    let mut fold = BundleFold::new();
+    pour(open().ok()?, &mut fold).ok()?;
+    fold.rewind();
+    pour(open().ok()?, &mut fold).ok()?;
+    fold.finish()
+}
 
-    // Pass one: counts, front and back matter. No payload is parsed.
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut chan: BTreeMap<u16, (String, u16)> = BTreeMap::new();
-    let mut schema_names: BTreeMap<u16, String> = BTreeMap::new();
-    let mut attachments: Vec<(String, String, usize)> = Vec::new();
-    let mut receipt_kv: Option<Vec<(String, String)>> = None;
-    let mut production_kv: Option<Vec<(String, String)>> = None;
-    let mut profile = String::new();
-
-    ferroscope_mcap::stream(open().ok()?, |rec| {
-        match rec {
-            Record::Header { profile: p, .. } => profile = p.to_string(),
-            Record::Schema(sc) => {
-                schema_names.insert(sc.id, sc.name);
-            }
-            Record::Channel(ch) => {
-                chan.insert(ch.id, (ch.topic, ch.schema_id));
-            }
-            Record::Attachment(a) => {
-                attachments.push((a.name, a.media_type, a.data.len()));
-            }
-            Record::Metadata { name, kv } => {
-                if name == RECEIPT_BLOCK {
-                    receipt_kv = Some(kv);
-                } else if name == PRODUCTION_BLOCK {
-                    production_kv = Some(kv);
+/// Read a stream into a fold, one block at a time.
+fn pour<R: std::io::Read>(mut r: R, fold: &mut BundleFold) -> std::io::Result<()> {
+    let mut block = vec![0u8; 64 << 10];
+    loop {
+        match r.read(&mut block) {
+            Ok(0) => return Ok(()),
+            Ok(n) => {
+                if !fold.push(&block[..n]) {
+                    return Ok(()); // the fold has everything it needs
                 }
             }
-            Record::Message(m) => {
-                if let Some((topic, _)) = chan.get(&m.channel_id) {
-                    *counts.entry(topic.clone()).or_default() += 1;
-                }
-            }
-            _ => {}
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
         }
-        Ok(Flow::Continue)
-    })
-    .ok()?;
+    }
+}
 
-    let receipt = receipt_kv.as_deref().and_then(Receipt::from_pairs);
+/// What pass one learns: everything that is not a lane.
+#[derive(Default)]
+struct FrontMatter {
+    counts: BTreeMap<String, usize>,
+    chan: BTreeMap<u16, (String, u16)>,
+    schema_names: BTreeMap<u16, String>,
+    attachments: Vec<(String, String, usize)>,
+    receipt_kv: Option<Vec<(String, String)>>,
+    production_kv: Option<Vec<(String, String)>>,
+    profile: String,
+}
 
-    // Pass two: the lanes, strided on the way in, and the receipt recomputed alongside.
-    let mut lanes = Lanes::with_strides(strides_from(&counts));
-    let mut digest = receipt.as_ref().map(|r| TraceDigest::new(r.precision));
-    let mut ledger = ferroscope_ledger::Ledger::new();
-    let mut hashed = 0usize;
+/// What pass two accumulates: the lanes, the recomputed digest and the energy ledger.
+struct Second {
+    lanes: Lanes,
+    digest: Option<TraceDigest>,
+    ledger: ferroscope_ledger::Ledger,
+    hashed: usize,
+    /// Messages pass two actually saw, counted the same way pass one counted them.
+    seen: usize,
+}
 
-    ferroscope_mcap::stream(open().ok()?, |rec| {
-        if let Record::Message(m) = rec {
-            let Some((topic, schema_id)) = chan.get(&m.channel_id) else {
-                return Ok(Flow::Continue);
-            };
-            let schema = schema_names
-                .get(schema_id)
-                .map(|s| s.as_str())
-                .unwrap_or("");
-            // One parse, two consumers.
-            let Ok(text) = std::str::from_utf8(m.data) else {
-                return Ok(Flow::Continue);
-            };
-            let Some(v) = crate::json::parse(text) else {
-                return Ok(Flow::Continue);
-            };
-            lanes.push_parsed(topic, schema, m.log_time, m.publish_time, &v);
+/// The viewer bundle, folded from a recording that is PUSHED in rather than read.
+///
+/// A browser cannot hand out a [`Read`](std::io::Read): `File.slice(a, b).arrayBuffer()` gives
+/// a block of bytes when it is ready, and there is no blocking read underneath it. So this is
+/// the fold with the loop taken out — push blocks in, in file order, and the bundle comes out
+/// at the end. [`bundle_streaming`] is this same fold with a file loop around it, which is what
+/// keeps the CLI's bundle and the browser's bundle from becoming two different answers.
+///
+/// Two passes, for the reason [`bundle_streaming`] gives: a lane's stride comes from its
+/// message count, and the receipt that says at what precision to recompute the digest is
+/// written at the END of the file. Call [`rewind`](BundleFold::rewind) between them and push
+/// the same bytes again — which costs a browser a second read of the file and buys a recording
+/// of any size at all.
+///
+/// ```no_run
+/// # fn blocks() -> Vec<Vec<u8>> { Vec::new() }
+/// let mut fold = ferroscope_schema::BundleFold::new();
+/// for b in blocks() { fold.push(&b); }
+/// fold.rewind();
+/// for b in blocks() { fold.push(&b); }
+/// let json = fold.finish().expect("a readable recording");
+/// ```
+pub struct BundleFold {
+    feed: ferroscope_mcap::Feed,
+    front: FrontMatter,
+    second: Option<Second>,
+    /// Set the moment a block does not parse. A fold that has seen a torn record cannot be
+    /// trusted to have counted the rest, so it stops rather than reporting a short bundle as a
+    /// whole one.
+    torn: bool,
+    bytes: u64,
+}
 
-            if schema != "ferroscope.Event" {
-                if let Some(d) = digest.as_mut() {
-                    let step = v.get("step").and_then(|x| x.as_f64()).unwrap_or(0.0) as u64;
-                    d.step(step, topic, &crate::digest_values(schema, &v));
-                    hashed += 1;
-                }
-                if schema == "ferroscope.EnergySample" {
-                    let rail = match v.get("rail").and_then(|r| r.as_str()) {
-                        Some("compute") => ferroscope_ledger::Rail::Compute,
-                        Some("actuation") => ferroscope_ledger::Rail::Actuation,
-                        _ => ferroscope_ledger::Rail::Overhead,
-                    };
-                    let source = v.get("source").and_then(|x| x.as_str()).unwrap_or("");
-                    let watts = v.get("watts").and_then(|w| w.as_f64()).unwrap_or(0.0);
-                    ledger.sample(rail, source, m.log_time, watts);
-                }
+impl Default for BundleFold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BundleFold {
+    pub fn new() -> Self {
+        Self {
+            feed: ferroscope_mcap::Feed::new(),
+            front: FrontMatter::default(),
+            second: None,
+            torn: false,
+            bytes: 0,
+        }
+    }
+
+    /// Add the next block of the recording, in file order. Blocks may be any size and need not
+    /// fall on record boundaries.
+    ///
+    /// Returns `false` once this pass has everything it needs — because the footer was reached,
+    /// or because the recording did not parse. Pushing after that does nothing.
+    pub fn push(&mut self, block: &[u8]) -> bool {
+        use ferroscope_mcap::{Flow, Record};
+        if self.torn || self.feed.finished() {
+            return false;
+        }
+        self.bytes += block.len() as u64;
+        self.feed.push(block);
+
+        let outcome = match self.second.as_mut() {
+            None => {
+                let front = &mut self.front;
+                self.feed.drain(&mut |rec| {
+                    match rec {
+                        Record::Header { profile: p, .. } => front.profile = p.to_string(),
+                        Record::Schema(sc) => {
+                            front.schema_names.insert(sc.id, sc.name);
+                        }
+                        Record::Channel(ch) => {
+                            front.chan.insert(ch.id, (ch.topic, ch.schema_id));
+                        }
+                        Record::Attachment(a) => {
+                            front.attachments.push((a.name, a.media_type, a.data.len()));
+                        }
+                        Record::Metadata { name, kv } => {
+                            if name == RECEIPT_BLOCK {
+                                front.receipt_kv = Some(kv);
+                            } else if name == PRODUCTION_BLOCK {
+                                front.production_kv = Some(kv);
+                            }
+                        }
+                        Record::Message(m) => {
+                            if let Some((topic, _)) = front.chan.get(&m.channel_id) {
+                                *front.counts.entry(topic.clone()).or_default() += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    Ok(Flow::Continue)
+                })
+            }
+            Some(second) => {
+                let front = &self.front;
+                self.feed.drain(&mut |rec| {
+                    if let Record::Message(m) = rec {
+                        absorb_message(front, second, &m);
+                    }
+                    Ok(Flow::Continue)
+                })
+            }
+        };
+
+        match outcome {
+            Ok(Flow::Stop) => false,
+            Ok(Flow::Continue) => true,
+            Err(_) => {
+                self.torn = true;
+                false
             }
         }
-        Ok(Flow::Continue)
-    })
-    .ok()?;
+    }
 
-    let verification = match (receipt, digest) {
-        (Some(receipt), Some(d)) => {
-            let recomputed = d.finish();
-            Some(crate::Verification {
-                trace_matches: recomputed == receipt.trace_digest,
-                spec_matches: receipt.self_consistent(),
-                recomputed,
-                receipt,
-                quote: ledger.quote(),
-                messages: hashed,
-            })
+    /// End pass one and prepare pass two. Push the same bytes again from the start.
+    pub fn rewind(&mut self) {
+        if self.torn || self.second.is_some() {
+            return;
         }
-        _ => None,
+        let receipt = self
+            .front
+            .receipt_kv
+            .as_deref()
+            .and_then(Receipt::from_pairs);
+        self.second = Some(Second {
+            lanes: Lanes::with_strides(strides_from(&self.front.counts)),
+            digest: receipt.as_ref().map(|r| TraceDigest::new(r.precision)),
+            ledger: ferroscope_ledger::Ledger::new(),
+            hashed: 0,
+            seen: 0,
+        });
+        self.feed = ferroscope_mcap::Feed::new();
+        self.bytes = 0;
+    }
+
+    /// Emit the bundle JSON. `None` if the bytes were not a readable recording, or if
+    /// [`rewind`](BundleFold::rewind) was never called and so pass two never ran.
+    pub fn finish(self) -> Option<String> {
+        if self.torn {
+            return None;
+        }
+        let second = self.second?;
+        // The two passes must have seen the same recording. Nothing guarantees it: the caller
+        // pushes the bytes and could push fewer the second time, and in a browser the file on
+        // disk can change between the two reads. A short pass two produces a bundle with empty
+        // or partial lanes and no error anywhere, which renders as a run that simply did not
+        // happen. A recording carrying a receipt would fail its digest and say so; one without
+        // a receipt — a live prefix — would say nothing at all.
+        let counted: usize = self.front.counts.values().sum();
+        if second.seen != counted {
+            return None;
+        }
+        let receipt = self
+            .front
+            .receipt_kv
+            .as_deref()
+            .and_then(Receipt::from_pairs);
+        let verification = match (receipt, second.digest) {
+            (Some(receipt), Some(d)) => {
+                let recomputed = d.finish();
+                Some(crate::Verification {
+                    trace_matches: recomputed == receipt.trace_digest,
+                    spec_matches: receipt.self_consistent(),
+                    recomputed,
+                    receipt,
+                    quote: second.ledger.quote(),
+                    messages: second.hashed,
+                })
+            }
+            _ => None,
+        };
+        Some(second.lanes.finish(
+            &self.front.profile,
+            &self.front.attachments,
+            self.front.receipt_kv.as_deref(),
+            self.front.production_kv.as_deref(),
+            verification,
+        ))
+    }
+
+    /// Which pass is being fed: 1 before [`rewind`](BundleFold::rewind), 2 after.
+    pub fn pass(&self) -> u32 {
+        if self.second.is_some() { 2 } else { 1 }
+    }
+
+    /// How many bytes this pass has taken.
+    pub fn fed(&self) -> u64 {
+        self.bytes
+    }
+
+    /// How many lane points the fold is holding, across every lane.
+    ///
+    /// Bounded by what a screen can draw rather than by the recording — the second half of the
+    /// claim that a file larger than memory can be opened at all. Zero during pass one, which
+    /// only counts.
+    pub fn kept_points(&self) -> usize {
+        self.second.as_ref().map_or(0, |s| s.lanes.kept_points())
+    }
+
+    /// How many pushed bytes are held because they are not yet a whole record — the fold's
+    /// framing memory, which stays around one record however long the recording is.
+    pub fn buffered(&self) -> usize {
+        self.feed.buffered()
+    }
+}
+
+/// One message, into the lanes, the digest and the ledger. One parse, three consumers.
+fn absorb_message(front: &FrontMatter, second: &mut Second, m: &ferroscope_mcap::MessageRef<'_>) {
+    let Some((topic, schema_id)) = front.chan.get(&m.channel_id) else {
+        return;
     };
+    second.seen += 1;
+    let schema = front
+        .schema_names
+        .get(schema_id)
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let Ok(text) = std::str::from_utf8(m.data) else {
+        return;
+    };
+    let Some(v) = crate::json::parse(text) else {
+        return;
+    };
+    second
+        .lanes
+        .push_parsed(topic, schema, m.log_time, m.publish_time, &v);
 
-    Some(lanes.finish(
-        &profile,
-        &attachments,
-        receipt_kv.as_deref(),
-        production_kv.as_deref(),
-        verification,
-    ))
+    if schema == "ferroscope.Event" {
+        return;
+    }
+    if let Some(d) = second.digest.as_mut() {
+        let step = v.get("step").and_then(|x| x.as_f64()).unwrap_or(0.0) as u64;
+        d.step(step, topic, &crate::digest_values(schema, &v));
+        second.hashed += 1;
+    }
+    if schema == "ferroscope.EnergySample" {
+        let rail = match v.get("rail").and_then(|r| r.as_str()) {
+            Some("compute") => ferroscope_ledger::Rail::Compute,
+            Some("actuation") => ferroscope_ledger::Rail::Actuation,
+            _ => ferroscope_ledger::Rail::Overhead,
+        };
+        let source = v.get("source").and_then(|x| x.as_str()).unwrap_or("");
+        let watts = v.get("watts").and_then(|w| w.as_f64()).unwrap_or(0.0);
+        second.ledger.sample(rail, source, m.log_time, watts);
+    }
 }
 
 /// The stride each topic's lane will get, from its message count.
@@ -240,6 +425,23 @@ impl Lanes {
             keep_every: Some(strides),
             ..Default::default()
         }
+    }
+
+    /// How many lane points are being held.
+    ///
+    /// The other half of the memory story. [`Feed`](ferroscope_mcap::Feed) bounds the FRAMING
+    /// memory at one record; this bounds the KEPT memory at what a screen can draw, and it is
+    /// the half that would otherwise grow without limit over a long recording — a lane with
+    /// every point of a 2.6 GB run in it is millions of samples nothing will ever draw, and in
+    /// a browser it is the difference between opening the file and not.
+    fn kept_points(&self) -> usize {
+        self.poses.values().map(Vec::len).sum::<usize>()
+            + self.scalars.values().map(Vec::len).sum::<usize>()
+            + self.power.values().map(Vec::len).sum::<usize>()
+            + self.frames.values().map(Vec::len).sum::<usize>()
+            + self.geom.values().map(|(_, t)| t.len()).sum::<usize>()
+            + self.contacts.len()
+            + self.lag.len()
     }
 
     /// Feed one message whose payload is ALREADY parsed.

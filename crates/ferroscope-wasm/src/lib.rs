@@ -50,6 +50,117 @@ pub fn open(bytes: &[u8]) -> Result<String, JsValue> {
     })
 }
 
+/// Open a recording the browser cannot hold, a block at a time.
+///
+/// [`open`] takes the whole file as one `Uint8Array`, which is what a browser hands over and is
+/// fine up to a point. Measured in Chrome, that point is somewhere past 1.2 GB and short of
+/// 2.6 GB: `file.arrayBuffer()` simply refuses, and no amount of care on this side changes it.
+///
+/// So this is the other door. `File.slice(a, b).arrayBuffer()` returns one block at a time and
+/// no single allocation is ever larger than a block, so the ceiling is the recording's own
+/// lanes rather than its bytes. The fold underneath is the same one `ferroscope export` runs,
+/// which is what keeps a bundle made in the browser and a bundle made by the CLI the same
+/// bundle rather than two answers that resemble each other.
+///
+/// Two passes over the file, because a lane's stride comes from its message count and the
+/// receipt that says at what precision to recompute the digest is written at the END of the
+/// recording. Push the file through, call [`rewind`](BundleStream::rewind), push it through
+/// again, then [`finish`](BundleStream::finish).
+///
+/// ```js
+/// const s = new BundleStream();
+/// for (let p = 0; p < 2; p++) {
+///   for (let at = 0; at < file.size; at += BLOCK) {
+///     const b = new Uint8Array(await file.slice(at, at + BLOCK).arrayBuffer());
+///     if (!s.push(b)) break;              // this pass has what it needs
+///   }
+///   if (p === 0) s.rewind();
+/// }
+/// const bundle = JSON.parse(s.finish());
+/// ```
+///
+/// What a streamed recording cannot do is what a bundle cannot do: comparison and attachment
+/// extraction both need the bytes themselves, and a page that streamed the file no longer has
+/// them. It costs a second read of the file, which for a recording this size is the cheaper
+/// half of the bargain.
+#[wasm_bindgen]
+pub struct BundleStream {
+    fold: ferroscope_schema::BundleFold,
+    /// Set by `finish`, so a stream cannot be finished twice into two different answers.
+    spent: bool,
+}
+
+#[wasm_bindgen]
+impl BundleStream {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> BundleStream {
+        BundleStream {
+            fold: ferroscope_schema::BundleFold::new(),
+            spent: false,
+        }
+    }
+
+    /// Add the next block of the recording, in file order. Blocks may be any size and need not
+    /// fall on record boundaries.
+    ///
+    /// Returns `false` once this pass has everything it needs — the footer has been reached, or
+    /// the bytes did not parse. Stop reading when it does; pushing after that does nothing.
+    pub fn push(&mut self, block: &[u8]) -> bool {
+        !self.spent && self.fold.push(block)
+    }
+
+    /// End pass one and begin pass two. Push the same bytes again from the start.
+    pub fn rewind(&mut self) {
+        self.fold.rewind();
+    }
+
+    /// Which pass is being fed: 1 before [`rewind`](BundleStream::rewind), 2 after.
+    pub fn pass(&self) -> u32 {
+        self.fold.pass()
+    }
+
+    /// How many bytes this pass has taken, so a page can draw a progress bar that is measuring
+    /// the work rather than guessing at it.
+    pub fn fed(&self) -> f64 {
+        self.fold.fed() as f64
+    }
+
+    /// How many lane points are being held — what the page will actually draw. Bounded by the
+    /// screen, not by the recording, which is the whole reason this door exists.
+    pub fn kept_points(&self) -> usize {
+        self.fold.kept_points()
+    }
+
+    /// How many pushed bytes are held because they are not yet a whole record. One record's
+    /// worth, however long the recording is.
+    pub fn buffered(&self) -> usize {
+        self.fold.buffered()
+    }
+
+    /// Emit the viewer bundle as JSON. Consumes the stream.
+    pub fn finish(mut self) -> Result<String, JsValue> {
+        self.spent = true;
+        let pass = self.fold.pass();
+        self.fold.finish().ok_or_else(|| {
+            JsValue::from_str(if pass < 2 {
+                "the recording was read once but not twice: a bundle needs a second pass over \
+                 the file. Call rewind() and push the same bytes again before finish()."
+            } else {
+                "the blocks pushed were not a readable Ferroscope recording. A file that stops \
+                 mid-record lands here; so does a recording this build does not understand; and \
+                 so does a second pass that did not see the same bytes as the first, which is \
+                 what a file changing on disk between the two reads looks like."
+            })
+        })
+    }
+}
+
+impl Default for BundleStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Open a growing live prefix of a recording — the bytes a WebSocket has delivered so far.
 ///
 /// Same bundle as [`open`], with no closing magic required and no receipt expected yet: the

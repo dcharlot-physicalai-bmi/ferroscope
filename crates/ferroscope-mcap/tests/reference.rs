@@ -409,3 +409,211 @@ fn the_streaming_reader_refuses_a_file_that_is_not_one() {
         .is_err()
     );
 }
+
+/// Every record, as a comparable summary, however the bytes were delivered.
+fn walk_feed(bytes: &[u8], block: usize) -> Vec<String> {
+    use ferroscope_mcap::{Feed, Flow, Record};
+    let mut seen: Vec<String> = Vec::new();
+    let mut feed = Feed::new();
+    let mut visit = |rec: Record<'_>| {
+        seen.push(match rec {
+            Record::Header { profile, library } => format!("header {profile} {library}"),
+            Record::Schema(s) => format!("schema {} {}", s.id, s.name),
+            Record::Channel(c) => format!("channel {} {}", c.id, c.topic),
+            Record::Message(m) => format!(
+                "message {} {} {} {:08x}",
+                m.channel_id,
+                m.log_time,
+                m.data.len(),
+                ferroscope_mcap::crc32(m.data)
+            ),
+            Record::Attachment(a) => format!(
+                "attachment {} {} {:08x}",
+                a.name,
+                a.data.len(),
+                ferroscope_mcap::crc32(&a.data)
+            ),
+            Record::Metadata { name, kv } => format!("metadata {name} {}", kv.len()),
+            Record::Other { opcode } => format!("other {opcode}"),
+        });
+        Ok(Flow::Continue)
+    };
+    for part in bytes.chunks(block.max(1)) {
+        feed.push(part);
+        if feed.drain(&mut visit).expect("feed drain") == Flow::Stop {
+            return seen;
+        }
+    }
+    feed.end().expect("feed end");
+    seen
+}
+
+#[test]
+fn a_feed_reads_the_same_records_however_the_bytes_arrive() {
+    // The browser hands over `File.slice(a, b)` blocks, and nothing makes those blocks fall on
+    // record boundaries: a message, a chunk, or a whole glTF attachment can be split across any
+    // number of them. If the framing is right, the block size cannot be observed in the output.
+    let bytes = sample();
+    let reference = walk_feed(&bytes, bytes.len());
+    assert!(
+        reference.len() > 10,
+        "fixture too small to exercise framing: {} records",
+        reference.len()
+    );
+    // 1 is the adversarial case — every record split at every byte. 7 and 13 are coprime with
+    // any record length the writer emits, so no boundary ever lines up twice the same way.
+    for block in [1usize, 2, 3, 7, 13, 64, 511, 512, 513, 4096, 65536] {
+        assert_eq!(
+            walk_feed(&bytes, block),
+            reference,
+            "the records changed when the bytes arrived {block} at a time"
+        );
+    }
+}
+
+#[test]
+fn a_feed_holds_about_one_record_not_the_recording() {
+    // The point of the whole exercise: memory is bounded by the largest record, not the file.
+    use ferroscope_mcap::{Feed, Flow};
+    let bytes = sample();
+    let mut feed = Feed::new();
+    let mut worst = 0usize;
+    for part in bytes.chunks(1024) {
+        feed.push(part);
+        if feed.drain(&mut |_| Ok(Flow::Continue)).expect("drain") == Flow::Stop {
+            break;
+        }
+        worst = worst.max(feed.buffered());
+    }
+    // The fixture carries an attachment, which is the one record that must be materialised, so
+    // the bound is "one record plus a block" rather than a constant. It is still a small
+    // fraction of the file and independent of how long the recording is.
+    assert!(
+        worst < bytes.len(),
+        "the feed held {worst} of {} bytes — it is buffering the file",
+        bytes.len()
+    );
+}
+
+#[test]
+fn a_feed_reports_a_recording_that_stops_mid_record() {
+    // Truncation has to survive the move to push mode: a header whose body never arrives is a
+    // torn file, and saying nothing about it is how a partial recording passes for a whole one.
+    use ferroscope_mcap::{Feed, Flow};
+    let bytes = sample();
+    let cut = bytes.len() * 2 / 3;
+    let mut feed = Feed::new();
+    feed.push(&bytes[..cut]);
+    feed.drain(&mut |_| Ok(Flow::Continue)).expect("drain");
+    assert!(
+        feed.end().is_err(),
+        "a file cut at {cut} of {} bytes ended cleanly",
+        bytes.len()
+    );
+}
+
+#[test]
+fn the_pulling_reader_and_the_pushed_feed_agree() {
+    // `stream` is built on `Feed`, and this is what says so out loud: if the two ever diverge,
+    // the format has two definitions again.
+    use ferroscope_mcap::{Flow, Record};
+    let bytes = sample();
+    let mut pulled: Vec<String> = Vec::new();
+    ferroscope_mcap::stream(std::io::Cursor::new(&bytes), |rec| {
+        pulled.push(match rec {
+            Record::Header { profile, library } => format!("header {profile} {library}"),
+            Record::Schema(s) => format!("schema {} {}", s.id, s.name),
+            Record::Channel(c) => format!("channel {} {}", c.id, c.topic),
+            Record::Message(m) => format!(
+                "message {} {} {} {:08x}",
+                m.channel_id,
+                m.log_time,
+                m.data.len(),
+                ferroscope_mcap::crc32(m.data)
+            ),
+            Record::Attachment(a) => format!(
+                "attachment {} {} {:08x}",
+                a.name,
+                a.data.len(),
+                ferroscope_mcap::crc32(&a.data)
+            ),
+            Record::Metadata { name, kv } => format!("metadata {name} {}", kv.len()),
+            Record::Other { opcode } => format!("other {opcode}"),
+        });
+        Ok(Flow::Continue)
+    })
+    .expect("stream read");
+    assert_eq!(pulled, walk_feed(&bytes, 4096));
+}
+
+/// A recording long enough that the feed's buffer must be compacted many times over.
+///
+/// `sample()` is deliberately small, and small was enough to hide a real defect: a mutation
+/// that dropped the cursor reset in the feed's compaction passed the whole suite, because no
+/// fixture was long enough for the consumed prefix to reach the compaction threshold even once.
+fn long_sample() -> Vec<u8> {
+    let mut w = Writer::new(
+        Vec::new(),
+        WriterOptions::new("ferroscope", "ferroscope-mcap/test").chunk_target(4096),
+    );
+    let s = w
+        .add_schema("ferroscope.Pose", "jsonschema", br#"{"type":"object"}"#)
+        .unwrap();
+    let c = w.add_channel("/robot/pose", s, "json", &[]).unwrap();
+    for i in 0..40_000u32 {
+        let t = 1_000_000_000 + i as u64 * 1_000_000;
+        let pose = format!(r#"{{"x":{:.4},"y":{:.4},"step":{i}}}"#, i as f64 * 0.01, i as f64 * -0.02);
+        w.write_message(c, i, t, t, pose.as_bytes()).unwrap();
+    }
+    w.finish().unwrap()
+}
+
+#[test]
+fn a_feed_compacts_without_losing_its_place() {
+    // Compaction moves the unread tail to the front of the buffer, and a cursor left pointing
+    // at the old offset reads the recording from the wrong place — silently, because every
+    // record still parses. It takes a file long enough to compact to see it at all.
+    let bytes = long_sample();
+    assert!(
+        bytes.len() > 512 * 1024,
+        "fixture is {} bytes — too short to compact",
+        bytes.len()
+    );
+    let reference = walk_feed(&bytes, bytes.len());
+    assert_eq!(
+        reference.iter().filter(|r| r.starts_with("message ")).count(),
+        40_000,
+        "fixture lost messages"
+    );
+    for block in [997usize, 4096, 65536] {
+        assert_eq!(
+            walk_feed(&bytes, block),
+            reference,
+            "the records changed when the bytes arrived {block} at a time"
+        );
+    }
+}
+
+#[test]
+fn a_feed_stays_flat_over_a_long_recording() {
+    // The claim the browser path rests on: what the feed holds is set by the largest record,
+    // not by how long the recording is. A buffer that grew with the file would still be
+    // correct and would still pass every other test here.
+    use ferroscope_mcap::{Feed, Flow};
+    let bytes = long_sample();
+    let mut feed = Feed::new();
+    let mut worst = 0usize;
+    for part in bytes.chunks(65536) {
+        feed.push(part);
+        if feed.drain(&mut |_| Ok(Flow::Continue)).expect("drain") == Flow::Stop {
+            break;
+        }
+        worst = worst.max(feed.buffered());
+    }
+    // One block of slack plus one chunk, with room to spare — and nowhere near the file.
+    assert!(
+        worst < 256 * 1024 && worst < bytes.len() / 4,
+        "the feed held {worst} bytes of a {} byte recording",
+        bytes.len()
+    );
+}

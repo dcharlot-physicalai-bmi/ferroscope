@@ -65,24 +65,46 @@ jobs:
           grep -q "does not verify against its own receipt" viewer/index.html \
             || { echo "the viewer no longer tells the reader a file failed its receipt"; exit 1; }
           echo "the browser comparator verifies both files and says so"
-      - name: a file too large for the browser is refused, not silently dropped
-        # Measured: 1.2 GB opens, 2.6 GB is refused by Chrome's File API before any Ferroscope
-        # code runs. That rejection used to be an unhandled promise, so the page sat silent for
-        # minutes looking broken. The guard and its explanation are what turn a dead tab into an
-        # instruction, so they are gated rather than trusted.
+      - name: a file too large for one buffer is read in blocks, not refused
+        # This used to be a refusal gate: past the browser's ceiling the page said "use the
+        # CLI". It reads the file in blocks now, so the gate follows the behaviour. Measured in
+        # Chrome 141: 2.6 GiB is refused instantly by `file.arrayBuffer()` with a
+        # NotReadableError, and a 2.6 GiB recording opens through the block reader in 78.8 s
+        # with the JS heap under 200 MB.
+        #
+        # Two passes are load-bearing, not an implementation detail: a lane's stride comes from
+        # its message count and the receipt naming the digest precision is written at the END of
+        # the file. A page that read once would build a bundle out of empty lanes.
         run: |
-          grep -q "could not read it into memory" viewer/index.html \
-            || { echo "the viewer no longer explains an oversized file"; exit 1; }
-          # The read must be INSIDE a try, or the rejection escapes again.
+          fail=0
+          grep -q "new BundleStream()" viewer/index.html \
+            || { echo "the viewer no longer opens a large recording in blocks"; fail=1; }
+          grep -q "s.rewind()" viewer/index.html \
+            || { echo "the viewer reads the file once: a bundle needs two passes"; fail=1; }
+          # The read must be INSIDE a try, or a rejection escapes and the page sits silent —
+          # which is the failure this page already shipped once.
           python3 - <<'EOF'
-          import re, sys
+          import sys
           src = open('viewer/index.html').read()
-          i = src.index('await file.arrayBuffer()')
-          before = src[max(0, i-400):i]
-          if 'try {' not in before:
-              print('file.arrayBuffer() is not guarded by a try'); sys.exit(1)
+          for needle in ('await file.arrayBuffer()', 'await file.slice(at, end).arrayBuffer()'):
+              i = src.index(needle)
+              if 'try {' not in src[max(0, i-400):i]:
+                  print(f'{needle} is not guarded by a try'); sys.exit(1)
           EOF
-          echo "an oversized recording is refused with a reason"
+          # What a streamed recording cannot do, it must SAY, rather than failing obscurely.
+          for needle in \
+            "read in blocks" \
+            "cannot be compared here" \
+            "the mesh bytes did not stay"; do
+            grep -q "$needle" viewer/index.html \
+              || { echo "the viewer no longer explains a block read: missing \"$needle\""; fail=1; }
+          done
+          # A recording read in blocks is verified HERE, unlike a bundle, and the page must not
+          # blur the two: `recomputed at export` belongs to bundles only.
+          grep -q "S.A.streamed" viewer/index.html \
+            || { echo "the viewer cannot tell a streamed recording from a bundle"; fail=1; }
+          test "$fail" -eq 0 || exit 1
+          echo "a recording past the browser's ceiling is read in blocks, twice, and says what it cannot do"
       - name: a bundle is the way past the browser's ceiling, and says what it cannot do
         # `export` strides every lane to what a screen can draw, so the run the page refuses
         # opens as a bundle instead. What a bundle cannot carry — raw bytes — is exactly what
@@ -822,6 +844,21 @@ jobs:
               || { echo "the committed viewer bundle is missing export: $f"; exit 1; }
             echo "ok $f"
           done < /tmp/exports.txt
+          # Classes too. The block reader is a `#[wasm_bindgen] pub struct`, not a free
+          # function, so the loop above walked straight past it -- and a bundle committed
+          # before it existed would have passed this job while the page failed at import.
+          grep -B2 '^pub struct' crates/ferroscope-wasm/src/lib.rs \
+            | grep -A2 wasm_bindgen | grep '^pub struct' \
+            | sed 's/pub struct \([A-Za-z0-9_]*\).*/\1/' | sort -u > /tmp/classes.txt
+          test -s /tmp/classes.txt
+          while read -r c; do
+            grep -q "^export class $c" viewer/pkg/ferroscope_wasm.js \
+              || { echo "the committed viewer bundle is missing class: $c"; exit 1; }
+            # And the page must actually import what it is going to construct.
+            grep -q "$c" viewer/index.html \
+              || { echo "the viewer does not import $c"; exit 1; }
+            echo "ok class $c"
+          done < /tmp/classes.txt
           # The viewer also loads three.js from the repository rather than a CDN. If that is
           # ever removed the page fails at import time, so it is checked here.
           test -s viewer/vendor/three/three.webgpu.min.js
@@ -831,6 +868,31 @@ jobs:
           test -s viewer/vendor/three/addons/loaders/GLTFLoader.js
           test -s viewer/vendor/three/addons/environments/RoomEnvironment.js
           ! grep -q 'https://unpkg\|https://cdn' viewer/index.html
+
+  browser:
+    # The block reader, in a real browser, on a real recording.
+    #
+    # Every other check on this path is a grep. Grep cannot tell you that a recording read in
+    # 8 MB blocks folds to the SAME bundle as one read whole -- and the browser is a separate
+    # implementation surface from the CLI, which has already regressed on its own schedule once.
+    # It also cannot tell you the page is wired up: the first version of this gate waited on a
+    # label rather than on the page being DRAWN, and passed a build that rendered nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install --no-save puppeteer-core@25
+      - name: a recording read in blocks is the same recording
+        run: |
+          cargo build --release -p ferroscope-cli
+          ./target/release/ferroscope demo blocks.mcap --steps 40000 > /dev/null
+          ls -l blocks.mcap
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser)"
+          test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
+          PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
+            node ci/viewer-blocks.mjs blocks.mcap "$CHROME"
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

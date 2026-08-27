@@ -3,7 +3,10 @@ name = "ferroscope-mcap"
 description = "MCAP v0 reader and writer with zero runtime dependencies — pure std, no C, builds for wasm32 unchanged."
 # 0.1.1 adds Attachment records: write, read, index and CRC-check.
 # 0.1.2 adds Error::SchemaConflict, so one topic cannot silently carry two schemas.
-version = "0.1.7"
+# 0.1.8 adds `Feed`: the framing, PUSHED rather than pulled, so a browser can hand a
+# recording over one `File.slice()` at a time. `stream` is now a loop over it, which keeps
+# one definition of what a record is for both directions.
+version = "0.1.8"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -8,7 +8,11 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.3 adds Shape::Mesh, Recorder::attach, and attachments in the viewer bundle.
 # 0.1.4: the Recorder refuses a topic reuse with a different schema.
 # 0.1.5: a sphere's size is its three semi-axes, so one primitive draws an inertia ellipsoid.
-version = "0.1.13"
+# 0.1.14 adds `BundleFold`: the viewer bundle folded from PUSHED blocks, so a page can open a
+# recording the browser will not hand over as one buffer. `bundle_streaming` is now this fold
+# with a file loop around it, and a fold whose second pass sees a different recording than its
+# first refuses rather than emitting partial lanes.
+version = "0.1.14"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

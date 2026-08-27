@@ -478,18 +478,21 @@ fn the_streaming_bundle_is_byte_identical_to_the_slice_bundle() {
     // equal — the failure this project has had once per comparator. Byte-identity is the
     // strongest form of that check available, and it is achievable because the stride is
     // computed from counts rather than discovered on the way through.
-    let bytes = record(11, None);
-    let sliced = ferroscope_schema::bundle(&bytes).expect("slice bundle");
-    let streamed = ferroscope_schema::bundle_streaming(|| Ok(std::io::Cursor::new(bytes.clone())))
-        .expect("streaming bundle");
-    assert_eq!(
-        sliced.len(),
-        streamed.len(),
-        "bundle sizes differ: {} vs {}",
-        sliced.len(),
-        streamed.len()
-    );
-    assert_eq!(sliced, streamed, "the two bundle paths disagree");
+    for bytes in [record(11, None), strided_recording()] {
+        let sliced = ferroscope_schema::bundle(&bytes).expect("slice bundle");
+        let streamed =
+            ferroscope_schema::bundle_streaming(|| Ok(std::io::Cursor::new(bytes.clone())))
+                .expect("streaming bundle");
+        assert_eq!(
+            sliced.len(),
+            streamed.len(),
+            "bundle sizes differ for a {} byte recording: {} vs {}",
+            bytes.len(),
+            sliced.len(),
+            streamed.len()
+        );
+        assert_eq!(sliced, streamed, "the two bundle paths disagree");
+    }
 }
 
 #[test]
@@ -502,4 +505,226 @@ fn the_streaming_bundle_carries_the_receipt_it_recomputed() {
         "a good recording's bundle must say it verified"
     );
     assert!(streamed.contains("\"receipt\""), "receipt missing");
+}
+
+/// Drive a [`BundleFold`] the way a browser does: two passes over the same bytes, delivered in
+/// blocks of `block` that fall wherever they fall.
+fn folded_in_blocks(bytes: &[u8], block: usize) -> Option<String> {
+    let mut fold = ferroscope_schema::BundleFold::new();
+    for part in bytes.chunks(block.max(1)) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    assert_eq!(fold.pass(), 1, "pass one did not stay pass one");
+    fold.rewind();
+    assert_eq!(fold.pass(), 2, "rewind did not begin pass two");
+    for part in bytes.chunks(block.max(1)) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    fold.finish()
+}
+
+#[test]
+fn a_pushed_bundle_is_byte_identical_to_a_read_one() {
+    // The browser cannot hand out a `Read`: `File.slice(a, b).arrayBuffer()` yields a block
+    // when it is ready. So the fold is pushed rather than pulled — and the whole point is that
+    // this changes nothing about the answer. Byte-identity across every block size is the
+    // check, because a bundle that merely "looks the same" is how two paths drift apart.
+    for bytes in [record(11, None), strided_recording()] {
+        let sliced = ferroscope_schema::bundle(&bytes).expect("slice bundle");
+        for block in [1usize, 3, 64, 1000, 4096, 65536, bytes.len()] {
+            let pushed = folded_in_blocks(&bytes, block).expect("pushed bundle");
+            assert_eq!(
+                pushed,
+                sliced,
+                "the bundle changed when a {} byte recording arrived {block} at a time",
+                bytes.len()
+            );
+        }
+    }
+}
+
+/// A recording with more points than a lane can draw, so every lane is strided.
+///
+/// The stride is the one part of the bundle that depends on a count taken in an earlier pass,
+/// and so the one part a pushed fold could get wrong on its own. A 200-step fixture is under
+/// the limit and strides by 1 \u{2014} which is to say it does not test this at all, and a
+/// mutation that threw the strides away passed the byte-identity check against it.
+fn strided_recording() -> Vec<u8> {
+    long_recording(9_000)
+}
+
+/// A recording of `steps` steps, for the tests that need length rather than content.
+fn long_recording(steps: u64) -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    for step in 0..steps {
+        let t = Stamp::at(step * 1_000_000, step * 1_000_000, step);
+        let x = (step as f64) * 1e-4;
+        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        rec.scalar("/err", t, x, "m").unwrap();
+        rec.energy("/energy/motor", t, Rail::Actuation, "motor", 3.0)
+            .unwrap();
+    }
+    let spec = ferroscope_receipt::RunSpec::new("long", 1)
+        .dt_ns(1_000_000)
+        .steps(steps)
+        .integrator("semi-implicit-euler")
+        .solver("none")
+        .build("integration-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
+}
+
+/// The largest number of bytes the fold ever holds while reading `bytes`.
+fn peak_buffered(bytes: &[u8]) -> usize {
+    let mut fold = ferroscope_schema::BundleFold::new();
+    let mut worst = 0usize;
+    for part in bytes.chunks(8192) {
+        if !fold.push(part) {
+            break;
+        }
+        worst = worst.max(fold.buffered());
+    }
+    worst
+}
+
+#[test]
+fn a_pushed_fold_holds_one_record_not_the_recording() {
+    // What the browser is buying. Not "a small number of bytes" — an absolute bound would just
+    // encode today's chunk target — but a number that does NOT move when the recording gets an
+    // order of magnitude longer. A fold that accumulated the file would still pass every
+    // correctness test above and would fail here.
+    let short = long_recording(200);
+    let long = long_recording(4_000);
+    assert!(
+        long.len() > short.len() * 5,
+        "fixtures are not far enough apart: {} vs {}",
+        short.len(),
+        long.len()
+    );
+    let (a, b) = (peak_buffered(&short), peak_buffered(&long));
+    assert!(
+        b <= a + 8192,
+        "the fold held {a} bytes of a {} byte recording and {b} of a {} byte one \u{2014} it is \
+         growing with the file",
+        short.len(),
+        long.len()
+    );
+}
+
+#[test]
+fn a_pushed_fold_that_never_rewinds_yields_nothing() {
+    // Pass two is where the lanes are built. A fold asked to finish after one pass has counted
+    // the recording and drawn none of it, and returning a bundle of empty lanes would be a
+    // recording that silently renders blank.
+    let bytes = record(11, None);
+    let mut fold = ferroscope_schema::BundleFold::new();
+    for part in bytes.chunks(4096) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    assert!(
+        fold.finish().is_none(),
+        "a one-pass fold produced a bundle"
+    );
+}
+
+#[test]
+fn a_pushed_fold_refuses_a_torn_recording() {
+    // A file cut mid-record has to be refused rather than folded into a short bundle wearing a
+    // whole one's clothes.
+    let bytes = record(40, None);
+    let cut = bytes.len() * 2 / 3;
+    let torn = &bytes[..cut];
+    let mut fold = ferroscope_schema::BundleFold::new();
+    for part in torn.chunks(4096) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    fold.rewind();
+    for part in torn.chunks(4096) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    let out = fold.finish();
+    // Either the framing rejected it outright, or the bundle it produced does not claim the
+    // recording verified — what must never happen is a torn file reporting a clean receipt.
+    if let Some(json) = out {
+        assert!(
+            !json.contains("\"verified\":true"),
+            "a file cut at {cut} bytes produced a bundle claiming it verified"
+        );
+    }
+}
+
+#[test]
+fn a_pushed_fold_keeps_what_a_screen_draws_not_what_the_run_recorded() {
+    // The other half of flat memory, and the half nothing was checking: the framing buffer is
+    // bounded by one record, but the LANES would grow with the recording if the stride were not
+    // applied on the way in. Byte-identity cannot see this \u{2014} `finish` strides again on
+    // the way out, so a fold that kept every point emits exactly the same bundle, just after
+    // holding every sample to do it. In a browser that is the difference between opening the
+    // file and not, so it gets its own measurement. (A mutation that threw the strides away
+    // passed every other test in this file.)
+    const STEPS: usize = 12_000;
+    const LANES: usize = 4; // pose, frame, scalar, power
+    let bytes = long_recording(STEPS as u64);
+    let mut fold = ferroscope_schema::BundleFold::new();
+    for part in bytes.chunks(65536) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    assert_eq!(fold.kept_points(), 0, "pass one is a count, not a draw");
+    fold.rewind();
+    for part in bytes.chunks(65536) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    let kept = fold.kept_points();
+    let recorded = STEPS * LANES;
+    assert!(kept > 0, "no lane points kept at all");
+    // 4,000 points is what one lane can be drawn at, so four lanes is the ceiling however long
+    // the run is. Keeping every sample would be three times that here and unbounded in general.
+    assert!(
+        kept <= 4_000 * LANES,
+        "kept {kept} points of {recorded} recorded, over the {} a screen can draw",
+        4_000 * LANES
+    );
+    assert!(
+        kept * 2 < recorded,
+        "kept {kept} of {recorded} recorded \u{2014} the stride is not being applied on the way in"
+    );
+}
+
+#[test]
+fn a_pushed_fold_refuses_two_passes_over_different_bytes() {
+    // Nothing makes the caller push the same bytes twice, and in a browser the file on disk can
+    // change between the two reads. A short second pass builds partial lanes and reports no
+    // error: the run renders as if it barely happened. A recording with a receipt would at
+    // least fail its digest; a live prefix has no receipt and would say nothing at all.
+    let bytes = record(11, None);
+    let mut fold = ferroscope_schema::BundleFold::new();
+    for part in bytes.chunks(4096) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    fold.rewind();
+    for part in bytes[..bytes.len() / 2].chunks(4096) {
+        if !fold.push(part) {
+            break;
+        }
+    }
+    assert!(
+        fold.finish().is_none(),
+        "a fold whose second pass saw half the recording produced a bundle"
+    );
 }

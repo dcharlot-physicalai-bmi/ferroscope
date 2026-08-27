@@ -117,7 +117,7 @@ the same files dropped on the page in headless Chrome:
 | 136 MB | 681 k | 1.4 s | 300 MB | opens in 4.1 s |
 | 552 MB | 2.7 M | 6.8 s | 1.2 GB | opens in 13.3 s |
 | 1.2 GB | 6.0 M | 15.4 s | 2.6 GB | opens in 43 s |
-| 2.6 GB | 12.8 M | 65 s | 1.7 GB† | **refused** |
+| 2.6 GB | 12.8 M | 65 s | 1.7 GB† | 78.8 s, in blocks |
 
 **`verify` no longer holds the file at all.** Recomputing a receipt is a fold — hash each payload
 in file order, total the ledger, compare at the end — so it streams. Measured on the 552 MB row,
@@ -159,42 +159,91 @@ traces, not the two files. What streaming removes is the 1.1 GB of raw bytes per
 never needed. `inspect` is the other end: it parses no payloads at all, so it is a single pass
 that touches almost nothing.
 
-The figures below are the *slice* reader, which is what the browser still uses. Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
-roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
+The browser column's last row used to read **refused**, and the section after this one is how it
+stopped saying that. The `peak RSS` column is the *slice* reader — the one the page still uses
+below its threshold, and the one every native verb used before it streamed. Native throughput is
+about **80 MB/s** and memory about **2.1× the file**, both linear — up to roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
 machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
 RSS comes in *below* the 1.2 GB file's, because the memory is being compressed rather than held.
 Those two numbers are the measurement bending, not the program improving, and they are printed
 here as measured because the first draft of this table carried an extrapolation — 32 s and
 5.5 GB — that was wrong in both directions.
 
-In the browser the ceiling is Chrome's, not ours: past roughly 2 GB the File API will not hand a
-page one `ArrayBuffer`, and the read fails before any Ferroscope code runs.
+### The browser reads a recording it cannot hold
 
-**So hand the browser a bundle instead.** `ferroscope export` strides every lane down to what a
-screen can actually draw, and the viewer opens the result:
+The page used to have a hard ceiling, and it was Chrome's rather than ours: past roughly 2 GB the
+File API will not hand a page one `ArrayBuffer`, and the read fails before any Ferroscope code
+runs. Measured in Chrome 141, a 2.6 GiB recording is refused instantly with a `NotReadableError`.
+
+That ceiling is now gone. `File.slice()` hands over one block at a time, and the reader was the
+wrong shape to accept them — `stream()` PULLS from a source, and a browser has nothing to pull
+from. So the framing moved into a thing that is PUSHED:
+
+```rust
+let mut feed = Feed::new();
+feed.push(&block);                     // any size, any boundary
+feed.drain(&mut |record| { … })?;      // whole records, in file order
+```
+
+`stream()` is now a loop over `Feed`, so there is one definition of what a record is for both
+directions. In the browser it is one class:
+
+```js
+const s = new BundleStream();
+for (let pass = 0; pass < 2; pass++) {
+  for (let at = 0; at < file.size; at += BLOCK)
+    if (!s.push(new Uint8Array(await file.slice(at, at + BLOCK).arrayBuffer()))) break;
+  if (pass === 0) s.rewind();
+}
+const bundle = JSON.parse(s.finish());
+```
+
+Two passes, and they are load-bearing rather than an implementation detail: a lane's stride comes
+from its message count, and the receipt naming the precision to recompute the digest at is written
+by `seal` at the **end** of the file. A page that read once would build a bundle out of empty
+lanes and say nothing about it — so a fold whose second pass sees a different number of messages
+than its first refuses to produce a bundle at all.
+
+Measured, in Chrome, on the 2.6 GiB recording the page used to refuse:
+
+| | whole file | in blocks |
+|---|---|---|
+| 2.6 GiB / 12,767,047 messages | `NotReadableError`, instantly | **opens in 78.8 s** |
+| JS heap | — | **under 200 MB** |
+| receipt | — | **VERIFIED, recomputed here** |
+
+And on a 345 MB recording, where both doors open, the bundles are **byte-identical** — checked in
+a real browser by a CI job, not by inspection. The framing held at most **0.06 MB** of that file
+at a time, and kept 47,859 lane points: one record and one screenful, which is the whole reason
+the door exists.
+
+`?blocks` forces the block reader at any size, because the threshold above which the page stops
+asking for the whole file is a measurement taken on one machine, and a reader whose machine has
+less to spare should not have to discover that by watching a tab die.
+
+What a block read cannot do, it says. The bytes did not stay, so comparison — which recomputes
+both receipts from the recordings themselves — and mesh attachments are unavailable, and each
+says so rather than failing obscurely. What it *can* do, and a bundle cannot, is verify: the
+digest is recomputed from those bytes as they go past, in that browser, and the receipt panel is
+entitled to say **recomputed here**.
+
+**A bundle is still the faster door.** `ferroscope export` strides every lane down to what a
+screen can actually draw:
 
 ```sh
 ferroscope export huge.mcap bundle.json   # 2.6 GB in, 1.4 MB out, 76 s
 ```
 
-That 2.6 GB run — 12.8 million messages, the one the page refuses — opens **as a bundle in a
-tenth of a second**, with its scene tree, its lanes, its receipt and its 54.8 kJ ledger. The
-reduction is about 1800:1 because a lane is capped at 4,000 points; nothing a 1500-second run
-shows on a 1080-pixel plot needs more.
+That same 2.6 GB run opens **as a bundle in a tenth of a second** rather than 78.8 s, and the
+file is small enough to send to somebody. The reduction is about 1800:1 because a lane is capped
+at 4,000 points; nothing a 1500-second run shows on a 1080-pixel plot needs more. What it costs
+is the receipt: a bundle is labelled **"recomputed at export … checked by the CLI, not this
+page"**, because it inherits a verification that happened elsewhere, and printing a bare
+"VERIFIED" over it would claim a check this machine never performed — the same misplaced
+confidence the comparator had when it trusted a stored digest.
 
-What a bundle cannot do, it says rather than pretending. It carries no raw bytes, so it cannot
-be compared (`diff` recomputes both receipts from the recordings, which is the point) and it
-carries no mesh attachments, so the 3-D view draws primitives and notes why. And its receipt is
-labelled **"recomputed at export … checked by the CLI, not this page"**: a bundle inherits a
-verification that happened elsewhere, and printing a bare "VERIFIED" over it would claim a check
-this machine never performed — the same misplaced confidence the comparator had when it trusted
-a stored digest.
-
-What matters is what happens *at* the ceiling. It used to be nothing at all: the rejection was
-unhandled, so the page sat silent — measured, three minutes of a tab that looks broken. It now
-refuses in a tenth of a second and says why, how big the file was, and that the CLI will do it.
-Above 64 MB the page also says `reading…` and `parsing…` rather than freezing mutely for the
-tens of seconds the work honestly takes.
+Above 64 MB the page says `reading…` and `parsing…`, and a block read reports which pass it is on
+and how far through, rather than freezing mutely for the tens of seconds the work honestly takes.
 
 ---
 

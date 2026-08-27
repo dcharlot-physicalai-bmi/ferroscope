@@ -319,7 +319,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import init, { open as fsOpen, open_prefix, diff as fsDiff, divergence_curve, attachment,
                version, scene_from_text, record_scene, record_scene_with, sweep_scene,
-               record_case }
+               record_case, BundleStream }
   from './pkg/ferroscope_wasm.js';
 
 const TEAL='#46c6b0', VIOLET='#9d8cff', RED='#ff6a6a';
@@ -397,9 +397,11 @@ function shapeScale(shape, sz){
 async function meshFromAttachment(name){
   if(MESHES.has(name)) return MESHES.get(name);
   const promise = (async () => {
-    if(!S.A.bytes) throw new Error(
-      'meshes travel inside the recording as attachments, and a bundle does not carry their ' +
-      'bytes — open the .mcap itself to see them');
+    if(!S.A.bytes) throw new Error(S.A.streamed
+      ? 'meshes travel inside the recording as attachments, and a recording read in blocks was ' +
+        'never held whole — the primitives draw, the mesh bytes did not stay'
+      : 'meshes travel inside the recording as attachments, and a bundle does not carry their ' +
+        'bytes — open the .mcap itself to see them');
     const bytes = attachment(S.A.bytes, name);          // throws with the available names
     const gltf = await GLTF.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
     const group = gltf.scene;
@@ -545,6 +547,8 @@ function syncScene(){
         }).catch(e => {
           if(S.A && S.A.bundle){ noteOnce('meshes are not carried in a bundle: this view draws ' +
             'the primitives, and the .mcap itself has the mesh bytes'); return; }
+          if(S.A && S.A.streamed){ noteOnce('this recording was read in blocks and its mesh ' +
+            'attachments were not kept: the view draws the primitives'); return; }
           fail('mesh "'+g.mesh+'": '+(e.message||e));
         });
       }
@@ -1125,6 +1129,85 @@ function noteOnce(msg){
 /// Let the browser paint before a synchronous parse locks the main thread.
 const repaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 
+// Above this, do not ask for the whole file at once.
+//
+// Measured in Chrome 141 on this machine: 1.2 GB comes back from `file.arrayBuffer()` and
+// costs about 2.1x the file in memory; 2.6 GiB is refused instantly with a NotReadableError.
+// Between those two the answer is worse than either — a sweep of sizes from 1.5 to 2.5 GiB did
+// not finish in ten minutes, which is what a page that looks dead is made of. So this line is
+// drawn well under the refusal rather than at it. Below it the whole-file path is worth having
+// because it keeps comparison and mesh attachments; above it, the block reader is the only
+// door that opens at all — and the one place a reader gets to overrule the guess is `?blocks`.
+const WHOLE_FILE_LIMIT = 1024 * 1048576;
+// `?blocks` reads every recording in blocks whatever its size. The threshold above was
+// measured on one machine, and a reader whose machine has less to spare should not have to
+// discover that by watching a tab die — this is the switch that says "do it the other way".
+// It is also how the block reader gets tested against a file small enough to read both ways.
+const FORCE_BLOCKS = new URLSearchParams(location.search).has('blocks');
+// One `File.slice()` at a time. Big enough that the per-block overhead disappears, small
+// enough that the page repaints between blocks instead of freezing.
+const BLOCK = 8 * 1048576;
+
+/// Fold a recording into a bundle a block at a time, never holding more than one block.
+///
+/// The recording is read TWICE: a lane's stride comes from its message count, and the receipt
+/// that says at what precision to recompute the digest is written at the end of the file. What
+/// that buys is a recording of any size — and, unlike an exported bundle, a digest recomputed
+/// HERE, from these bytes, in this browser.
+async function streamOpen(slot, file, label, was){
+  if(slot !== 'A'){
+    label.textContent = was;
+    return fail(`${file.name} is ${(file.size/1048576).toFixed(0)} MB, which this page can only ` +
+      `read in blocks — and comparing needs both recordings held at once. Compare files this ` +
+      `size with \`ferroscope diff a.mcap b.mcap\`.`);
+  }
+  const s = new BundleStream();
+  const total = file.size * 2;
+  let read = 0, painted = 0;
+  const t0 = performance.now();
+  for(let pass = 1; pass <= 2; pass++){
+    let more = true;
+    for(let at = 0; at < file.size && more; at += BLOCK){
+      const end = Math.min(at + BLOCK, file.size);
+      let block;
+      try { block = new Uint8Array(await file.slice(at, end).arrayBuffer()); }
+      catch(e){
+        s.free(); label.textContent = was;
+        return fail(`${file.name}: the browser stopped returning the file at ${(at/1048576).toFixed(0)} MB (${e.name||'error'}).`);
+      }
+      read += block.length;
+      more = s.push(block);
+      // Repaint a few times a second, not every block: the point is a page that visibly moves,
+      // not one that spends its time on layout.
+      if(read - painted > 64 * 1048576){
+        painted = read;
+        label.textContent = `reading pass ${pass} of 2 · ${(100 * read / total).toFixed(0)}%`;
+        await repaint();
+      }
+    }
+    if(pass === 1) s.rewind();
+  }
+  let json;
+  try { json = s.finish(); }
+  catch(e){ label.textContent = was; return fail(`${file.name}: ${e.message||e}`); }
+  const secs = (performance.now() - t0) / 1000;
+
+  S.A = {name:file.name, bytes:null, streamed:true};
+  S.B = null; el('slotB').classList.remove('loaded'); el('nmB').textContent = 'compare with…';
+  S.bundle = JSON.parse(json);
+  S.span = S.bundle.span || [0,1];
+  el('slotA').classList.add('loaded');
+  el('empty').style.display = 'none';
+  label.textContent = `${file.name} · ${S.bundle.messages.toLocaleString()} msgs · read in blocks`;
+  fitView(); paintTree(); buildLanes(); setT(S.span[0]);
+  compare();
+  noteOnce(`${file.name} is ${(file.size/1048576).toFixed(0)} MB, past what this browser will ` +
+    `hand over as one buffer, so it was read in ${(BLOCK/1048576)} MB blocks — twice, in ` +
+    `${secs.toFixed(1)} s. The receipt below was recomputed from these bytes as they went ` +
+    `past. What needs the whole recording at once is not available: comparison, and meshes ` +
+    `carried as attachments.`);
+}
+
 async function accept(slot, file){
   clearFail();
   const mb = file.size / 1048576;
@@ -1135,19 +1218,14 @@ async function accept(slot, file){
   // and paint it before the parse blocks the thread.
   label.textContent = `reading ${mb.toFixed(0)} MB…`;
   await repaint();
+  if(FORCE_BLOCKS || file.size >= WHOLE_FILE_LIMIT) return streamOpen(slot, file, label, was);
   let bytes;
   try {
     bytes = new Uint8Array(await file.arrayBuffer());
   } catch(e){
-    // Chrome refuses to read a file this large into one ArrayBuffer. Measured: 1.2 GB opens,
-    // 2.6 GB fails here — and it used to fail as an unhandled rejection, so the page sat
-    // there saying nothing at all.
-    label.textContent = was;
-    return fail(
-      `${file.name} is ${mb.toFixed(0)} MB and the browser could not read it into memory ` +
-      `(${e.name||'error'}). This page holds the whole recording at once by design — nothing ` +
-      `is uploaded — so a file this size belongs to the CLI: \`ferroscope inspect\`, ` +
-      `\`verify\` and \`diff\` handle it at about 80 MB/s, or record it in shorter segments.`);
+    // Under the threshold and still refused — a machine with less to spare than the one the
+    // threshold was measured on. The block reader is the answer either way.
+    return streamOpen(slot, file, label, was);
   }
   if(mb > 64){ label.textContent = `parsing ${mb.toFixed(0)} MB…`; await repaint(); }
 
@@ -1203,10 +1281,15 @@ function compare(){
   const strip = el('strip');
   if(!S.A || !S.B){ strip.style.display='none'; S.div=null; S.verdict=null; return; }
   if(!S.A.bytes || !S.B.bytes){
-    // Comparison recomputes both receipts from the bytes, and a bundle has none.
+    // Comparison recomputes both receipts from the bytes, and neither a bundle nor a recording
+    // read in blocks still has them.
+    const streamed = (S.A && S.A.streamed) || (S.B && S.B.streamed);
     strip.style.display='block'; strip.className='';
-    strip.innerHTML = 'a bundle cannot be compared: the verdict is recomputed from the ' +
-      'recordings themselves, not from a summary of them. Use <b>ferroscope diff a.mcap b.mcap</b>.';
+    strip.innerHTML = streamed
+      ? 'a recording read in blocks cannot be compared here: a verdict is recomputed from both ' +
+        'recordings at once, and this page held neither. Use <b>ferroscope diff a.mcap b.mcap</b>.'
+      : 'a bundle cannot be compared: the verdict is recomputed from the ' +
+        'recordings themselves, not from a summary of them. Use <b>ferroscope diff a.mcap b.mcap</b>.';
     S.div=null; S.verdict=null; return;
   }
   let v;

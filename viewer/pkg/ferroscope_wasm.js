@@ -1,4 +1,138 @@
 /**
+ * Open a recording the browser cannot hold, a block at a time.
+ *
+ * [`open`] takes the whole file as one `Uint8Array`, which is what a browser hands over and is
+ * fine up to a point. Measured in Chrome, that point is somewhere past 1.2 GB and short of
+ * 2.6 GB: `file.arrayBuffer()` simply refuses, and no amount of care on this side changes it.
+ *
+ * So this is the other door. `File.slice(a, b).arrayBuffer()` returns one block at a time and
+ * no single allocation is ever larger than a block, so the ceiling is the recording's own
+ * lanes rather than its bytes. The fold underneath is the same one `ferroscope export` runs,
+ * which is what keeps a bundle made in the browser and a bundle made by the CLI the same
+ * bundle rather than two answers that resemble each other.
+ *
+ * Two passes over the file, because a lane's stride comes from its message count and the
+ * receipt that says at what precision to recompute the digest is written at the END of the
+ * recording. Push the file through, call [`rewind`](BundleStream::rewind), push it through
+ * again, then [`finish`](BundleStream::finish).
+ *
+ * ```js
+ * const s = new BundleStream();
+ * for (let p = 0; p < 2; p++) {
+ *   for (let at = 0; at < file.size; at += BLOCK) {
+ *     const b = new Uint8Array(await file.slice(at, at + BLOCK).arrayBuffer());
+ *     if (!s.push(b)) break;              // this pass has what it needs
+ *   }
+ *   if (p === 0) s.rewind();
+ * }
+ * const bundle = JSON.parse(s.finish());
+ * ```
+ *
+ * What a streamed recording cannot do is what a bundle cannot do: comparison and attachment
+ * extraction both need the bytes themselves, and a page that streamed the file no longer has
+ * them. It costs a second read of the file, which for a recording this size is the cheaper
+ * half of the bargain.
+ */
+export class BundleStream {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        BundleStreamFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_bundlestream_free(ptr, 0);
+    }
+    /**
+     * How many pushed bytes are held because they are not yet a whole record. One record's
+     * worth, however long the recording is.
+     * @returns {number}
+     */
+    buffered() {
+        const ret = wasm.bundlestream_buffered(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * How many bytes this pass has taken, so a page can draw a progress bar that is measuring
+     * the work rather than guessing at it.
+     * @returns {number}
+     */
+    fed() {
+        const ret = wasm.bundlestream_fed(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Emit the viewer bundle as JSON. Consumes the stream.
+     * @returns {string}
+     */
+    finish() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr = this.__destroy_into_raw();
+            const ret = wasm.bundlestream_finish(ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * How many lane points are being held — what the page will actually draw. Bounded by the
+     * screen, not by the recording, which is the whole reason this door exists.
+     * @returns {number}
+     */
+    kept_points() {
+        const ret = wasm.bundlestream_kept_points(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    constructor() {
+        const ret = wasm.bundlestream_new();
+        this.__wbg_ptr = ret;
+        BundleStreamFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * Which pass is being fed: 1 before [`rewind`](BundleStream::rewind), 2 after.
+     * @returns {number}
+     */
+    pass() {
+        const ret = wasm.bundlestream_pass(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Add the next block of the recording, in file order. Blocks may be any size and need not
+     * fall on record boundaries.
+     *
+     * Returns `false` once this pass has everything it needs — the footer has been reached, or
+     * the bytes did not parse. Stop reading when it does; pushing after that does nothing.
+     * @param {Uint8Array} block
+     * @returns {boolean}
+     */
+    push(block) {
+        const ptr0 = passArray8ToWasm0(block, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.bundlestream_push(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * End pass one and begin pass two. Push the same bytes again from the start.
+     */
+    rewind() {
+        wasm.bundlestream_rewind(this.__wbg_ptr);
+    }
+}
+if (Symbol.dispose) BundleStream.prototype[Symbol.dispose] = BundleStream.prototype.free;
+
+/**
  * The raw bytes of one attachment, by name.
  *
  * A glTF has no business being base64'd into a JSON document, so the viewer asks for the blob
@@ -349,6 +483,9 @@ export function version() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_throw_bb96b2010945f0bc: function(arg0, arg1) {
+            throw new Error(getStringFromWasm0(arg0, arg1));
+        },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
@@ -369,6 +506,10 @@ function __wbg_get_imports() {
         "./ferroscope_wasm_bg.js": import0,
     };
 }
+
+const BundleStreamFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_bundlestream_free(ptr, 1));
 
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
