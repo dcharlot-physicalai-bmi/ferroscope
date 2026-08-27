@@ -143,8 +143,23 @@ Memory is bounded by the energy-sample count rather than by the file, not by not
 keeps each sample to compute its own coverage verdict, so a 2.6 GB run costs about 116 MB. That
 is a bound worth stating rather than rounding to "constant".
 
-The figures below are the *slice* reader, which is what `inspect`, `export` and the browser still
-use. Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
+**Every read verb streams now.** Measured on a 552 MB recording, each against the binary from
+before it was changed:
+
+| verb | streaming | slurping | |
+|---|---|---|---|
+| `inspect` | 2.9 s · **2 MB** | 2.8 s · 1160 MB | 580× less, same speed |
+| `verify` | 32–39 s · **32–47 MB** | 26–28 s · 1081–1200 MB | 35× less, 1.35× slower |
+| `export` | 186 s · **45 MB** | 255 s · 1924 MB | 43× less, and faster |
+| `diff` | 223 s · **2357 MB** | 224 s · 4179 MB | 1.8 GB less, same speed |
+
+`diff` is the honest outlier and the reason it is in the table. Comparing two runs needs both
+*trajectories* in hand — it is the one question here that is not a fold — so its floor is the two
+traces, not the two files. What streaming removes is the 1.1 GB of raw bytes per file that it
+never needed. `inspect` is the other end: it parses no payloads at all, so it is a single pass
+that touches almost nothing.
+
+The figures below are the *slice* reader, which is what the browser still uses. Native throughput is about **80 MB/s** and memory about **2.1× the file**, both linear — up to
 roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
 machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
 RSS comes in *below* the 1.2 GB file's, because the memory is being compressed rather than held.

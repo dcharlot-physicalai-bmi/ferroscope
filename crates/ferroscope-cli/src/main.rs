@@ -26,7 +26,7 @@ mod urdf;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{Tolerance, Verdict};
-use ferroscope_schema::{mcap, trace_from, verify};
+use ferroscope_schema::{mcap, verify};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -144,14 +144,69 @@ fn slurp(path: &str) -> Result<Vec<u8>, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_inspect(path: &str) -> Result<bool, String> {
-    let bytes = slurp(path)?;
-    let log = mcap::read(&bytes).map_err(|e| e.to_string())?;
+    // Streamed, like verify and export. Everything printed here is a fold — counts per topic,
+    // a min and a max, the worst lag, and two metadata blocks — so none of it needs the file.
+    use ferroscope_mcap::{Flow, Record};
+
+    let mut profile = String::new();
+    let mut library = String::new();
+    let mut messages = 0usize;
+    let mut span: Option<(u64, u64)> = None;
+    let mut schemas: std::collections::BTreeMap<u16, String> = Default::default();
+    let mut channels: std::collections::BTreeMap<u16, (String, u16)> = Default::default();
+    let mut counts: std::collections::BTreeMap<u16, usize> = Default::default();
+    let mut max_lag = 0i64;
+    let mut lag_at = 0u64;
+    let mut receipt_kv: Option<Vec<(String, String)>> = None;
+    let mut production_kv: Option<Vec<(String, String)>> = None;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    ferroscope_mcap::stream(file, |rec| {
+        match rec {
+            Record::Header {
+                profile: p,
+                library: l,
+            } => {
+                profile = p.to_string();
+                library = l.to_string();
+            }
+            Record::Schema(sc) => {
+                schemas.insert(sc.id, sc.name);
+            }
+            Record::Channel(ch) => {
+                channels.insert(ch.id, (ch.topic, ch.schema_id));
+            }
+            Record::Metadata { name, kv } => {
+                if name == ferroscope_schema::RECEIPT_BLOCK {
+                    receipt_kv = Some(kv);
+                } else if name == ferroscope_schema::PRODUCTION_BLOCK {
+                    production_kv = Some(kv);
+                }
+            }
+            Record::Message(m) => {
+                messages += 1;
+                *counts.entry(m.channel_id).or_default() += 1;
+                span = Some(match span {
+                    None => (m.log_time, m.log_time),
+                    Some((lo, hi)) => (lo.min(m.log_time), hi.max(m.log_time)),
+                });
+                let lag = m.publish_time as i64 - m.log_time as i64;
+                if lag.abs() > max_lag.abs() {
+                    max_lag = lag;
+                    lag_at = m.log_time;
+                }
+            }
+            _ => {}
+        }
+        Ok(Flow::Continue)
+    })
+    .map_err(|e| e.to_string())?;
 
     println!("{path}");
-    println!("  profile     {}", log.profile);
-    println!("  library     {}", log.library);
-    println!("  messages    {}", log.messages.len());
-    if let Some((t0, t1)) = log.time_span() {
+    println!("  profile     {profile}");
+    println!("  library     {library}");
+    println!("  messages    {messages}");
+    if let Some((t0, t1)) = span {
         println!(
             "  sim span    {:.3} s  ({} → {} ns)",
             (t1 - t0) as f64 * 1e-9,
@@ -161,16 +216,15 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
     }
 
     println!("\n  {:<32} {:>8}  SCHEMA", "TOPIC", "MSGS");
-    let mut rows: Vec<(String, usize, String)> = log
-        .channels
+    let mut rows: Vec<(String, usize, String)> = channels
         .iter()
-        .map(|c| {
-            let n = log.messages.iter().filter(|m| m.channel_id == c.id).count();
-            let s = log
-                .schema(c.schema_id)
-                .map(|s| s.name.clone())
+        .map(|(id, (topic, schema_id))| {
+            let n = counts.get(id).copied().unwrap_or(0);
+            let s = schemas
+                .get(schema_id)
+                .cloned()
                 .unwrap_or_else(|| "(none)".into());
-            (c.topic.clone(), n, s)
+            (topic.clone(), n, s)
         })
         .collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.1));
@@ -179,15 +233,6 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
     }
 
     // The three-clock report: this is what a single log_time cannot tell you.
-    let mut max_lag = 0i64;
-    let mut lag_at = 0u64;
-    for m in &log.messages {
-        let lag = m.publish_time as i64 - m.log_time as i64;
-        if lag.abs() > max_lag.abs() {
-            max_lag = lag;
-            lag_at = m.log_time;
-        }
-    }
     if max_lag != 0 {
         println!(
             "\n  clocks      worst wall−sim drift {:.3} ms at sim t={:.3} s",
@@ -196,7 +241,7 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
         );
     }
 
-    if let Some(kv) = log.metadata_block(ferroscope_schema::RECEIPT_BLOCK) {
+    if let Some(kv) = &receipt_kv {
         println!("\n  receipt");
         for (k, v) in kv {
             println!("    {k:<22} {v}");
@@ -204,7 +249,7 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
     } else {
         println!("\n  receipt     none: this recording makes no reproducibility claim");
     }
-    if let Some(kv) = log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK) {
+    if let Some(kv) = &production_kv {
         // What making this copy of the file cost, on the machine that made it. Outside both
         // digests on purpose: the same experiment on a busier machine costs more.
         println!("\n  production");
@@ -350,18 +395,26 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         }
     }
 
-    let bytes_a = slurp(a_path)?;
-    let bytes_b = slurp(b_path)?;
-    let (ra, ta) = trace_from(&bytes_a).ok_or_else(|| format!("cannot read {a_path}"))?;
-    let (rb, tb) = trace_from(&bytes_b).ok_or_else(|| format!("cannot read {b_path}"))?;
+    // Streamed, like every other read verb. Comparison genuinely needs both TRACES in hand —
+    // it is the one question here that is not a fold — but it never needs the raw bytes, and
+    // those are the larger half.
+    let open_a = || std::fs::File::open(a_path);
+    let open_b = || std::fs::File::open(b_path);
+    let read_trace = |path: &str, f: std::io::Result<std::fs::File>| {
+        let file = f.map_err(|e| format!("cannot read {path}: {e}"))?;
+        ferroscope_schema::trace_from_streaming(file)
+            .ok_or_else(|| format!("{path} is not a readable Ferroscope recording"))
+    };
+    let (ra, ta) = read_trace(a_path, open_a())?;
+    let (rb, tb) = read_trace(b_path, open_b())?;
 
     // Recompute both receipts BEFORE comparing anything. This used to be skipped entirely: the
     // fast path compared two digest strings read straight out of metadata, so two files whose
     // blocks were edited to carry the same trace_digest passed with exit 0 whatever their
     // messages held. A green diff meant two metadata blocks agreed, not that two runs
     // reproduced — and the receipt is the product's whole claim.
-    let va = verify(&bytes_a);
-    let vb = verify(&bytes_b);
+    let va = ferroscope_schema::verify_streaming(open_a);
+    let vb = ferroscope_schema::verify_streaming(open_b);
     let mut trustworthy = true;
     for (label, path, v, r) in [("A", a_path, &va, &ra), ("B", b_path, &vb, &rb)] {
         println!("{label}  {path}");
@@ -447,7 +500,9 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
     }
 
     let p = ferroscope_receipt::profile(&ta, &tb, tol);
-    let labels = ferroscope_schema::channel_labels(&bytes_a);
+    let labels = open_a()
+        .map(ferroscope_schema::channel_labels_streaming)
+        .unwrap_or_default();
     // Qualify the headline whenever it does not cover both runs whole. "bit-exact" printed
     // over a pair where one run stopped at a third of the way reads as a pass, and it is a
     // pass only on the part they share.

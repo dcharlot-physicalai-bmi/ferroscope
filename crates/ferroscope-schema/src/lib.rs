@@ -837,6 +837,115 @@ where
     })
 }
 
+/// [`trace_from`] over a stream, so comparing two recordings never holds either file.
+///
+/// The trace itself is proportional to the run — comparison needs both trajectories in hand,
+/// which is the one question in this crate that is not a fold — but the raw bytes are not, and
+/// they are the larger half.
+pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, Trace)> {
+    use ferroscope_mcap::{Flow, Record};
+
+    let mut receipt = None;
+    let mut schemas: BTreeMap<u16, String> = BTreeMap::new();
+    let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
+    let mut trace = Trace::default();
+
+    ferroscope_mcap::stream(r, |rec| {
+        match rec {
+            Record::Schema(sc) => {
+                schemas.insert(sc.id, sc.name);
+            }
+            Record::Channel(ch) => {
+                channels.insert(ch.id, (ch.topic, ch.schema_id));
+            }
+            Record::Metadata { name, kv } => {
+                if name == RECEIPT_BLOCK {
+                    receipt = Receipt::from_pairs(&kv);
+                }
+            }
+            Record::Message(m) => {
+                let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
+                    return Ok(Flow::Continue);
+                };
+                let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+                if schema == "ferroscope.Event" {
+                    return Ok(Flow::Continue);
+                }
+                let Ok(text) = std::str::from_utf8(m.data) else {
+                    return Ok(Flow::Continue);
+                };
+                let Some(v) = json::parse(text) else {
+                    return Ok(Flow::Continue);
+                };
+                let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                trace.push(step, topic.clone(), digest_values(schema, &v));
+            }
+            _ => {}
+        }
+        Ok(Flow::Continue)
+    })
+    .ok()?;
+    Some((receipt, trace))
+}
+
+/// [`channel_labels`] over a stream: the layout of each channel, without the file.
+pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<String>> {
+    use ferroscope_mcap::{Flow, Record};
+
+    let mut schemas: BTreeMap<u16, String> = BTreeMap::new();
+    let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
+    let mut names: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    let _ = ferroscope_mcap::stream(r, |rec| {
+        match rec {
+            Record::Schema(sc) => {
+                schemas.insert(sc.id, sc.name);
+            }
+            Record::Channel(ch) => {
+                channels.insert(ch.id, (ch.topic, ch.schema_id));
+            }
+            Record::Message(m) => {
+                // Joint names live in the payload, so the FIRST message on a topic is the
+                // source — and only the first, which is what keeps this a single cheap pass.
+                let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
+                    return Ok(Flow::Continue);
+                };
+                if schemas.get(schema_id).map(|s| s.as_str()) != Some("ferroscope.JointState") {
+                    return Ok(Flow::Continue);
+                }
+                if names.contains_key(topic) {
+                    return Ok(Flow::Continue);
+                }
+                let joint_names = std::str::from_utf8(m.data)
+                    .ok()
+                    .and_then(json::parse)
+                    .and_then(|v| {
+                        v.get("names").and_then(|x| x.as_array()).map(|a| {
+                            a.iter()
+                                .map(|e| e.as_str().unwrap_or("?").to_string())
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .unwrap_or_default();
+                names.insert(topic.clone(), joint_names);
+            }
+            _ => {}
+        }
+        Ok(Flow::Continue)
+    });
+
+    for (topic, schema_id) in channels.values() {
+        let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+        let joint = names.get(topic).cloned().unwrap_or_default();
+        let labels = component_labels(schema, &joint);
+        if !labels.is_empty() {
+            out.insert(topic.clone(), labels);
+        }
+    }
+    out
+}
+
 /// Rebuild the comparable trace from a recording, so two files produced on two machines can
 /// be handed straight to [`ferroscope_receipt::compare`].
 pub fn trace_from(bytes: &[u8]) -> Option<(Option<Receipt>, Trace)> {
