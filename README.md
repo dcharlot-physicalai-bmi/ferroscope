@@ -459,6 +459,44 @@ $ ferroscope verify a.mcap
   VERIFIED: this file still stands behind its own receipt.
 ```
 
+#### So how far apart are three machines, actually?
+
+The platform is left out of the spec digest *because comparing across platforms is the entire
+point* — and this project had never measured what that comparison returns. It does now, in CI, on
+every push: the same spec recorded on **Linux x86-64, macOS arm64 and Windows x86-64**, at a
+ladder of declared precisions, then compared.
+
+|  | `demo` — only `+ − × ÷` and `abs` | `scene` — sweeps joints with `sin`, `cos` |
+|---|---|---|
+| linux vs macos | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
+| linux vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
+| macos vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 5.179e-12 |
+| digests agree at | **exact** | **drop 20 of 52 mantissa bits** (≈2⁻³² relative) |
+
+Two results, and the second only means something because of the first.
+
+**Cross-machine bit-exactness is achievable, and it is not luck.** Every operation in the demo's
+integrator — `+ − × ÷`, `abs` — is exactly specified by IEEE-754, so two conforming machines
+*must* agree, and the fact that they do says the pipeline between the arithmetic and the digest
+adds nothing of its own: no reordering, no contraction, no width surprises. That is worth knowing
+before anyone trusts a receipt.
+
+**What costs you determinism is specific and nameable.** A scene sweeps joints with `sin` and
+`cos`, and a libm is not the same function on three operating systems. The price is **4.441e-16,
+which is 2.00 units in the last place** at magnitude ~1 — two machines disagreeing about the last
+bit of a sine, twice — and it costs **20 mantissa bits** to declare them equal. At 19 bits Linux
+and macOS already agree and Windows does not, which is the two Unix libms converging one bit
+before the third.
+
+The relative figure is much larger than the absolute one (8.9e-12 against 4.4e-16) because it
+lands on a transform component passing near zero, where relative error is meaningless. The
+comparator ranks by |Δ| against each channel's own scale for exactly that reason; the relative
+number is printed, not ranked on.
+
+None of this is a pass/fail gate, and it deliberately does not fail the build. A measured "these
+three do not agree below 20 bits" is the answer, and it is why a receipt **declares** a precision
+instead of claiming a bit-exactness no fabric delivers.
+
 And the rule that keeps it sound:
 
 > **A digest match is proof. A digest mismatch is a question.**
