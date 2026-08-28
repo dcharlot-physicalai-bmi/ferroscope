@@ -120,19 +120,18 @@ the same files dropped on the page in headless Chrome:
 | 2.6 GB | 12.8 M | 65 s | 1.7 GB† | 78.8 s, in blocks |
 
 **`verify` no longer holds the file at all.** Recomputing a receipt is a fold — hash each payload
-in file order, total the ledger, compare at the end — so it streams. Measured on the 552 MB row,
-alternating both binaries three times: **32–47 MB peak RSS against 1.1–1.2 GB, about 35× less,
-for about 1.35× the time** (26–28 s to 32–39 s). The time is the second pass, and the second pass
-is not optional: the receipt is written by `seal`, so it sits at the *end* of the file, and the
-digest cannot start until it knows the precision the receipt declares. The first draft buffered
-messages until the block arrived, which is the whole recording — the exact thing the function
-exists not to do.
+in file order, total the ledger, compare at the end — so it streams: **41–44 MB peak RSS against
+1.1–1.2 GB, about 27× less**, for 5.5–6.1 s of CPU. It costs two passes, and the second is not
+optional: the receipt is written by `seal`, so it sits at the *end* of the file, and the digest
+cannot start until it knows the precision the receipt declares. The first draft buffered messages
+until the block arrived, which is the whole recording — the exact thing the function exists not
+to do.
 
-**`export` streams too**, which matters more, because it is the verb that turns a recording the
-browser refuses into one it opens. Measured on the same 552 MB file, alternating both binaries:
-**45 MB peak RSS against 1924 MB, and *faster* — 186 s against 255 s.** Faster because the
-streaming pass parses each payload once and feeds both the lanes and the digest, where the old
-path parsed for the bundle and again for the receipt.
+**`export` streams too**, and it is the verb that turns a recording too big for a browser into a
+file it opens instantly. **44–46 MB peak RSS against 1924 MB**, folding 2,595,937 messages into a
+1.4 MB bundle with a verified receipt in **5.8–6.1 s of CPU** — about 88 MB/s. It is also *faster*
+than the path it replaced, because the streaming pass parses each payload once and feeds both the
+lanes and the digest, where the old one parsed for the bundle and again for the receipt.
 
 The two paths produce **byte-identical bundles**, and a test asserts it. That is achievable
 because the stride is computed from message counts in the first pass and applied on the way in:
@@ -146,21 +145,29 @@ is a bound worth stating rather than rounding to "constant".
 **Every read verb streams now, and none of them holds the recording.** Measured on a 552 MB
 recording — 527 MB for the `diff` pair — each against the binary from before it was changed:
 
-| verb | streaming | slurping | |
-|---|---|---|---|
-| `inspect` | 2.9 s · **2 MB** | 2.8 s · 1160 MB | 580× less, same speed |
-| `verify` | 32–39 s · **32–47 MB** | 26–28 s · 1081–1200 MB | 35× less, 1.35× slower |
-| `export` | 186 s · **45 MB** | 255 s · 1924 MB | 43× less, and faster |
-| `diff` † | 27–38 s · **39–61 MB** | 28–61 s · 2336–2349 MB | 45× less, same speed |
+| verb | peak RSS, streaming | peak RSS, slurping | | CPU |
+|---|---|---|---|---|
+| `inspect` | **2 MB** | 1160 MB | 580× less | 1.1–1.2 s |
+| `verify` | **41–44 MB** | 1081–1200 MB | 27× less | 5.5–6.1 s |
+| `export` | **44–46 MB** | 1924 MB | 43× less | 5.8–6.1 s |
+| `diff` † | **49–59 MB** | 2336–2349 MB | 45× less | 21.5–22.2 s |
+
+The memory column is the point and it reproduces exactly. **The seconds are a correction.** An
+earlier version of this table gave wall-clock times — 186 s for `export`, 32–39 s for `verify` —
+that could not be reproduced on a quiet machine and are replaced here by CPU seconds measured
+over three passes. 552 MB in 186 s is 3 MB/s, which is not a plausible rate for a JSON parse and
+a SHA-256 fold, and should have been questioned when it was written. Whatever produced it — a
+debug build, a loaded machine, both — the number was wrong by thirty times and sat in this README
+being read. Timings here are now `user + sys`, which contention does not inflate, and taken with
+the load average recorded.
 
 † `diff` was the last one, and for a while it was in this table as the honest outlier: comparing
 two runs needs both *trajectories*, so its floor was the two traces rather than the two files.
 That was wrong about the question. Deciding **where** two runs parted is a fold — each pair of
 samples is seen once, in file order, and nothing ever looks backwards — and holding the traces was
 an artifact of building them before comparing them. Walking both files at once and feeding the
-pairs straight in takes a 527 MB pair from **2.34 GB to 39–61 MB**, byte-identical output, for the
-same time within noise (medians 36.7 s and 32.4 s over five alternating runs). A **1.3 GB pair**
-goes from 4,057 MB to **95 MB**.
+pairs straight in takes a 527 MB pair from **2.34 GB to 49–59 MB**, byte-identical output. A
+**1.3 GB pair** goes from 4,057 MB to **95–117 MB**.
 
 The unit is a **step**, and it took a measurement to find out why. The first version walked the
 two files position by position and refused the moment they disagreed — which is fine until a
@@ -271,11 +278,14 @@ Measured, in Chrome, on two 1.3 GB recordings — 2.6 GB the page never held:
 | | |
 |---|---|
 | compared in | **122 s** |
-| JS heap | **108 MB** |
+| JS heap | **a few hundred MB** (108 and 324 MB on two runs) |
 | answer | diverged at step 400,066, `/robot/joints` `effort[knee]` |
 
-The perturbation was injected at step 400,000. And the comparison a page makes this way is
-**character for character** the comparison it makes from bytes it holds — checked in a real
+The perturbation was injected at step 400,000, and both figures reproduce: 123.1 s on a re-run.
+The heap is a *sample*, not a peak — 108 MB one run and 324 MB another — so what it establishes
+is that the page holds hundreds of megabytes rather than the 2.6 GB it is comparing, which is the
+claim that matters. And the comparison a page makes this way is **character for character** the
+comparison it makes from bytes it holds — checked in a real
 browser by a CI job, because two comparators is how this project has repeatedly ended up with two
 answers to one question.
 
