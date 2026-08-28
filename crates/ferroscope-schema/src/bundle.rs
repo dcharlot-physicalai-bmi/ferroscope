@@ -255,7 +255,9 @@ impl BundleFold {
             .and_then(Receipt::from_pairs);
         self.second = Some(Second {
             lanes: Lanes::with_strides(strides_from(&self.front.counts)),
-            digest: receipt.as_ref().map(|r| TraceDigest::new(r.precision)),
+            digest: receipt
+                .as_ref()
+                .map(|r| TraceDigest::with_resolutions(r.precision, &r.resolutions)),
             ledger: ferroscope_ledger::Ledger::new(),
             hashed: 0,
             seen: 0,

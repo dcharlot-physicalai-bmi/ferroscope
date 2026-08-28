@@ -329,6 +329,10 @@ pub struct Recorder<W: Write> {
     channel_schema: BTreeMap<String, &'static str>,
     seq: BTreeMap<u16, u32>,
     ledger: Ledger,
+    precision: Precision,
+    /// Channels the caller declared an absolute resolution for, applied when the first value
+    /// arrives. Declaring after recording has begun would hash the run two different ways.
+    resolutions: Vec<(String, f64)>,
     digest: TraceDigest,
     trace: Trace,
     keep: bool,
@@ -339,6 +343,43 @@ pub struct Recorder<W: Write> {
 }
 
 impl<W: Write> Recorder<W> {
+    /// Declare a channel's resolution: the absolute size of the cell its values are hashed into.
+    ///
+    /// A physical claim rather than a floating-point one — *"height error, to a nanometre"* —
+    /// and the answer to a measured problem. The default quantization masks low mantissa bits,
+    /// which buckets each value against ITS OWN magnitude, so a channel that passes near zero
+    /// gets vanishing cells and drags the whole recording's declarable precision with it: a
+    /// control error, which lives near zero by construction, forced two otherwise-agreeing runs
+    /// down to `drop_bits` 51 of 52.
+    ///
+    /// Declare it and that channel is hashed on a fixed grid instead, so it stays as
+    /// discriminating at 1e-8 as it is at 1e-1. Undeclared channels are unaffected, and a
+    /// recorder with no declarations produces the identical digest it always has.
+    ///
+    /// **Choose it the way you would choose a tolerance**: coarser than the disagreement you are
+    /// willing to call the same run, finer than the divergence you need to catch. It must be
+    /// declared before the first value is recorded — see [`seal`](Recorder::seal), which refuses
+    /// otherwise, because hashing one run two different ways is not a receipt.
+    pub fn resolution(&mut self, channel: impl Into<String>, quantum: f64) -> Result<(), String> {
+        if !(quantum.is_finite() && quantum > 0.0) {
+            return Err(format!(
+                "resolution for a channel must be finite and positive, got {quantum}"
+            ));
+        }
+        if self.digest.samples() > 0 {
+            return Err(
+                "a resolution must be declared before the first value is recorded: declaring one \
+                 later would hash the same run two different ways"
+                    .into(),
+            );
+        }
+        let channel = channel.into();
+        self.resolutions.retain(|(c, _)| *c != channel);
+        self.resolutions.push((channel, quantum));
+        self.digest = TraceDigest::with_resolutions(self.precision, &self.resolutions);
+        Ok(())
+    }
+
     pub fn new(sink: W, precision: Precision) -> Self {
         Recorder {
             w: Writer::new(
@@ -355,6 +396,8 @@ impl<W: Write> Recorder<W> {
             channel_schema: BTreeMap::new(),
             seq: BTreeMap::new(),
             ledger: Ledger::new(),
+            precision,
+            resolutions: Vec::new(),
             digest: TraceDigest::new(precision),
             trace: Trace::default(),
             keep: true,
@@ -692,7 +735,7 @@ pub fn verify(bytes: &[u8]) -> Option<Verification> {
     let kv = log.metadata_block(RECEIPT_BLOCK)?;
     let receipt = Receipt::from_pairs(kv)?;
 
-    let mut digest = TraceDigest::new(receipt.precision);
+    let mut digest = TraceDigest::with_resolutions(receipt.precision, &receipt.resolutions);
     let mut ledger = Ledger::new();
     let mut count = 0usize;
 
@@ -927,7 +970,10 @@ impl VerifyFold {
         if self.torn || self.second {
             return;
         }
-        self.digest = self.receipt.as_ref().map(|r| TraceDigest::new(r.precision));
+        self.digest = self
+            .receipt
+            .as_ref()
+            .map(|r| TraceDigest::with_resolutions(r.precision, &r.resolutions));
         self.second = true;
         self.feed = ferroscope_mcap::Feed::new();
     }

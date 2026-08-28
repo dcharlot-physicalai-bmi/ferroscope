@@ -25,7 +25,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # and now costs 95 MB. `VerifyFold` is the pushed form of `verify_streaming`.
 # 0.1.18 adds `metadata_streaming`: read one metadata block while parsing no payloads, so
 # "what did producing this file cost?" costs one pass rather than the whole recording.
-version = "0.1.18"
+# 0.1.19 adds `Recorder::resolution`, which declares a channel's absolute resolution before
+# the first value is hashed — and refuses afterwards, because hashing one run two different
+# ways is not a receipt.
+version = "0.1.19"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

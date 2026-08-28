@@ -954,3 +954,153 @@ fn reordered(_original: &[u8]) -> Vec<u8> {
         .build("integration-test");
     rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
 }
+
+/// The same spring run, with a declared resolution on the channel that lives near zero, and
+/// optionally a tiny relative perturbation on every value — the shape of platform noise.
+fn record_declared(perturb_rel: f64, perturb_at: Option<u64>, declare: bool) -> Vec<u8> {
+    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    if declare {
+        // A millimetre of height error, and a millinewton of effort: physical claims, chosen
+        // coarser than platform noise and far finer than any divergence worth catching.
+        rec.resolution("/err", 1e-3).unwrap();
+        rec.resolution("/joints", 1e-3).unwrap();
+    }
+    let mut x = 0.2f64;
+    let mut v = 0.0f64;
+    let jitter = |v: f64, k: u64| v * (1.0 + perturb_rel * (((k % 7) as f64) - 3.0));
+    for step in 0..200u64 {
+        let t = Stamp::at(step * 1_000_000, step * 1_010_000, step);
+        let mut f = -40.0 * x;
+        if Some(step) == perturb_at {
+            f *= 1.001;
+        }
+        v += f * 1e-3;
+        x += v * 1e-3;
+        rec.scalar("/err", t, jitter(x, step), "m").unwrap();
+        rec.joints(
+            "/joints",
+            t,
+            &JointState {
+                names: vec!["slide".into()],
+                position: vec![jitter(x, step + 1)],
+                velocity: vec![jitter(v, step + 2)],
+                effort: vec![jitter(f, step + 3)],
+            },
+        )
+        .unwrap();
+    }
+    let spec = ferroscope_receipt::RunSpec::new("spring", 5)
+        .dt_ns(1_000_000)
+        .steps(200)
+        .integrator("semi-implicit-euler")
+        .solver("none")
+        .build("integration-test");
+    rec.seal_with(spec, "test-platform", Vec::new).unwrap().0
+}
+
+fn digests_match(a: &[u8], b: &[u8]) -> bool {
+    let (va, vb) = (
+        verify(a).expect("a verifies"),
+        verify(b).expect("b verifies"),
+    );
+    assert!(
+        va.ok() && vb.ok(),
+        "both files must stand behind their own receipts"
+    );
+    va.receipt.trace_digest == vb.receipt.trace_digest
+}
+
+#[test]
+fn a_declared_resolution_survives_platform_noise_that_the_mask_does_not() {
+    // The measured problem: the digest masks low mantissa bits, which buckets each value against
+    // ITS OWN magnitude — so a channel passing near zero gets vanishing cells and two runs that
+    // agree to a part in a million hash differently. Measured on real files, one control channel
+    // forced a whole recording to drop_bits 51 of 52.
+    //
+    // A declared resolution is an absolute grid, so the cell stays the same size through zero.
+    let clean = record_declared(0.0, None, false);
+    let noisy = record_declared(1e-12, None, false);
+    assert!(
+        !digests_match(&clean, &noisy),
+        "the fixture is not exercising the problem: masking already tolerates this noise"
+    );
+
+    let clean_d = record_declared(0.0, None, true);
+    let noisy_d = record_declared(1e-12, None, true);
+    assert!(
+        digests_match(&clean_d, &noisy_d),
+        "a declared resolution did not survive noise far below it"
+    );
+}
+
+#[test]
+fn a_declared_resolution_still_catches_a_real_divergence() {
+    // The half that matters more. A tolerance that accepts everything is not a tolerance, and a
+    // receipt that cannot fail is not a receipt.
+    let clean = record_declared(0.0, None, true);
+    let diverged = record_declared(0.0, Some(60), true);
+    assert!(
+        !digests_match(&clean, &diverged),
+        "a declared resolution swallowed a real divergence"
+    );
+}
+
+#[test]
+fn declaring_a_resolution_after_recording_is_refused() {
+    // Hashing one run two different ways is not a receipt, so the terms of the claim are fixed
+    // before any value is hashed rather than quietly re-applied afterwards.
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    rec.scalar("/err", Stamp::at(0, 0, 0), 1.0, "m").unwrap();
+    assert!(
+        rec.resolution("/err", 1e-3).is_err(),
+        "a resolution was accepted after values had been hashed"
+    );
+}
+
+#[test]
+fn a_resolution_must_be_a_positive_number() {
+    let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+    for bad in [0.0, -1e-3, f64::NAN, f64::INFINITY] {
+        assert!(
+            rec.resolution("/err", bad).is_err(),
+            "a resolution of {bad} was accepted"
+        );
+    }
+}
+
+#[test]
+fn a_declared_resolution_rides_in_the_receipt_and_is_recomputable() {
+    // The whole design rests on the digest being recomputable from the file alone, so a
+    // declaration that did not survive the round trip would be a receipt nobody else can check.
+    let bytes = record_declared(0.0, None, true);
+    let v = verify(&bytes).expect("verifies");
+    assert!(v.ok(), "a declared run must stand behind its own receipt");
+    let declared: Vec<&str> = v
+        .receipt
+        .resolutions
+        .iter()
+        .map(|(c, _)| c.as_str())
+        .collect();
+    assert_eq!(
+        declared,
+        vec!["/err", "/joints"],
+        "declarations did not round-trip"
+    );
+    assert!(
+        v.receipt.resolutions.iter().all(|(_, r)| *r == 1e-3),
+        "a resolution changed value across the round trip"
+    );
+}
+
+#[test]
+fn no_declaration_means_the_digest_this_crate_has_always_produced() {
+    // Every recording ever sealed must still verify, so the un-declared path has to hash the
+    // identical byte stream. Pinned here rather than assumed.
+    let plain = record_declared(0.0, None, false);
+    let v = verify(&plain).expect("verifies");
+    assert!(v.ok());
+    assert!(
+        v.receipt.resolutions.is_empty(),
+        "a recording that declared nothing carries declarations"
+    );
+}

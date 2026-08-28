@@ -7,7 +7,11 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # 0.1.5 adds `Comparison` and `Pairwise`: the verdict and the divergence profile as folds over
 # matched pairs. `compare` and `profile` are loops over them, so a streaming comparator and a
 # held one cannot become two answers to one question.
-version = "0.1.5"
+# 0.1.6: a channel may DECLARE an absolute resolution, so a quantity that passes through zero
+# is hashed on a fixed grid rather than against its own vanishing magnitude. Measured: one
+# control channel forced a whole recording to drop_bits 51 of 52. A recording that declares
+# nothing produces the identical digest it always did.
+version = "0.1.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

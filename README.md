@@ -565,8 +565,13 @@ channel's own scale** — and the best precision their receipts can declare is *
 `/control/height_error` is a control error, so it lives near zero by construction — that is what
 being a control error means. Its two runs are 2.048e-8 apart, which is **2.63e-7 of its own
 scale**, but it *visits* 6.677e-8, and the mask is applied to each value's own magnitude. So one
-channel doing its job drags the entire recording's declarable precision to 51 bits, and the fast
-path — "a digest match is proof" — can essentially never fire for a run with a control loop in it.
+channel doing its job drags the entire recording's declarable precision to 51 bits.
+
+That pair is *supposed* to differ — it carries an injected divergence — so "agrees only at 51"
+is the digest going blind rather than the digest being wrong. The cost lands on the question that
+matters instead: **two runs of one spec on two machines, which should match, do not.** Perturb
+every value by 1e-12 — the shape of libm noise — and the digest reports a mismatch it has no
+business reporting, because one channel's cells vanished as it crossed zero.
 
 What binds is neither the channel's scale nor the size of the disagreement. It is the **sum** of
 the pointwise relative differences, because every sample must land in the *same* bucket rather
@@ -578,14 +583,41 @@ carries an absolute *and* a relative tolerance and ranks by |Δ| against each ch
 The digest carries only the relative half, and applies it pointwise. The comparator learned this
 lesson — twice, under correction — and the digest has not.
 
-It is deliberately not fixed here, because the fix is not a one-line change and the reason is
-worth stating: **the digest is computed while the recording is being written, so it cannot
-normalise by a scale it has not yet seen.** A correct fix means the scale is *declared* — "this
-channel is metres, resolution 1 µm" — which is a physical statement rather than a floating-point
-one, and a change to what a receipt contains. That is a decision about the format, not a bug fix.
+#### The fix, and what it does not fix
 
-Until then the escalation rule below is doing more work than it looks like it is: on any run with
-a channel through zero, the digest will miss and the comparator will answer.
+The digest is computed while the recording is being *written*, so it cannot normalise by a scale
+it has not yet seen. So the scale is **declared**:
+
+```rust
+let mut rec = Recorder::new(sink, Precision::Quantized { drop_bits: 12 });
+rec.resolution("/control/height_error", 1e-6)?;   // a micrometre of height error
+```
+
+That channel is then hashed onto an **absolute grid** whose cells stay the same size as the
+quantity passes through zero, instead of against its own vanishing magnitude. It is a physical
+claim rather than a floating-point one, it rides in the receipt so the digest stays recomputable
+from the file alone, and it must be declared before the first value is hashed — declaring one
+later would hash the same run two different ways, and `resolution` refuses.
+
+Channels without a declaration keep the mask exactly, and **a recording that declares nothing
+produces the digest this crate has always produced**. Every file sealed before this existed still
+verifies unchanged; that is pinned by a test rather than hoped for.
+
+What it buys, measured: two runs perturbed by 1e-12 relative — the shape of platform noise — hash
+**differently** under the mask and **identically** under a declared resolution, while a real
+divergence is still caught. Both halves are gated, because a tolerance that accepts everything is
+not a tolerance.
+
+**What it does not fix, and this is the part to plan around.** Agreement is still per-sample:
+every value must land in the *same* cell, not merely a nearby one. So a declared resolution must
+clear not the typical difference but the **sum** of them — `grid ≫ Σ|Δ|` — which for a long run
+means a factor of *N* on top of the physics. Declaring a micrometre on a 3,000-step run whose two
+copies differ by 2e-8 each is not enough: the sum is 3e-5, and the cells are crossed dozens of
+times. **Choose a resolution for the run's length as well as for its units.** That factor is
+inherent to any bucketing digest and applies to the mask exactly as much; the declaration removes
+the near-zero pathology, not the arithmetic of boundaries.
+
+Which is why the escalation rule below is doing more work than it looks like it is.
 
 None of which is a reason to distrust a receipt. It is the reason for the rule below.
 

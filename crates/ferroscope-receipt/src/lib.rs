@@ -173,6 +173,7 @@ impl RunSpec {
     /// Seal a completed run.
     pub fn receipt(self, trace: TraceDigest, platform: impl Into<String>) -> Receipt {
         let spec_digest = self.digest();
+        let resolutions = trace.resolutions.clone();
         Receipt {
             spec_digest,
             trace_digest: trace.finish(),
@@ -181,6 +182,7 @@ impl RunSpec {
             values: trace.values,
             non_finite: trace.non_finite,
             platform: platform.into(),
+            resolutions,
             spec: self,
         }
     }
@@ -243,6 +245,9 @@ impl fmt::Display for Precision {
 pub struct TraceDigest {
     h: Sha256,
     pub precision: Precision,
+    /// Channels quantized against a declared absolute grid rather than against their own
+    /// magnitude. Sorted, so the hash does not depend on declaration order.
+    resolutions: Vec<(String, f64)>,
     samples: u64,
     values: u64,
     non_finite: u64,
@@ -250,6 +255,29 @@ pub struct TraceDigest {
 
 impl TraceDigest {
     pub fn new(precision: Precision) -> Self {
+        Self::with_resolutions(precision, &[])
+    }
+
+    /// A digest that quantizes named channels against a DECLARED absolute resolution instead of
+    /// against each value's own magnitude.
+    ///
+    /// The default quantization masks low mantissa bits, which is *pointwise relative*: a value
+    /// is bucketed against itself. That is right for a quantity that stays away from zero and
+    /// wrong for one that crosses it, and measurably so — a control error, which lives near zero
+    /// by construction, forced a whole recording to `drop_bits` 51 of 52 while its two runs
+    /// agreed to 2.6e-7 of the channel's own scale. One channel doing its job cost the receipt
+    /// everything it had to say.
+    ///
+    /// A resolution is a physical claim rather than a floating-point one — *"height error, to a
+    /// nanometre"* — which is why it has to be declared rather than inferred: the digest is
+    /// computed while the recording is being written and cannot normalise by a scale it has not
+    /// seen yet. Declared, it rides in the receipt, so the digest stays recomputable from the
+    /// file alone.
+    ///
+    /// Channels without a declared resolution keep the mask exactly, and a digest with no
+    /// resolutions at all is byte-for-byte the digest this crate has always produced — every
+    /// recording ever sealed still verifies unchanged.
+    pub fn with_resolutions(precision: Precision, resolutions: &[(String, f64)]) -> Self {
         let mut h = Sha256::new();
         feed_str(&mut h, "ferroscope.Trace.v1");
         feed_str(
@@ -266,9 +294,28 @@ impl TraceDigest {
                 Precision::Quantized { drop_bits } => drop_bits as u64,
             },
         );
+        // Only when there ARE resolutions, so a digest without them hashes the identical byte
+        // stream it did before this existed. A declaration is part of the claim, so it is fed
+        // in: a file may not quietly restate its resolution and keep the same digest.
+        let mut sorted: Vec<(String, f64)> = resolutions
+            .iter()
+            .filter(|(_, r)| r.is_finite() && *r > 0.0)
+            .cloned()
+            .collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted.dedup_by(|a, b| a.0 == b.0);
+        if !sorted.is_empty() {
+            feed_str(&mut h, "resolutions");
+            feed_u64(&mut h, sorted.len() as u64);
+            for (channel, r) in &sorted {
+                feed_str(&mut h, channel);
+                feed_u64(&mut h, r.to_bits());
+            }
+        }
         TraceDigest {
             h,
             precision,
+            resolutions: sorted,
             samples: 0,
             values: 0,
             non_finite: 0,
@@ -278,7 +325,20 @@ impl TraceDigest {
     /// Hash one channel's values at one step. Steps must be fed in the same order in both
     /// runs; the step index and channel name are hashed too, so a reordering is a mismatch
     /// rather than a silent pass.
+    /// How many `(step, channel)` samples have been hashed so far — so a caller can refuse to
+    /// change the terms of the claim once values have started arriving.
+    pub fn samples(&self) -> u64 {
+        self.samples
+    }
+
     pub fn step(&mut self, step: u64, channel: &str, values: &[f64]) {
+        // A declared resolution replaces the mask for this channel: the value is placed on an
+        // ABSOLUTE grid, whose cells stay the same size as the quantity passes through zero.
+        let grid = self
+            .resolutions
+            .binary_search_by(|(c, _)| c.as_str().cmp(channel))
+            .ok()
+            .map(|i| self.resolutions[i].1);
         let mut body = Vec::with_capacity(16 + channel.len() + values.len() * 8);
         body.extend_from_slice(&step.to_le_bytes());
         body.extend_from_slice(&(channel.len() as u64).to_le_bytes());
@@ -293,6 +353,16 @@ impl TraceDigest {
                 0x7FF8_0000_0000_0000
             } else if v == 0.0 {
                 0 // -0.0 and +0.0 are the same physical state
+            } else if let Some(r) = grid {
+                // Rounded, not masked: the cell a value lands in is decided by the declared
+                // quantum rather than by how large the value happens to be. `+0.0` keeps a
+                // rounded -0.0 from hashing differently from a rounded +0.0.
+                let q = (v / r).round() + 0.0;
+                if q.is_finite() {
+                    q.to_bits()
+                } else {
+                    v.to_bits()
+                }
             } else {
                 self.precision.quantize(v)
             };
@@ -336,6 +406,14 @@ pub struct Receipt {
     pub non_finite: u64,
     /// Provenance only — deliberately outside [`RunSpec::digest`].
     pub platform: String,
+    /// Channels the run declared an absolute resolution for, sorted by channel.
+    ///
+    /// A physical claim — *"height error, to a nanometre"* — rather than a floating-point one,
+    /// and it rides in the receipt so the digest stays recomputable from the file alone. Empty
+    /// on every recording sealed before this existed, and empty means the digest behaves exactly
+    /// as it always did. Outside [`RunSpec::digest`] for the same reason `precision` is: two
+    /// runs of one experiment that declare different resolutions are still the same experiment.
+    pub resolutions: Vec<(String, f64)>,
 }
 
 impl Receipt {
@@ -364,6 +442,11 @@ impl Receipt {
         for (k, v) in &self.spec.config {
             kv.push((format!("config.{k}"), v.clone()));
         }
+        // `{:?}` on f64 is Rust's shortest round-trippable form, so a resolution read back is
+        // the resolution declared — which it must be, or the digest is not recomputable.
+        for (channel, r) in &self.resolutions {
+            kv.push((format!("resolution.{channel}"), format!("{r:?}")));
+        }
         kv
     }
 
@@ -383,6 +466,15 @@ impl Receipt {
                 spec.config.push((name.to_string(), v.clone()));
             }
         }
+        let mut resolutions: Vec<(String, f64)> = kv
+            .iter()
+            .filter_map(|(k, v)| {
+                let name = k.strip_prefix("resolution.")?;
+                let r: f64 = v.parse().ok()?;
+                (r.is_finite() && r > 0.0).then(|| (name.to_string(), r))
+            })
+            .collect();
+        resolutions.sort_by(|a, b| a.0.cmp(&b.0));
         Some(Receipt {
             spec_digest: get("spec_digest")?,
             trace_digest: get("trace_digest")?,
@@ -402,6 +494,7 @@ impl Receipt {
             samples: get("samples").and_then(|v| v.parse().ok()).unwrap_or(0),
             values: get("values").and_then(|v| v.parse().ok()).unwrap_or(0),
             non_finite: get("non_finite").and_then(|v| v.parse().ok()).unwrap_or(0),
+            resolutions,
             platform: get("platform").unwrap_or_default(),
             spec,
         })
