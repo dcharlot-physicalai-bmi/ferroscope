@@ -283,6 +283,6 @@ Six gaps, each with what it would take and whether this repository addresses it.
 
 ---
 
-*Compiled 2026-08-17 for the [Institute for Physical AI @ BMI](https://physicalai-bmi.org). Every
+*Compiled 2026-08-17 for the [Institute for Physical AI @ JBI](https://physicalai-bmi.org). Every
 number and quotation above is from a source named in the row it appears in. Corrections welcome as
 issues.*

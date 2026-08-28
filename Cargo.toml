@@ -26,7 +26,7 @@ rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dcharlot-physicalai-bmi/ferroscope"
 homepage = "https://ferroscope.physicalai-bmi.org"
-authors = ["Institute for Physical AI @ BMI"]
+authors = ["Institute for Physical AI @ JBI"]
 keywords = ["robotics", "mcap", "observability", "simulation", "energy"]
 categories = ["science::robotics", "visualization", "wasm"]
 

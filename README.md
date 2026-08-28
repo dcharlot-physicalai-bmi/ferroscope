@@ -1512,6 +1512,6 @@ Nothing here is feature-gated, and nothing here will be.
 
 MIT **OR** Apache-2.0, at your option. Free to use, study, fork, and build on, which is the point.
 
-Part of the open ecosystem from the [Institute for Physical AI @ BMI](https://physicalai-bmi.org)
+Part of the open ecosystem from the [Institute for Physical AI @ JBI](https://physicalai-bmi.org)
 alongside [Ferric](https://ferric.physicalai-bmi.org) (compute),
 [Ferralloy](https://ferralloy.physicalai-bmi.org) (fleet), and Ferromotion (kinematics and dynamics).
