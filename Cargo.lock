@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-wasm"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-phrase",

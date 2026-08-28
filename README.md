@@ -200,8 +200,8 @@ interesting.
 The browser column's last row used to read **refused**, and the section after this one is how it
 stopped saying that. The `peak RSS` column is the *slice* reader — the one the page still uses
 below its threshold, and the one every native verb used before it streamed. Native throughput is
-about **80 MB/s** and memory about **2.1× the file**, both linear — up to roughly a gigabyte. The parser holds the decoded log and nothing streams, so past that the
-machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
+about **80 MB/s** and memory about **2.1× the file**, both linear — up to roughly a gigabyte.
+The parser holds the decoded log and nothing streams, so past that the machine starts fighting: † at 2.6 GB on 48 GB of RAM the throughput halves to 40 MB/s and peak
 RSS comes in *below* the 1.2 GB file's, because the memory is being compressed rather than held.
 Those two numbers are the measurement bending, not the program improving, and they are printed
 here as measured because the first draft of this table carried an extrapolation — 32 s and
@@ -1490,14 +1490,19 @@ cargo build --target wasm32-unknown-unknown       # the four libraries, unchange
 **Real, tested, and shipping in 0.1:** the MCAP reader and writer with the reference-oracle suite,
 the three-clock recording model, the well-known schemas, the energy ledger with its coverage
 refusal, the determinism receipt and comparator, `verify` recomputing a receipt from bytes alone,
-the CLI's nine verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
+the CLI's eleven verbs, the in-browser WebGPU viewer with glTF meshes and a measure tool, the
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
-bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power` reading real counters. **204 tests, clean clippy, three platforms in CI plus
-wasm32**, and jobs that gate the zero-dependency claim, the viewer bundle's export surface, the
-scene format and the MCP protocol surface.
+bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power`
+reading real counters. **259 tests, clean clippy, three platforms in CI plus wasm32**, and jobs
+that gate the zero-dependency claim, the viewer bundle's export surface, the scene format, the
+MCP protocol surface, that no read verb holds its recording, and that a real headless Chrome can
+open, compare and pull a mesh from a file it never held. Fourteen crates on crates.io.
 
-**The original "next" list is now empty.**
+**The original "next" list is now empty**, and so is the one that replaced it: nothing holds a
+recording any more, on any surface, and nothing is missing from one read in blocks. What is left
+is not about size — it is that a receipt's declared resolution is a number you must still choose
+yourself, and the tool can tell you what it has to clear but not what it should be.
 
 Nothing here is feature-gated, and nothing here will be.
 

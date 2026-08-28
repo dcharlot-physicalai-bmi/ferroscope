@@ -79,10 +79,15 @@ pub fn open(bytes: &[u8]) -> Result<String, JsValue> {
 /// const bundle = JSON.parse(s.finish());
 /// ```
 ///
-/// What a streamed recording cannot do is what a bundle cannot do: comparison and attachment
-/// extraction both need the bytes themselves, and a page that streamed the file no longer has
-/// them. It costs a second read of the file, which for a recording this size is the cheaper
-/// half of the bargain.
+/// It costs a second read of the file, which for a recording this size is the cheaper half of
+/// the bargain.
+///
+/// A page that streamed a recording no longer holds its bytes, and for a while that meant it
+/// could neither compare nor draw a mesh. Both now go back to the file for what they need:
+/// [`DiffStream`] walks two recordings together, and [`AttachmentStream`] pulls one attachment
+/// and stops at it. Nothing is missing from a recording read in blocks; what a BUNDLE still has
+/// over one is speed — a tenth of a second against a minute and a half — and being small enough
+/// to send to somebody.
 #[wasm_bindgen]
 pub struct BundleStream {
     fold: ferroscope_schema::BundleFold,

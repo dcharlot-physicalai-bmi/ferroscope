@@ -13,7 +13,10 @@ description = "Ferroscope in the browser: open a recording, verify its receipt, 
 # 0.1.12 adds `AttachmentStream`: pull one mesh out of a recording the browser cannot hold.
 # A glTF has to be whole to be a mesh, so a block read kept the declaration and not the bytes;
 # this goes back to the file and stops at the attachment — 2.0% of the file for a 76 KB mesh.
-version = "0.1.12"
+# 0.1.13 corrects a doc claim that went stale within the day: BundleStream said a streamed
+# recording could be neither compared nor drawn with its meshes. DiffStream and
+# AttachmentStream had already made both untrue.
+version = "0.1.13"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
