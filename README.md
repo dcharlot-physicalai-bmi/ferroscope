@@ -649,12 +649,32 @@ So `diff` reports the quantity you need — and deliberately does not suggest a 
                is reliable, and a resolution is a claim about the physics.
 ```
 
-The refusal to suggest is itself a measurement. The first version of this line *did* suggest one
-— `10 × Σ|Δ|`, rounded up to a decade — and it was wrong on the second pair it was tried against,
-proposing `1e0` where `1e1` was needed. Over six pairs the smallest resolution that actually
-worked ran from **1.0× to 109×** the summed difference: a 10× rule fails twice, a 100× rule once.
-A suggestion that is wrong a quarter of the time is worse than no suggestion, so the tool hands
-over the exact number and the honest spread.
+And with `--declare`, it stops guessing entirely and **measures**:
+
+```
+  declare      these two hash alike at these resolutions, measured — agreement is per
+               sample, so a cell must clear the SUMMED difference, not the worst one:
+    --resolution /energy/actuation/leg=5e-2 (Σ|Δ| 1.816e-2)
+    --resolution /robot/contacts=1e-1     (Σ|Δ| 3.769e-2)
+    --resolution /control/height_error=5e-5 (Σ|Δ| 7.938e-6)
+               One number for all of them: --resolution 2e-1.
+```
+
+Verified: `2e-1` makes those two hash alike and `1e-1` does not, so the answer is right *and*
+tight. The comparator sieves the whole ladder of resolutions — 1, 2 and 5 times each power of
+ten — as it walks, knocking out every rung two values would not share a cell at. One comparison
+per live rung per differing value, and a test asserts both halves: that the reported resolution
+works, and that the rung below it fails.
+
+It has to be measured rather than derived, because no rule survived the data. The first version
+of this line *did* offer one — `10 × Σ|Δ|` — and it was wrong on the second pair it met, proposing
+`1e0` where `1e1` was needed. Over six pairs the smallest resolution that actually worked ran from
+**1.0× to 109×** the summed difference: a 10× rule fails twice, a 100× rule once.
+
+`--declare` is off by default for the report's sake, not the clock: it costs about **1% of CPU**
+(67.1 s against 66.4 s on a 527 MB pair). An earlier draft of this paragraph claimed 5×, measured
+in wall-clock time on a machine at load average 188 — where the plain run came out *slower* than
+the sieved one, which is how plainly the number was an artifact.
 
 Which is why the escalation rule below is doing more work than it looks like it is.
 

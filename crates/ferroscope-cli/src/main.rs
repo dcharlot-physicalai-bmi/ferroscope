@@ -105,7 +105,8 @@ USAGE
   ferroscope verify  <run.mcap>            recompute the receipt from the file itself
   ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
   ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
-                     [--abs <f>] [--rel <f>]
+                     [--abs <f>] [--rel <f>] [--declare]
+                     --declare measures what --resolution would call these one run
   ferroscope export  <run.mcap> <out.json> viewer bundle: open it in the viewer to see a
                                            run too big for a browser to read whole
   ferroscope live    <run.mcap>            REPLAY it as a live stream, on its own clock
@@ -378,6 +379,7 @@ fn cmd_energy(path: &str) -> Result<bool, String> {
 
 fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
     let mut tol = Tolerance::default();
+    let mut declare = false;
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
@@ -394,6 +396,13 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
                     .and_then(|s| s.parse().ok())
                     .ok_or("--rel needs a number")?;
                 i += 2;
+            }
+            // Off by default for the report's sake, not the clock: measured on a 527 MB pair
+            // the sieve costs about 1% of CPU (67.1 s against 66.4 s). Six extra lines on every
+            // comparison is the cost worth avoiding.
+            "--declare" => {
+                declare = true;
+                i += 1;
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -505,7 +514,7 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
     // The lockstep walk refuses any pair whose samples do not line up, rather than guessing at
     // which sample belongs with which. When it does, fall back to building both trajectories:
     // slower and heavier, but it can pair anything.
-    let p = match ferroscope_schema::profile_streaming(open_a, open_b, tol) {
+    let p = match ferroscope_schema::profile_streaming_declaring(open_a, open_b, tol, declare) {
         Some(p) => p,
         None => {
             let read_trace = |path: &str, f: std::io::Result<std::fs::File>| {
@@ -515,7 +524,7 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
             };
             let (_, ta) = read_trace(a_path, open_a())?;
             let (_, tb) = read_trace(b_path, open_b())?;
-            ferroscope_receipt::profile(&ta, &tb, tol)
+            ferroscope_receipt::profile_declaring(&ta, &tb, tol, declare)
         }
     };
     let labels = open_a()
@@ -610,38 +619,64 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         // What it would take to call these two the same run, said in the channels' own units
         // rather than in mantissa bits — because that is the sentence anyone can check.
         //
-        // The number reported is Σ|Δ|, not the worst single difference: agreement is PER SAMPLE,
-        // so every value must land in the same cell rather than merely a nearby one, and the
-        // boundary crossings accumulate.
-        //
-        // No multiplier is offered, and that is a measurement rather than caution. Over six
-        // pairs the smallest resolution that actually worked ran from 1.0x to 109x the summed
-        // difference: a 10x rule was wrong twice, a 100x rule once. A suggestion that fails a
-        // quarter of the time is worse than none, so this reports the quantity and says to check.
-        if let Some(worst) = p
+        // MEASURED, not estimated. The first version of this line offered a rule of thumb —
+        // 10x the summed difference — and it was wrong on the second pair it met. Over six
+        // pairs the smallest resolution that actually worked ran from 1.0x to 109x that sum, so
+        // no multiplier is reliable. The comparator sieves the whole ladder as it walks, which
+        // is one comparison per live rung per differing value and about 1% of the run.
+        let declarable: Vec<&ferroscope_receipt::ChannelDivergence> = p
             .channels
             .iter()
-            .max_by(|a, b| a.sum_abs.total_cmp(&b.sum_abs))
-            .filter(|c| c.sum_abs > 0.0)
-        {
+            .filter(|c| c.declarable.is_some())
+            .collect();
+        if !declarable.is_empty() {
             println!(
-                "  declare      to call these one run, a --resolution must clear the SUMMED \
-                 difference,"
+                "  declare      these two hash alike at these resolutions, measured — agreement is \
+                 per"
             );
             println!(
-                "               not the worst one: {:.3e} on {} — agreement is per sample, so \
-                 the",
-                worst.sum_abs, worst.channel
+                "               sample, so a cell must clear the SUMMED difference, not the worst \
+                 one:"
             );
+            for d in declarable.iter().take(6) {
+                println!(
+                    "    --resolution {:<24} (Σ|Δ| {:.3e})",
+                    format!("{}={:.0e}", d.channel, d.declarable.expect("filtered")),
+                    d.sum_abs
+                );
+            }
+            if declarable.len() > 6 {
+                println!("    … and {} more", declarable.len() - 6);
+            }
+            if let Some(worst) = declarable
+                .iter()
+                .filter_map(|c| c.declarable)
+                .fold(None::<f64>, |m, q| Some(m.map_or(q, |m: f64| m.max(q))))
+            {
+                println!(
+                    "               One number for all of them: --resolution {:.0e}. It is a claim \
+                     about the",
+                    worst
+                );
+                println!("               physics, so it is worth reading before it is declared.");
+            }
+        }
+        // Only when the sieve ran: with it off every channel reports `None`, which means "not
+        // measured" and not "no resolution works". Printing the second as the first told a
+        // reader the runs were irreconcilable when nothing had looked.
+        if declare && p.channels.iter().any(|c| c.declarable.is_none()) {
             println!(
-                "               boundary crossings add up. Measured over six pairs, the smallest \
-                 that"
+                "  declare      {} channel(s) do not agree at any resolution on the ladder \
+                 (1e-15 to 5e6):",
+                p.channels.iter().filter(|c| c.declarable.is_none()).count()
             );
-            println!(
-                "               worked ran 1x to 109x that, so pick one above it and CHECK. No \
-                 multiplier"
-            );
-            println!("               is reliable, and a resolution is a claim about the physics.");
+            for d in p.channels.iter().filter(|c| c.declarable.is_none()).take(3) {
+                println!(
+                    "    {:<22} Σ|Δ| {:.3e} — no cell this side of the channel's own scale holds \
+                     both runs",
+                    d.channel, d.sum_abs
+                );
+            }
         }
     }
 

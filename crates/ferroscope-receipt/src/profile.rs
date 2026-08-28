@@ -113,6 +113,9 @@ pub struct ChannelDivergence {
     /// Σ|Δ| over the channel — what a declared resolution must clear, because agreement is
     /// per-sample and boundary crossings accumulate.
     pub sum_abs: f64,
+    /// The smallest resolution this channel's two runs would actually hash alike at, measured
+    /// rather than estimated. `None` if none on the ladder works.
+    pub declarable: Option<f64>,
     /// The component index carrying `worst_rel`, for naming it in the payload's own terms.
     pub worst_index: usize,
     pub a_at_worst: f64,
@@ -193,6 +196,14 @@ struct Acc {
     /// (step, |Δ|) — turned into a scaled series once the channel's scale is known.
     series: Vec<(u64, f64)>,
     scale: f64,
+    /// One bit per rung of [`resolution_ladder`](crate::resolution_ladder): still set means
+    /// every pair on this channel has landed in the same cell at that resolution so far.
+    ///
+    /// This is the exact answer to "what would you have to declare to call these one run?",
+    /// carried in a fold rather than derived from a rule — because no rule survived contact
+    /// with the data: over six pairs the smallest working resolution ran from 1.0x to 109x the
+    /// summed difference. A sieve costs one comparison per rung per value and is simply right.
+    surviving: u128,
     /// Σ|Δ| over every value on this channel.
     ///
     /// The quantity a DECLARED resolution has to clear, and not an obvious one: agreement is
@@ -215,6 +226,7 @@ impl Default for Acc {
             first_crossing: None,
             series: Vec::new(),
             scale: 0.0,
+            surviving: u128::MAX,
             sum_abs: 0.0,
         }
     }
@@ -236,6 +248,14 @@ impl Default for Acc {
 /// two recordings, which is a bound worth stating rather than rounding to "constant".
 pub struct Pairwise {
     tol: Tolerance,
+    /// The resolution ladder, built once — and EMPTY unless the caller asked for the sieve.
+    ///
+    /// Opt-in for the sake of the REPORT, not the clock. Measured on a 527 MB pair in CPU
+    /// seconds: 67.1 with the sieve against 66.4 without, so about 1%. An earlier note here
+    /// claimed 5x, which was wall-clock time taken on a machine at load average 188 — under
+    /// contention the plain run came out SLOWER than the sieved one, which is how obvious the
+    /// artifact was in hindsight. Six extra lines on every comparison is the real cost.
+    ladder: Vec<f64>,
     cmp: Comparison,
     acc: BTreeMap<String, Acc>,
     shared: usize,
@@ -247,8 +267,18 @@ pub struct Pairwise {
 
 impl Pairwise {
     pub fn new(tol: Tolerance) -> Self {
+        Self::declaring(tol, false)
+    }
+
+    /// [`Pairwise::new`], optionally measuring what resolution each channel could declare.
+    pub fn declaring(tol: Tolerance, sieve: bool) -> Self {
         Self {
             tol,
+            ladder: if sieve {
+                crate::resolution_ladder().collect()
+            } else {
+                Vec::new()
+            },
             cmp: Comparison::new(tol),
             acc: BTreeMap::new(),
             shared: 0,
@@ -287,6 +317,23 @@ impl Pairwise {
             }
             let abs = (x - y).abs();
             e.sum_abs += abs;
+            if abs != 0.0 && e.surviving != 0 && !self.ladder.is_empty() {
+                // Knock out every resolution these two values would not agree at. Only when
+                // they differ — identical values agree everywhere — and only from the lowest
+                // rung still alive, since a rung that has died stays dead and the ladder is
+                // sorted. Both matter: the first draft rebuilt the ladder and walked all of it
+                // for every value, and cost 5x the rest of the comparison.
+                let mut bit = e.surviving.trailing_zeros() as usize;
+                while bit < self.ladder.len() {
+                    let mask = 1u128 << bit;
+                    if e.surviving & mask != 0
+                        && crate::cell(x, self.ladder[bit]) != crate::cell(y, self.ladder[bit])
+                    {
+                        e.surviving &= !mask;
+                    }
+                    bit += 1;
+                }
+            }
             if abs == 0.0 {
                 continue;
             }
@@ -338,6 +385,7 @@ impl Pairwise {
     /// discovered about the two runs' shape; `a_total` and `b_total` are how many samples each
     /// run recorded, which is what turns a shared count into a coverage statement.
     pub fn finish(self, mut structural: Structural, a_total: usize, b_total: usize) -> Profile {
+        let ladder = self.ladder.clone();
         structural.shared_samples = self.shared;
         // Both sides. `excluded` counted only samples A had and B lacked; a sample B recorded
         // and A did not is equally outside the verdict, and a coverage line that ignores it
@@ -380,6 +428,8 @@ impl Pairwise {
                     worst_scaled_step,
                     scale: e.scale,
                     sum_abs: e.sum_abs,
+                    declarable: (!ladder.is_empty() && e.surviving != 0)
+                        .then(|| ladder[e.surviving.trailing_zeros() as usize]),
                     worst_index: e.worst_index,
                     a_at_worst: e.a_at_worst,
                     b_at_worst: e.b_at_worst,
@@ -422,6 +472,16 @@ impl Pairwise {
 }
 
 pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
+    profile_declaring(a, b, tol, false)
+}
+
+/// [`profile`], optionally measuring what resolution each channel could declare.
+///
+/// Off by default to keep the report focused rather than to save time: measured on a 527 MB
+/// pair, the sieve costs about 1% of CPU (67.1 s against 66.4 s). It answers exactly where no
+/// rule of thumb did — over six pairs the smallest working resolution ran from 1.0x to 109x the
+/// summed difference, so a multiplier was wrong a quarter of the time.
+pub fn profile_declaring(a: &Trace, b: &Trace, tol: Tolerance, declare: bool) -> Profile {
     let ka = key_by(a);
     let kb = key_by(b);
 
@@ -472,7 +532,7 @@ pub fn profile(a: &Trace, b: &Trace, tol: Tolerance) -> Profile {
         .collect();
 
     // Walk the intersection, accumulating per-channel history.
-    let mut pair = Pairwise::new(tol);
+    let mut pair = Pairwise::declaring(tol, declare);
     // Walk A in FILE ORDER, not in key order. The shared traces are handed to compare(), whose
     // answer is "the first crossing encountered", so rebuilding them channel-major silently
     // changed the headline: it named a crossing at step 434 while the earliest crossing in the
@@ -961,5 +1021,82 @@ mod tests {
         let a = crate::RunSpec::new("hop", 7).config("k", "1");
         assert!(spec_differences(&a, &a.clone()).is_empty());
         assert_eq!(declared_fields(&a), 3); // scenario, seed, one config key
+    }
+}
+
+#[cfg(test)]
+mod declarable_tests {
+    use super::*;
+    use crate::{Precision, Trace, TraceDigest};
+
+    /// Two trajectories that differ a little, and a channel that walks through zero.
+    fn pair() -> (Trace, Trace) {
+        let (mut a, mut b) = (Trace::default(), Trace::default());
+        for step in 0..500u64 {
+            let x = (step as f64) * 1e-3 - 0.25; // crosses zero
+            let f = 40.0 * x;
+            a.push(step, "/err", vec![x]);
+            b.push(step, "/err", vec![x + 3e-7]);
+            a.push(step, "/force", vec![f]);
+            b.push(step, "/force", vec![f * (1.0 + 1e-6)]);
+        }
+        (a, b)
+    }
+
+    fn hashes_alike(t: &Trace, u: &Trace, channel: &str, quantum: f64) -> bool {
+        let mk = |t: &Trace| {
+            let mut d =
+                TraceDigest::with_resolutions(Precision::Exact, &[(channel.to_string(), quantum)]);
+            for s in t.samples.iter().filter(|s| s.channel == channel) {
+                d.step(s.step, &s.channel, &s.values);
+            }
+            d.finish()
+        };
+        mk(t) == mk(u)
+    }
+
+    #[test]
+    fn the_resolution_it_reports_is_the_resolution_that_works() {
+        // The tool tells a user what to declare. If that number does not actually make the two
+        // runs hash alike it is worse than saying nothing, and nothing else would catch it —
+        // the report would look entirely reasonable.
+        let (a, b) = pair();
+        // Explicitly declaring: `profile` leaves the sieve off, so a test that used it would
+        // assert on "not measured" and read as a passing measurement of nothing.
+        let p = profile_declaring(&a, &b, Tolerance::default(), true);
+        assert!(!p.channels.is_empty(), "the fixture does not diverge");
+        let mut checked = 0;
+        for c in &p.channels {
+            let q = c.declarable.unwrap_or_else(|| {
+                panic!("{} reported no declarable resolution at all", c.channel)
+            });
+            assert!(
+                hashes_alike(&a, &b, &c.channel, q),
+                "{} was reported declarable at {q:.0e} and is not",
+                c.channel
+            );
+            checked += 1;
+        }
+        assert!(checked >= 2, "only {checked} channel(s) checked");
+    }
+
+    #[test]
+    fn the_resolution_it_reports_is_the_smallest_one_that_works() {
+        // Advice that works but is ten times coarser than it needs to be throws away precision
+        // the runs actually had. The rung below the reported one must fail.
+        let (a, b) = pair();
+        let p = profile_declaring(&a, &b, Tolerance::default(), true);
+        for c in &p.channels {
+            let q = c.declarable.expect("declarable");
+            let below = crate::resolution_ladder()
+                .take_while(|r| *r < q)
+                .last()
+                .expect("a rung below");
+            assert!(
+                !hashes_alike(&a, &b, &c.channel, below),
+                "{} was reported at {q:.0e} but {below:.0e} also works — the answer is not tight",
+                c.channel
+            );
+        }
     }
 }

@@ -1489,10 +1489,15 @@ pub struct PairStream {
 
 impl PairStream {
     pub fn new(tol: ferroscope_receipt::Tolerance) -> Self {
+        Self::declaring(tol, false)
+    }
+
+    /// [`PairStream::new`], optionally measuring what resolution each channel could declare.
+    pub fn declaring(tol: ferroscope_receipt::Tolerance, declare: bool) -> Self {
         Self {
             fa: SampleFeed::new(),
             fb: SampleFeed::new(),
-            pair: ferroscope_receipt::Pairwise::new(tol),
+            pair: ferroscope_receipt::Pairwise::declaring(tol, declare),
             refused: false,
             gaps: BTreeMap::new(),
             last_step: 0,
@@ -1789,9 +1794,25 @@ where
     FB: Fn() -> std::io::Result<RB>,
     RB: std::io::Read,
 {
+    profile_streaming_declaring(open_a, open_b, tol, false)
+}
+
+/// [`profile_streaming`], optionally measuring what resolution each channel could declare.
+pub fn profile_streaming_declaring<FA, RA, FB, RB>(
+    open_a: FA,
+    open_b: FB,
+    tol: ferroscope_receipt::Tolerance,
+    declare: bool,
+) -> Option<ferroscope_receipt::Profile>
+where
+    FA: Fn() -> std::io::Result<RA>,
+    RA: std::io::Read,
+    FB: Fn() -> std::io::Result<RB>,
+    RB: std::io::Read,
+{
     let mut ra = open_a().ok()?;
     let mut rb = open_b().ok()?;
-    let mut s = PairStream::new(tol);
+    let mut s = PairStream::declaring(tol, declare);
     let mut block = vec![0u8; 64 << 10];
 
     while !s.refused() && (s.wants_a() || s.wants_b()) {

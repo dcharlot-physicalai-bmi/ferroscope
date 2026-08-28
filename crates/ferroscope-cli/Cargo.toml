@@ -32,7 +32,10 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # number — measured over six pairs, the smallest that worked ran 1x to 109x the summed
 # difference, so a 10x rule is wrong twice in six and a suggestion that fails is worse than
 # none.
-version = "0.1.25"
+# 0.1.26 adds `diff --declare`: the resolution each channel would have to declare for these
+# two runs to hash alike, measured. Off by default for the report's sake, not the clock — it
+# costs about 1% of CPU.
+version = "0.1.26"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

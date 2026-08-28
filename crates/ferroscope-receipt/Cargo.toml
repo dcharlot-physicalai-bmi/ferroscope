@@ -14,7 +14,11 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # 0.1.7: `*` declares one resolution for every channel that does not name its own.
 # 0.1.8: `ChannelDivergence::sum_abs` — the SUMMED difference on a channel, which is what a
 # declared resolution must clear, because agreement is per sample and crossings accumulate.
-version = "0.1.8"
+# 0.1.9: `profile_declaring` sieves the resolution ladder as it walks, so "what would you
+# have to declare to call these one run?" is MEASURED per channel rather than guessed. No
+# rule of thumb survived: over six pairs the smallest working resolution ran 1.0x to 109x
+# the summed difference. `cell` is the one definition of a grid cell, shared with the digest.
+version = "0.1.9"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
