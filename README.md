@@ -639,6 +639,23 @@ times. **Choose a resolution for the run's length as well as for its units.** Th
 inherent to any bucketing digest and applies to the mask exactly as much; the declaration removes
 the near-zero pathology, not the arithmetic of boundaries.
 
+So `diff` reports the quantity you need — and deliberately does not suggest a number:
+
+```
+  declare      to call these one run, a --resolution must clear the SUMMED difference,
+               not the worst one: 3.769e-2 on /robot/contacts — agreement is per sample, so the
+               boundary crossings add up. Measured over six pairs, the smallest that
+               worked ran 1x to 109x that, so pick one above it and CHECK. No multiplier
+               is reliable, and a resolution is a claim about the physics.
+```
+
+The refusal to suggest is itself a measurement. The first version of this line *did* suggest one
+— `10 × Σ|Δ|`, rounded up to a decade — and it was wrong on the second pair it was tried against,
+proposing `1e0` where `1e1` was needed. Over six pairs the smallest resolution that actually
+worked ran from **1.0× to 109×** the summed difference: a 10× rule fails twice, a 100× rule once.
+A suggestion that is wrong a quarter of the time is worse than no suggestion, so the tool hands
+over the exact number and the honest spread.
+
 Which is why the escalation rule below is doing more work than it looks like it is.
 
 None of which is a reason to distrust a receipt. It is the reason for the rule below.

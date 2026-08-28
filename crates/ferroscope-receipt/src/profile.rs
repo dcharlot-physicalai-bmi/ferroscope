@@ -110,6 +110,9 @@ pub struct ChannelDivergence {
     pub worst_scaled_step: u64,
     /// The channel's scale: `max(|value|)` over both runs. `0` when the channel is all zeros.
     pub scale: f64,
+    /// Σ|Δ| over the channel — what a declared resolution must clear, because agreement is
+    /// per-sample and boundary crossings accumulate.
+    pub sum_abs: f64,
     /// The component index carrying `worst_rel`, for naming it in the payload's own terms.
     pub worst_index: usize,
     pub a_at_worst: f64,
@@ -190,6 +193,13 @@ struct Acc {
     /// (step, |Δ|) — turned into a scaled series once the channel's scale is known.
     series: Vec<(u64, f64)>,
     scale: f64,
+    /// Σ|Δ| over every value on this channel.
+    ///
+    /// The quantity a DECLARED resolution has to clear, and not an obvious one: agreement is
+    /// per-sample, so every value must land in the same cell rather than merely a nearby one,
+    /// and the boundary crossings accumulate. Measured, the smallest resolution two runs
+    /// actually agree at sits within a decade of 10x this.
+    sum_abs: f64,
 }
 
 impl Default for Acc {
@@ -205,6 +215,7 @@ impl Default for Acc {
             first_crossing: None,
             series: Vec::new(),
             scale: 0.0,
+            sum_abs: 0.0,
         }
     }
 }
@@ -275,6 +286,7 @@ impl Pairwise {
                 differed = true;
             }
             let abs = (x - y).abs();
+            e.sum_abs += abs;
             if abs == 0.0 {
                 continue;
             }
@@ -367,6 +379,7 @@ impl Pairwise {
                     worst_scaled,
                     worst_scaled_step,
                     scale: e.scale,
+                    sum_abs: e.sum_abs,
                     worst_index: e.worst_index,
                     a_at_worst: e.a_at_worst,
                     b_at_worst: e.b_at_worst,

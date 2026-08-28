@@ -20,8 +20,13 @@
 //!   number of boundary crossings — which is the sum, not the max. It lands within 0–2 bits on
 //!   most channels and under-predicts by up to 7 where a channel crosses binades, so it is a
 //!   lower bound with a margin, not a formula to set a receipt from.
-//! - **scale**, **worst |Δ|**, **smallest** — the channel's own magnitude, how far the two runs
-//!   got, and the smallest non-zero value it visits. The last one is the interesting column.
+//! - **scale**, **worst |Δ|**, **Σ|Δ|** — the channel's own magnitude, how far the two runs got
+//!   at worst, and summed over every value. The last is what a DECLARED resolution must clear,
+//!   because agreement is per sample and the boundary crossings accumulate.
+//! - **agrees at**, **ratio** — the smallest declared resolution at which the two runs actually
+//!   hash alike, found by bisecting on the decade, and how many times Σ|Δ| that is. Measured
+//!   over six pairs the ratio ran from 1.0 to 109, which is why nothing here suggests a
+//!   multiplier: one that is wrong a quarter of the time is worse than none.
 
 use ferroscope_receipt::{Precision, TraceDigest};
 use std::collections::BTreeMap;
@@ -43,14 +48,55 @@ fn hash_at(vals: &[f64], drop_bits: u8) -> String {
     d.finish()
 }
 
+/// The same, on a DECLARED absolute grid instead of the mask.
+fn hash_on_grid(vals: &[f64], quantum: f64) -> String {
+    let mut d = TraceDigest::with_resolutions(Precision::Exact, &[("/c".to_string(), quantum)]);
+    for (i, v) in vals.iter().enumerate() {
+        d.step(i as u64, "/c", &[*v]);
+    }
+    d.finish()
+}
+
+/// The smallest declared resolution at which two runs of a channel hash identically, found by
+/// bisecting on the exponent — the answer a user actually wants, in the channel's own units.
+///
+/// Ternary rather than binary in spirit: agreement is not perfectly monotone in the quantum,
+/// because a coarser grid can still land two values either side of a cell edge. The bisection
+/// looks for the boundary of the region that agrees, and the caller is told it is a boundary
+/// rather than a guarantee.
+fn agreeing_resolution(xs: &[f64], ys: &[f64]) -> Option<f64> {
+    let scale = xs.iter().chain(ys).fold(0.0f64, |m, v| m.max(v.abs()));
+    if scale == 0.0 {
+        return Some(0.0);
+    }
+    let mut lo = -300i32; // definitely too fine
+    let mut hi = (scale.log10().ceil() as i32) + 2; // certainly coarse enough: one cell
+    if hash_on_grid(xs, 10f64.powi(hi)) != hash_on_grid(ys, 10f64.powi(hi)) {
+        return None;
+    }
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let q = 10f64.powi(mid);
+        if hash_on_grid(xs, q) == hash_on_grid(ys, q) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    Some(10f64.powi(hi))
+}
+
 struct Row {
     bits: u16,
+    /// Measured: the smallest declared resolution at which the two runs agree.
+    grid: Option<f64>,
+    /// Σ|Δ| — every sample must land in the same cell, so the cell must clear the SUM.
+    sum_abs: f64,
     predicted: i32,
     channel: String,
     scale: f64,
     worst_abs: f64,
     smallest: f64,
-    sum_pointwise: f64,
 }
 
 fn main() {
@@ -108,29 +154,32 @@ fn main() {
         } else {
             (52.0 + sum_pointwise.log2()).ceil() as i32
         };
+        let sum_abs: f64 = xs.iter().zip(ys).map(|(x, y)| (x - y).abs()).sum();
+        let grid = agreeing_resolution(xs, ys);
         let bits = (0u8..=52)
             .find(|&b| hash_at(xs, b) == hash_at(ys, b))
             .map(u16::from)
             .unwrap_or(53);
         rows.push(Row {
             bits,
+            grid,
+            sum_abs,
             predicted,
             channel: channel.clone(),
             scale,
             worst_abs,
             smallest: if smallest.is_finite() { smallest } else { 0.0 },
-            sum_pointwise,
         });
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r.bits));
 
     println!(
-        "{:>5} {:>5}  {:<28} {:>11} {:>11} {:>11} {:>10}",
-        "bits", "pred", "channel", "scale", "worst |Δ|", "smallest", "Σ ptwise"
+        "{:>5} {:>5}  {:<28} {:>11} {:>11} {:>11} {:>11} {:>7}",
+        "bits", "pred", "channel", "scale", "worst |Δ|", "Σ|Δ|", "agrees at", "ratio"
     );
     for r in &rows {
         println!(
-            "{:>5} {:>5}  {:<28} {:>11.3e} {:>11.3e} {:>11.3e} {:>10.2e}",
+            "{:>5} {:>5}  {:<28} {:>11.3e} {:>11.3e} {:>11.3e} {:>11} {:>7}",
             if r.bits > 52 {
                 "never".to_string()
             } else {
@@ -140,8 +189,19 @@ fn main() {
             r.channel,
             r.scale,
             r.worst_abs,
-            r.smallest,
-            r.sum_pointwise
+            r.sum_abs,
+            if r.sum_abs == 0.0 {
+                "identical".to_string()
+            } else {
+                match r.grid {
+                    Some(g) => format!("{g:.0e}"),
+                    None => "never".to_string(),
+                }
+            },
+            match (r.grid, r.sum_abs) {
+                (Some(g), s) if s > 0.0 && g > 0.0 => format!("{:.1}", g / s),
+                _ => "-".to_string(),
+            }
         );
     }
 

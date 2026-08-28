@@ -606,6 +606,43 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
         if p.channels.len() > 6 {
             println!("    … and {} more", p.channels.len() - 6);
         }
+
+        // What it would take to call these two the same run, said in the channels' own units
+        // rather than in mantissa bits — because that is the sentence anyone can check.
+        //
+        // The number reported is Σ|Δ|, not the worst single difference: agreement is PER SAMPLE,
+        // so every value must land in the same cell rather than merely a nearby one, and the
+        // boundary crossings accumulate.
+        //
+        // No multiplier is offered, and that is a measurement rather than caution. Over six
+        // pairs the smallest resolution that actually worked ran from 1.0x to 109x the summed
+        // difference: a 10x rule was wrong twice, a 100x rule once. A suggestion that fails a
+        // quarter of the time is worse than none, so this reports the quantity and says to check.
+        if let Some(worst) = p
+            .channels
+            .iter()
+            .max_by(|a, b| a.sum_abs.total_cmp(&b.sum_abs))
+            .filter(|c| c.sum_abs > 0.0)
+        {
+            println!(
+                "  declare      to call these one run, a --resolution must clear the SUMMED \
+                 difference,"
+            );
+            println!(
+                "               not the worst one: {:.3e} on {} — agreement is per sample, so \
+                 the",
+                worst.sum_abs, worst.channel
+            );
+            println!(
+                "               boundary crossings add up. Measured over six pairs, the smallest \
+                 that"
+            );
+            println!(
+                "               worked ran 1x to 109x that, so pick one above it and CHECK. No \
+                 multiplier"
+            );
+            println!("               is reliable, and a resolution is a claim about the physics.");
+        }
     }
 
     // The joules axis, which this tool has always had and diff has never shown. Two runs can

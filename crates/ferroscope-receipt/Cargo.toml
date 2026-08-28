@@ -12,7 +12,9 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # control channel forced a whole recording to drop_bits 51 of 52. A recording that declares
 # nothing produces the identical digest it always did.
 # 0.1.7: `*` declares one resolution for every channel that does not name its own.
-version = "0.1.7"
+# 0.1.8: `ChannelDivergence::sum_abs` — the SUMMED difference on a channel, which is what a
+# declared resolution must clear, because agreement is per sample and crossings accumulate.
+version = "0.1.8"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

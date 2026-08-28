@@ -28,7 +28,11 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.24 adds `--resolution <q>|<channel>=<q>` to `demo` and `scene`: declare what the receipt
 # claims, in the channel's own units. It turns "agrees at 20 dropped mantissa bits" into
 # "agrees to a nanoradian" — the same fact, said about the physics rather than the float.
-version = "0.1.24"
+# 0.1.25: `diff` reports what a declared resolution must clear, and deliberately suggests no
+# number — measured over six pairs, the smallest that worked ran 1x to 109x the summed
+# difference, so a 10x rule is wrong twice in six and a suggestion that fails is worse than
+# none.
+version = "0.1.25"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
