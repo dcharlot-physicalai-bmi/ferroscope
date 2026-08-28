@@ -1,7 +1,8 @@
 [package]
 name = "ferroscope-scene"
 description = "Describe a scene as JSON and get a recording: bodies, motions and robots, with errors an agent can act on. The authoring surface behind the Ferroscope MCP server."
-version = "0.1.4"
+# 0.1.5 adds `record_declaring`, so a scene can say what resolution its receipt claims.
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

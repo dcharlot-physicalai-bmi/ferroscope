@@ -935,6 +935,12 @@ jobs:
           # `demo` is deterministic given a seed, so the only thing that varies here is the
           # machine underneath. The platform string is left alone: it belongs in the receipt as
           # provenance, and it is not an input to the spec digest.
+          # The same scene again, but DECLARING what it claims: every channel to a nanometre
+          # or nanoradian of its own unit. That turns the receipt's promise from "agrees at 20
+          # dropped mantissa bits" into "agrees to a nanoradian" — the same fact, said in the
+          # units of the thing rather than of the float, and checkable against the physics.
+          $B scene examples/scenes/warehouse.json out/declared.mcap \
+             --precision exact --resolution 1e-9 > /dev/null
           for p in exact 8 12 16 17 18 19 20 24; do
             $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
             # And a SCENE, which is the contrast that makes the demo's result mean something:
@@ -1021,6 +1027,19 @@ jobs:
               echo "  -> three machines do not agree on a $kind at any precision on this ladder"
             fi
           done
+
+          # And the same question asked in units instead of in mantissa bits.
+          echo
+          echo "=== scene, declaring 1e-9 of each channel's own unit ==="
+          dl=$(trace "$LINUX/declared.mcap"); dm=$(trace "$MAC/declared.mcap"); dw=$(trace "$WIN/declared.mcap")
+          if [ -n "$dl" ] && [ "$dl" = "$dm" ] && [ "$dl" = "$dw" ]; then
+            echo "  ALL THREE AGREE, at bit-exact precision, to a nanometre/nanoradian"
+            echo "  ${dl:0:32}…"
+          else
+            echo "  linux ${dl:0:16}  macos ${dm:0:16}  windows ${dw:0:16}"
+            echo "  they do not agree even at a declared 1e-9 — the sum of their differences"
+            echo "  exceeds the cell, which is what a run long enough will always do."
+          fi
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

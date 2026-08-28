@@ -14,6 +14,7 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
     // operating system. The precision the receipt declares is what decides whether two machines
     // can be said to have produced the same run, so it is settable here.
     let mut precision = Precision::Quantized { drop_bits: 12 };
+    let mut resolutions: Vec<(String, f64)> = Vec::new();
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -27,6 +28,10 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
             }
             "--precision" => {
                 precision = crate::demo::parse_precision(flags.get(i + 1).copied())?;
+                i += 2;
+            }
+            "--resolution" => {
+                resolutions.push(crate::demo::parse_resolution(flags.get(i + 1).copied())?);
                 i += 2;
             }
             other => return Err(format!("unknown flag {other}")),
@@ -84,8 +89,9 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
         .unwrap_or_default();
     let mut meter = crate::production::start();
     let mut note: Vec<(String, String)> = Vec::new();
-    let rec = scene.record_at(
+    let rec = scene.record_declaring(
         precision,
+        &resolutions,
         |p| {
             // Relative to the scene file first, because that is what "arm.urdf" written next to
             // it means; then the built-in names, so a scene may also just say "so101".

@@ -498,9 +498,31 @@ impl Scene {
         F: Fn(&str) -> Option<String>,
         P: FnOnce() -> Vec<(String, String)>,
     {
+        self.record_declaring(precision, &[], load_urdf, production)
+    }
+
+    /// [`Scene::record_at`], declaring what resolution the receipt claims for each channel.
+    ///
+    /// `("*", q)` claims `q` for every channel that does not name its own. It is what turns a
+    /// receipt's promise from *"agrees at 20 dropped mantissa bits"* into *"agrees to a
+    /// nanoradian"* — the same fact, said in the units of the thing rather than of the float.
+    pub fn record_declaring<F, P>(
+        &self,
+        precision: Precision,
+        resolutions: &[(String, f64)],
+        load_urdf: F,
+        production: P,
+    ) -> Result<Recorded, String>
+    where
+        F: Fn(&str) -> Option<String>,
+        P: FnOnce() -> Vec<(String, String)>,
+    {
         let steps = self.steps();
         let dt_ns = (1e9 / self.rate_hz).round().max(1.0) as u64;
         let mut rec = Recorder::new(Vec::new(), precision);
+        for (channel, quantum) in resolutions {
+            rec.resolution(channel.clone(), *quantum)?;
+        }
         let t0 = Stamp::sim(0, 0);
         let mut notes: Vec<String> = Vec::new();
 

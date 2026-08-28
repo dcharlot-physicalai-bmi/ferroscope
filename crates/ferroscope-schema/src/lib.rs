@@ -360,6 +360,16 @@ impl<W: Write> Recorder<W> {
     /// willing to call the same run, finer than the divergence you need to catch. It must be
     /// declared before the first value is recorded — see [`seal`](Recorder::seal), which refuses
     /// otherwise, because hashing one run two different ways is not a receipt.
+    /// Declare one resolution for every channel that does not name its own.
+    ///
+    /// A single claim about the whole run — *"every recorded quantity agrees to 1e-9 of its own
+    /// unit"* — which is cruder than naming each channel and very often the one you actually
+    /// want, because it is the sentence a reader can check. Per-channel declarations still win
+    /// where they are made.
+    pub fn default_resolution(&mut self, quantum: f64) -> Result<(), String> {
+        self.resolution("*", quantum)
+    }
+
     pub fn resolution(&mut self, channel: impl Into<String>, quantum: f64) -> Result<(), String> {
         if !(quantum.is_finite() && quantum > 0.0) {
             return Err(format!(

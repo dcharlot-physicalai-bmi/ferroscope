@@ -11,7 +11,8 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # is hashed on a fixed grid rather than against its own vanishing magnitude. Measured: one
 # control channel forced a whole recording to drop_bits 51 of 52. A recording that declares
 # nothing produces the identical digest it always did.
-version = "0.1.6"
+# 0.1.7: `*` declares one resolution for every channel that does not name its own.
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

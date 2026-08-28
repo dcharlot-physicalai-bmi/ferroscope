@@ -25,7 +25,10 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 2.34 GB to 39-61 MB on a 527 MB pair, byte-identical output. Pairs that do not line up are
 # refused and fall back to building both traces rather than being paired by guesswork.
 # 0.1.23: `energy` streams too — a ledger is a fold. 1,231 MB to 44 MB on a 527 MB recording.
-version = "0.1.23"
+# 0.1.24 adds `--resolution <q>|<channel>=<q>` to `demo` and `scene`: declare what the receipt
+# claims, in the channel's own units. It turns "agrees at 20 dropped mantissa bits" into
+# "agrees to a nanoradian" — the same fact, said about the physics rather than the float.
+version = "0.1.24"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

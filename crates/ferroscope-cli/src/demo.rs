@@ -43,6 +43,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
     // do not agree bit for bit, and a receipt that pretended otherwise would be useless — so
     // this is settable, and what it takes to make two machines agree is measurable.
     let mut precision = Precision::Quantized { drop_bits: 12 };
+    let mut resolutions: Vec<(String, f64)> = Vec::new();
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -80,6 +81,10 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
                 precision = parse_precision(flags.get(i + 1).copied())?;
                 i += 2;
             }
+            "--resolution" => {
+                resolutions.push(parse_resolution(flags.get(i + 1).copied())?);
+                i += 2;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -89,6 +94,9 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut meter = crate::production::start();
 
     let mut rec = Recorder::new(Vec::new(), precision);
+    for (channel, quantum) in &resolutions {
+        rec.resolution(channel, *quantum)?;
+    }
     let mut rng = Lcg(seed);
     let mut wall = 0u64;
 
@@ -323,4 +331,24 @@ pub fn parse_precision(v: Option<&str>) -> Result<Precision, String> {
         return Err(format!("--precision {drop_bits}: at most 52 bits to drop"));
     }
     Ok(Precision::Quantized { drop_bits })
+}
+
+/// `--resolution 1e-9` (every channel) or `--resolution /joints=1e-9` (one channel).
+///
+/// The resolution a receipt DECLARES: the absolute cell a channel's values are hashed into. It
+/// turns "these two runs agree at drop_bits 20" into "these two runs agree to a nanoradian",
+/// which is a sentence a reader can check against the physics rather than against IEEE-754.
+pub fn parse_resolution(v: Option<&str>) -> Result<(String, f64), String> {
+    let v = v.ok_or("--resolution needs <quantum> or <channel>=<quantum>")?;
+    let (channel, q) = match v.split_once('=') {
+        Some((c, q)) => (c.to_string(), q),
+        None => ("*".to_string(), v),
+    };
+    let quantum: f64 = q
+        .parse()
+        .map_err(|_| format!("--resolution {v}: {q:?} is not a number"))?;
+    if !(quantum.is_finite() && quantum > 0.0) {
+        return Err(format!("--resolution {v}: must be finite and positive"));
+    }
+    Ok((channel, quantum))
 }

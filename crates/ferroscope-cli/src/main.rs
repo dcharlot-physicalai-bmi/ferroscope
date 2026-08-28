@@ -114,11 +114,13 @@ USAGE
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
                      [--precision exact|<0-52>]   the precision the receipt declares
+                     [--resolution <q>|<channel>=<q>]  claim a channel to q of its own unit
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description
                      [--check] [--steps <n>] [--rate <hz>] [--sweep all|each]
                      [--no-collision] [--no-inertial] [--meshes <dir>]
   ferroscope scene   <scene.json> <out.mcap>  record a DESCRIBED scene
                      [--check] [--sweep] [--precision exact|<0-52>]
+                     [--resolution <q>|<channel>=<q>]
                                            ·   --schema prints the scene format
   ferroscope say     \"<phrase>\" [<out.mcap>]  describe the scene in ENGLISH
                      [--json] [--check]

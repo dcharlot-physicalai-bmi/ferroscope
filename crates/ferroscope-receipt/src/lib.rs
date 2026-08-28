@@ -334,11 +334,15 @@ impl TraceDigest {
     pub fn step(&mut self, step: u64, channel: &str, values: &[f64]) {
         // A declared resolution replaces the mask for this channel: the value is placed on an
         // ABSOLUTE grid, whose cells stay the same size as the quantity passes through zero.
-        let grid = self
-            .resolutions
-            .binary_search_by(|(c, _)| c.as_str().cmp(channel))
-            .ok()
-            .map(|i| self.resolutions[i].1);
+        // A channel's own declaration, or the run-wide default. `*` is reserved for the latter
+        // and cannot collide: a channel name is a topic, and topics begin with `/`.
+        let find = |name: &str| {
+            self.resolutions
+                .binary_search_by(|(c, _)| c.as_str().cmp(name))
+                .ok()
+                .map(|i| self.resolutions[i].1)
+        };
+        let grid = find(channel).or_else(|| find("*"));
         let mut body = Vec::with_capacity(16 + channel.len() + values.len() * 8);
         body.extend_from_slice(&step.to_le_bytes());
         body.extend_from_slice(&(channel.len() as u64).to_le_bytes());
