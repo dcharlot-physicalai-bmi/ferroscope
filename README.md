@@ -497,6 +497,56 @@ None of this is a pass/fail gate, and it deliberately does not fail the build. A
 three do not agree below 20 bits" is the answer, and it is why a receipt **declares** a precision
 instead of claiming a bit-exactness no fabric delivers.
 
+#### And on a fabric that reduces in parallel?
+
+That is the case a *declared* precision exists for, and the one that had been argued rather than
+measured. Floating-point addition is not associative, so summing the same values in a different
+order is a different computation — and a GPU picks its order from the shape of the hardware, not
+from your program.
+
+**On real silicon.** An Apple GPU through WebGPU (`apple` / `metal-3`), one shader, one set of
+values, dispatched at 16, 64, 256 and 1024 workgroups — the only thing changed is the partition:
+
+| | terms | spread across dispatch shapes | narrowing f64→f32 | reordering ÷ narrowing |
+|---|---|---|---|---|
+| uniform | 65,536 | 2.383e-7 | 8.427e-6 | **2.8 %** |
+| uniform | 1,048,576 | 2.382e-7 | 5.439e-6 | **4.4 %** |
+| mixed magnitudes | 65,536 | 6.753e-7 | 3.784e-5 | **1.8 %** |
+| mixed magnitudes | 1,048,576 | 5.600e-7 | 6.563e-4 | **0.1 %** |
+
+**The reordering is the small term, and that was not the expected answer.** It is 2–6 f32 ULP,
+near-constant in the number of terms — a GPU reduction is a *tree*, so it is usually more
+accurate than the sequential loop it replaces, not less. What actually costs you is that the
+fabric has no `f64` to reorder: WGSL has no such type and Metal on Apple silicon exposes none, so
+the values are narrowed before they ever arrive. On the worst row that narrowing is **560× the
+reordering**. Calling both "GPU nondeterminism" hides which one you are paying for.
+
+In the receipt's own units, from those numbers:
+
+- declaring two dispatch shapes equal costs **drop_bits ≥ 32** — you keep 20 of 52 mantissa bits;
+- declaring a GPU run equal to the CPU run it came from costs **drop_bits ≥ 42** — you keep 10.
+
+**And the GPU is not random.** Every figure above reproduces exactly, run to run; it is
+deterministic *per configuration* and differs *between* configurations. So the reason you cannot
+claim bit-exactness is not noise — it is that the dispatch shape is not part of your spec. Put it
+in `RunSpec::config` and two runs of that configuration are comparable bit for bit again; leave it
+out and a declared precision is the only honest claim available.
+
+`cargo run --release --example reduction_order -p ferroscope-receipt` measures the same effect in
+`f64` on the CPU, where the reorderings a fabric imposes can be performed exactly. There the
+spread grows like **√n ULP** (measured at 0.1–0.6 ULP per √term across five decades of *n*), and
+two further things fall out that matter more than the headline:
+
+- **The digest needs 1–5 bits more than the spread implies**, because it *masks* low bits rather
+  than rounding them: values a hair apart on opposite sides of a mask boundary still differ. Every
+  ordering must land in one bucket, not merely be close.
+- **A near-cancelling sum cannot be pinned by a relative precision at all.** Where the terms are
+  large and the answer is near zero, the same absolute spread costs 14 dropped bits instead of 5.
+  Masking is relative; a quantity at equilibrium has no relative accuracy left. The *comparator*
+  already knows this — it ranks by |Δ| against each channel's own scale — and the digest does not.
+
+None of which is a reason to distrust a receipt. It is the reason for the rule below.
+
 And the rule that keeps it sound:
 
 > **A digest match is proof. A digest mismatch is a question.**
