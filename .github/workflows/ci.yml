@@ -935,7 +935,7 @@ jobs:
           # `demo` is deterministic given a seed, so the only thing that varies here is the
           # machine underneath. The platform string is left alone: it belongs in the receipt as
           # provenance, and it is not an input to the spec digest.
-          for p in exact 8 12 16 20 24 28 32; do
+          for p in exact 8 12 16 17 18 19 20 24; do
             $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
             # And a SCENE, which is the contrast that makes the demo's result mean something:
             # the demo integrator uses only + - * / and abs, every one of them exactly specified
@@ -1001,7 +1001,7 @@ jobs:
 
             echo "trace digest agreement by declared precision:"
             agreed=""
-            for p in exact 8 12 16 20 24 28 32; do
+            for p in exact 8 12 16 17 18 19 20 24; do
               tl=$(trace "$LINUX/$kind-$p.mcap"); tm=$(trace "$MAC/$kind-$p.mcap"); tw=$(trace "$WIN/$kind-$p.mcap")
               if [ -n "$tl" ] && [ "$tl" = "$tm" ] && [ "$tl" = "$tw" ]; then
                 echo "  $p: ALL THREE AGREE"
