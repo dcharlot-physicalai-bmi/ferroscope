@@ -474,9 +474,33 @@ impl Scene {
         F: Fn(&str) -> Option<String>,
         P: FnOnce() -> Vec<(String, String)>,
     {
+        self.record_at(
+            Precision::Quantized { drop_bits: 12 },
+            load_urdf,
+            production,
+        )
+    }
+
+    /// [`Scene::record_with`] at a precision you choose.
+    ///
+    /// The precision is a property of the RECEIPT, not of the scene: it is the claim the file
+    /// makes about how exactly its trajectory is pinned down, and the honest setting depends on
+    /// what the run has to agree with. A scene sweeps joints with `sin` and `cos`, and a libm is
+    /// not the same function on every operating system — so this is the knob that decides
+    /// whether two machines can be said to have produced the same run.
+    pub fn record_at<F, P>(
+        &self,
+        precision: Precision,
+        load_urdf: F,
+        production: P,
+    ) -> Result<Recorded, String>
+    where
+        F: Fn(&str) -> Option<String>,
+        P: FnOnce() -> Vec<(String, String)>,
+    {
         let steps = self.steps();
         let dt_ns = (1e9 / self.rate_hz).round().max(1.0) as u64;
-        let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+        let mut rec = Recorder::new(Vec::new(), precision);
         let t0 = Stamp::sim(0, 0);
         let mut notes: Vec<String> = Vec::new();
 

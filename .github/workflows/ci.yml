@@ -936,7 +936,12 @@ jobs:
           # machine underneath. The platform string is left alone: it belongs in the receipt as
           # provenance, and it is not an input to the spec digest.
           for p in exact 8 12 16 20 24 28 32; do
-            $B demo "out/$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
+            $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
+            # And a SCENE, which is the contrast that makes the demo's result mean something:
+            # the demo integrator uses only + - * / and abs, every one of them exactly specified
+            # by IEEE-754, while a scene sweeps joints with sin and cos — and a libm is not the
+            # same function on every operating system.
+            $B scene examples/scenes/warehouse.json "out/scene-$p.mcap" --precision "$p" > /dev/null
           done
           ls -l out
       - uses: actions/upload-artifact@v4
@@ -965,59 +970,57 @@ jobs:
           MAC=recordings/recordings-macos-latest
           WIN=recordings/recordings-windows-latest
           for d in "$LINUX" "$MAC" "$WIN"; do
-            test -f "$d/exact.mcap" || { echo "missing $d/exact.mcap"; exit 1; }
+            test -f "$d/demo-exact.mcap" || { echo "missing $d/demo-exact.mcap"; exit 1; }
           done
 
-          # Comparable at all? The spec digest excludes the platform, so these must match or the
-          # whole exercise is measuring the wrong thing.
           # `|| true` is not decoration: GitHub runs `shell: bash` with `-eo pipefail`, and
           # `diff` exits 1 by design when two runs differ — which is the case being measured.
           # Without it the step aborts on the interesting result and passes on the boring one.
-          spec() { $B verify "$1" 2>/dev/null | awk '/spec digest/ {print $3}' || true; }
-          SL=$(spec "$LINUX/exact.mcap"); SM=$(spec "$MAC/exact.mcap"); SW=$(spec "$WIN/exact.mcap")
+          spec()  { $B verify "$1" 2>/dev/null | awk '/spec digest/ {print $3}' || true; }
+          trace() { $B verify "$1" 2>/dev/null | awk '/trace digest/ {print $3}' || true; }
+
+          # Comparable at all? The spec digest excludes the platform, so these must match or the
+          # whole exercise is measuring the wrong thing.
+          SL=$(spec "$LINUX/demo-exact.mcap"); SM=$(spec "$MAC/demo-exact.mcap"); SW=$(spec "$WIN/demo-exact.mcap")
           echo "spec digests: linux ${SL:0:16} macos ${SM:0:16} windows ${SW:0:16}"
           test "$SL" = "$SM" && test "$SL" = "$SW" \
             || { echo "the three runs are not even comparable: the spec digest differs"; exit 1; }
           echo "all three runs share a spec digest, as the receipt intends"
 
-          # How far apart, in the numbers themselves. A tolerance of 1 means nothing crosses, so
-          # the verdict reports the worst difference rather than stopping at the first one.
-          echo
-          echo "trajectory difference, same spec, different machine:"
-          for pair in "linux:$LINUX macos:$MAC" "linux:$LINUX windows:$WIN" "macos:$MAC windows:$WIN"; do
-            set -- $pair
-            an=${1%%:*}; ad=${1#*:}; bn=${2%%:*}; bd=${2#*:}
-            line=$($B diff "$ad/exact.mcap" "$bd/exact.mcap" --abs 1 --rel 1 2>/dev/null \
-                   | grep -E 'bit-exact|within tolerance|diverged' | head -1 || true)
-            echo "  $an vs $bn: ${line#  }"
-          done
+          for kind in demo scene; do
+            echo
+            echo "=== $kind ==="
+            echo "trajectory difference, same spec, different machine:"
+            for pair in "linux:$LINUX macos:$MAC" "linux:$LINUX windows:$WIN" "macos:$MAC windows:$WIN"; do
+              set -- $pair
+              an=${1%%:*}; ad=${1#*:}; bn=${2%%:*}; bd=${2#*:}
+              line=$($B diff "$ad/$kind-exact.mcap" "$bd/$kind-exact.mcap" --abs 1 --rel 1 2>/dev/null \
+                     | grep -E 'bit-exact|within tolerance|diverged' | head -1 || true)
+              echo "  $an vs $bn: ${line#  }"
+            done
 
-          # And the question the receipt exists to answer: at what DECLARED precision do the
-          # trace digests agree?
-          echo
-          echo "trace digest agreement by declared precision:"
-          trace() { $B verify "$1" 2>/dev/null | awk '/trace digest/ {print $3}' || true; }
-          agreed=""
-          for p in exact 8 12 16 20 24 28 32; do
-            tl=$(trace "$LINUX/$p.mcap"); tm=$(trace "$MAC/$p.mcap"); tw=$(trace "$WIN/$p.mcap")
-            if [ "$tl" = "$tm" ] && [ "$tl" = "$tw" ]; then
-              echo "  $p: ALL THREE AGREE"
-              [ -z "$agreed" ] && agreed="$p"
+            echo "trace digest agreement by declared precision:"
+            agreed=""
+            for p in exact 8 12 16 20 24 28 32; do
+              tl=$(trace "$LINUX/$kind-$p.mcap"); tm=$(trace "$MAC/$kind-$p.mcap"); tw=$(trace "$WIN/$kind-$p.mcap")
+              if [ -n "$tl" ] && [ "$tl" = "$tm" ] && [ "$tl" = "$tw" ]; then
+                echo "  $p: ALL THREE AGREE"
+                [ -z "$agreed" ] && agreed="$p"
+              else
+                lm=$([ "$tl" = "$tm" ] && echo "linux=macos" || echo "linux!=macos")
+                lw=$([ "$tl" = "$tw" ] && echo "linux=windows" || echo "linux!=windows")
+                mw=$([ "$tm" = "$tw" ] && echo "macos=windows" || echo "macos!=windows")
+                echo "  $p: $lm  $lw  $mw"
+              fi
+            done
+            if [ -n "$agreed" ]; then
+              echo "  -> three machines agree on a $kind at declared precision: $agreed"
             else
-              lm=$([ "$tl" = "$tm" ] && echo "linux=macos" || echo "linux≠macos")
-              lw=$([ "$tl" = "$tw" ] && echo "linux=windows" || echo "linux≠windows")
-              mw=$([ "$tm" = "$tw" ] && echo "macos=windows" || echo "macos≠windows")
-              echo "  $p: $lm  $lw  $mw"
+              # Not a failure: a measured "not at any of these" is still the answer, and is
+              # exactly why the receipt DECLARES a precision instead of claiming bit-exactness.
+              echo "  -> three machines do not agree on a $kind at any precision on this ladder"
             fi
           done
-          echo
-          if [ -n "$agreed" ]; then
-            echo "the three machines agree at declared precision: $agreed"
-          else
-            # Not a failure: a measured answer of "not at any of these" is still the answer, and
-            # is exactly why the receipt DECLARES a precision instead of claiming bit-exactness.
-            echo "the three machines do not agree at any precision on this ladder"
-          fi
 
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and

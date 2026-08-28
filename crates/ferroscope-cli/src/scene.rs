@@ -4,15 +4,31 @@
 //! description is JSON either way, so a scene an agent wrote runs here unchanged, and one a
 //! person wrote runs there.
 
+use ferroscope_receipt::Precision;
 use ferroscope_scene::Scene;
 
 pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut check_only = false;
     let mut sweep = false;
-    for f in flags {
-        match *f {
-            "--check" => check_only = true,
-            "--sweep" => sweep = true,
+    // A scene sweeps joints with `sin` and `cos`, and a libm is not the same function on every
+    // operating system. The precision the receipt declares is what decides whether two machines
+    // can be said to have produced the same run, so it is settable here.
+    let mut precision = Precision::Quantized { drop_bits: 12 };
+    let mut i = 0;
+    while i < flags.len() {
+        match flags[i] {
+            "--check" => {
+                check_only = true;
+                i += 1;
+            }
+            "--sweep" => {
+                sweep = true;
+                i += 1;
+            }
+            "--precision" => {
+                precision = crate::demo::parse_precision(flags.get(i + 1).copied())?;
+                i += 2;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -68,7 +84,8 @@ pub fn run(scene_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> 
         .unwrap_or_default();
     let mut meter = crate::production::start();
     let mut note: Vec<(String, String)> = Vec::new();
-    let rec = scene.record_with(
+    let rec = scene.record_at(
+        precision,
         |p| {
             // Relative to the scene file first, because that is what "arm.urdf" written next to
             // it means; then the built-in names, so a scene may also just say "so101".

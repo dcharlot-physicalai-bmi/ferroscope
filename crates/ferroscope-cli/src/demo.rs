@@ -77,20 +77,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
                 i += 2;
             }
             "--precision" => {
-                let v = flags.get(i + 1).ok_or(
-                    "--precision needs `exact` or a number of mantissa bits to drop (0-52)",
-                )?;
-                precision = if *v == "exact" {
-                    Precision::Exact
-                } else {
-                    let drop_bits: u8 = v
-                        .parse()
-                        .map_err(|_| format!("--precision {v}: want `exact` or 0-52"))?;
-                    if drop_bits > 52 {
-                        return Err(format!("--precision {drop_bits}: at most 52 bits to drop"));
-                    }
-                    Precision::Quantized { drop_bits }
-                };
+                precision = parse_precision(flags.get(i + 1).copied())?;
                 i += 2;
             }
             other => return Err(format!("unknown flag {other}")),
@@ -318,4 +305,22 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
 
 fn default_platform() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+}
+
+/// `exact`, or how many of the 52 mantissa bits to drop before hashing.
+///
+/// Shared by `demo` and `scene` because it means the same thing in both: the claim the receipt
+/// makes about how exactly the trajectory is pinned down.
+pub fn parse_precision(v: Option<&str>) -> Result<Precision, String> {
+    let v = v.ok_or("--precision needs `exact` or a number of mantissa bits to drop (0-52)")?;
+    if v == "exact" {
+        return Ok(Precision::Exact);
+    }
+    let drop_bits: u8 = v
+        .parse()
+        .map_err(|_| format!("--precision {v}: want `exact` or 0-52"))?;
+    if drop_bits > 52 {
+        return Err(format!("--precision {drop_bits}: at most 52 bits to drop"));
+    }
+    Ok(Precision::Quantized { drop_bits })
 }
