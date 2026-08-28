@@ -473,6 +473,28 @@ ladder of declared precisions, then compared.
 | macos vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 5.179e-12 |
 | digests agree at | **exact** | **drop 20 of 52 mantissa bits** (≈2⁻³² relative) |
 
+And then the same question asked in units instead of in mantissa bits. The scene declares what
+it claims — a nanometre, a nanoradian — and the three machines produce **one digest**:
+
+```sh
+ferroscope scene warehouse.json out.mcap --precision exact --resolution 1e-9
+```
+
+```
+=== scene, declaring 1e-9 of each channel's own unit ===
+  ALL THREE AGREE, at bit-exact precision, to a nanometre/nanoradian
+  8b1b5b3e377dbc912921b5dcc8c7087e…
+```
+
+`drop_bits 20` and `1e-9 of each unit` are the same underlying fact, but only one of them is a
+sentence about a robot. The first says something true about IEEE-754; the second can be checked
+against the physics, and is the one worth putting in front of someone deciding whether a run
+reproduced.
+
+(It works here because this scene is 400 steps: the differences sum to about 2e-13, far inside a
+nanometre cell. A run long enough would need a coarser claim — see the *N* factor above. Choose
+the number for the run, not only for the units.)
+
 Two results, and the second only means something because of the first.
 
 **Cross-machine bit-exactness is achievable, and it is not luck.** Every operation in the demo's
