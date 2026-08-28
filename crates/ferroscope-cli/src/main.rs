@@ -26,7 +26,6 @@ mod urdf;
 
 use ferroscope_ledger::Rail;
 use ferroscope_receipt::{Tolerance, Verdict};
-use ferroscope_schema::{mcap, verify};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -312,8 +311,9 @@ fn mark(ok: bool) -> &'static str {
 }
 
 fn cmd_energy(path: &str) -> Result<bool, String> {
-    let bytes = slurp(path)?;
-    let v = verify(&bytes).ok_or_else(|| format!("{path} is not a Ferroscope recording"))?;
+    // A ledger is a fold: total each sample as it goes past. The file is read, not held.
+    let v = ferroscope_schema::verify_streaming(|| std::fs::File::open(path))
+        .ok_or_else(|| format!("{path} is not a Ferroscope recording"))?;
     let q = &v.quote;
 
     println!("{path}\n");
@@ -358,10 +358,10 @@ fn cmd_energy(path: &str) -> Result<bool, String> {
         }
     }
 
-    if let Some(kv) = mcap::read(&bytes).ok().and_then(|log| {
-        log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
-            .map(<[_]>::to_vec)
-    }) {
+    if let Some(kv) = std::fs::File::open(path)
+        .ok()
+        .and_then(|f| ferroscope_schema::metadata_streaming(f, ferroscope_schema::PRODUCTION_BLOCK))
+    {
         production::print(&kv);
     }
 

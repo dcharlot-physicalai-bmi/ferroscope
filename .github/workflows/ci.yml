@@ -163,7 +163,11 @@ jobs:
             if grep -n "digests_agree(" "$f" | grep -qv "^[0-9]*: *//"; then
               echo "$f compares stored digests again"; fail=1
             fi
-            grep -q "verify(" "$f" \
+            # A RECOMPUTATION, in either shape: `verify(&bytes)` for a surface that already
+            # holds the file, `verify_streaming(open)` for one that reads it. Grepping for
+            # "verify(" alone passed on `run_verify(args)` in a file that had stopped calling
+            # either -- the substring was in a function NAME.
+            grep -Eq 'verify\(&|verify_streaming\(|= verify\(' "$f" \
               || { echo "$f no longer recomputes a receipt before comparing"; fail=1; }
           done
           for f in crates/ferroscope-cli/src/main.rs \
@@ -976,7 +980,18 @@ jobs:
             || { echo "the fallback comparison did not report"; cat fallback.txt; exit 1; }
           grep -q "gap " fallback.txt \
             || { echo "the fallback comparison reported no structure"; cat fallback.txt; exit 1; }
-          echo "comparison is a fold, and what it cannot pair it refuses rather than guessing"
+          # The agent-facing surface too. An agent may be pointed at recordings far larger than
+          # whatever it is running inside, and this tool used to slurp BOTH files and then build
+          # both trajectories -- 2,342 MB on this pair, against 42 MB now.
+          REQ="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"run_diff\",\"arguments\":{\"a\":\"big-a.mcap\",\"b\":\"big-b.mcap\"}}}"
+          echo "$REQ" | /usr/bin/time -v target/release/ferroscope-mcp > mcp-diff.json 2> mcp-time.txt || true
+          mkb=$(awk '/Maximum resident set size/ {print $NF}' mcp-time.txt)
+          echo "mcp run_diff peak RSS: $((mkb / 1024)) MB"
+          grep -q "diverged at step" mcp-diff.json \
+            || { echo "the agent-facing comparator did not locate the divergence"; head -c 400 mcp-diff.json; exit 1; }
+          test "$mkb" -lt "$limit" \
+            || { echo "mcp run_diff held $((mkb / 1024)) MB -- it is holding the recordings again"; exit 1; }
+          echo "comparison is a fold on every surface, and what it cannot pair it refuses rather than guessing"
 
       - name: the documented exit codes are the contract
         # README and `usage` promise 0 yes / 1 no / 2 could-not-answer, and a CI gate written

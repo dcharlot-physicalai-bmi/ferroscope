@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use ferroscope_receipt::{Precision, RunSpec, Tolerance};
 use ferroscope_schema::json::Value;
-use ferroscope_schema::{trace_from, verify};
+use ferroscope_schema::verify;
 
 use crate::run::{Halt, Outcome, Run};
 use crate::store::{DEFAULT_ROOT, Predicate, Query, Record, Store};
@@ -855,12 +855,17 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
         let store = Store::open(&self.root).map_err(|e| e.to_string())?;
         let ra = store.get(a).ok_or_else(|| format!("no run {a:?}"))?;
         let rb = store.get(b).ok_or_else(|| format!("no run {b:?}"))?;
-        let ba = store
-            .recording(a)
+        // Paths, not bytes. Comparing two runs is a fold over pairs in file order, so this
+        // never needs either recording in memory — and a suite gate that fell over on a long
+        // run would be a gate nobody could use on the runs that matter.
+        let pa = store
+            .recording_path(a)
             .ok_or_else(|| format!("no recording for {a:?}"))?;
-        let bb = store
-            .recording(b)
+        let pb = store
+            .recording_path(b)
             .ok_or_else(|| format!("no recording for {b:?}"))?;
+        let open_a = || std::fs::File::open(&pa);
+        let open_b = || std::fs::File::open(&pb);
 
         println!(
             "A  {}  {} [{}]  on {}",
@@ -871,8 +876,8 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
             rb.id, rb.scenario, rb.case, rb.platform
         );
 
-        let (reca, ta) = trace_from(&ba).ok_or("cannot read recording A")?;
-        let (recb, tb) = trace_from(&bb).ok_or("cannot read recording B")?;
+        let reca = ferroscope_schema::receipt_streaming(open_a().map_err(|e| e.to_string())?);
+        let recb = ferroscope_schema::receipt_streaming(open_b().map_err(|e| e.to_string())?);
         let tol = Tolerance {
             abs: f.abs.unwrap_or(1e-9),
             rel: f.rel.unwrap_or(1e-9),
@@ -883,8 +888,8 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
         // SUCCESS on a match — so a recording whose metadata block carried another run's
         // trace_digest passed however its messages read. This is the surface a suite gate calls
         // to decide whether a scenario reproduced, so it is the one where that mattered most.
-        let va = verify(&ba);
-        let vb = verify(&bb);
+        let va = ferroscope_schema::verify_streaming(open_a);
+        let vb = ferroscope_schema::verify_streaming(open_b);
         let trustworthy =
             va.as_ref().is_some_and(|v| v.ok()) && vb.as_ref().is_some_and(|v| v.ok());
         if !trustworthy {
@@ -908,7 +913,21 @@ EXIT CODES  0 every selected run passed | 1 something failed | 2 the tool could 
             }
         }
 
-        let p = ferroscope_receipt::profile(&ta, &tb, tol);
+        // The lockstep walk refuses any pair whose samples do not line up rather than guessing;
+        // when it does, fall back to building both trajectories, which can pair anything.
+        let p = match ferroscope_schema::profile_streaming(open_a, open_b, tol) {
+            Some(p) => p,
+            None => {
+                let read = |f: std::io::Result<std::fs::File>| {
+                    f.ok()
+                        .and_then(ferroscope_schema::trace_from_streaming)
+                        .map(|(_, t)| t)
+                };
+                let ta = read(open_a()).ok_or("cannot read recording A")?;
+                let tb = read(open_b()).ok_or("cannot read recording B")?;
+                ferroscope_receipt::profile(&ta, &tb, tol)
+            }
+        };
         let verdict = p.verdict.clone();
         if p.structural.is_some() {
             println!("  on what both runs recorded: {verdict}");

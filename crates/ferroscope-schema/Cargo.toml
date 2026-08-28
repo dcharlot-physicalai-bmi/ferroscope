@@ -23,7 +23,9 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # runs stop emitting the same samples at the same steps — the exact pair anybody wants
 # compared — and position matching refused it: a 1.3 GB pair fell back to 4 GB of trajectories
 # and now costs 95 MB. `VerifyFold` is the pushed form of `verify_streaming`.
-version = "0.1.17"
+# 0.1.18 adds `metadata_streaming`: read one metadata block while parsing no payloads, so
+# "what did producing this file cost?" costs one pass rather than the whole recording.
+version = "0.1.18"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

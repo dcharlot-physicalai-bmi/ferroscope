@@ -178,6 +178,25 @@ comparator that silently paired the wrong samples would be worse than a slow one
 `inspect` is the other end of the table: it parses no payloads at all, so it is a single pass that
 touches almost nothing.
 
+**And on every surface, not just the one with the table.** The comparator has four
+implementations — the CLI, the browser, the scenario harness a suite gate calls, and the MCP tool
+an agent calls — and this project has already shipped one defect on all four at once. Two of them
+were streaming and two were not, which is the same shape of gap arriving early. Measured on the
+same 527 MB pair, each against the binary from before:
+
+| surface | before | after |
+|---|---|---|
+| `ferroscope energy` | 1,231 MB | **44 MB** |
+| MCP `run_verify` | 1,110 MB | **41 MB** |
+| MCP `run_energy` | 1,234 MB | **40 MB** |
+| MCP `run_diff` | 2,342 MB | **42 MB** |
+| harness `compare` | — | identical output, same fold |
+
+Output identical on every one. The agent surface matters most here for a reason that is not
+about elegance: an agent can be pointed at a recording far larger than whatever it is running
+inside, and a tool that answers by loading the file is a tool that fails exactly when the run is
+interesting.
+
 The browser column's last row used to read **refused**, and the section after this one is how it
 stopped saying that. The `peak RSS` column is the *slice* reader — the one the page still uses
 below its threshold, and the one every native verb used before it streamed. Native throughput is

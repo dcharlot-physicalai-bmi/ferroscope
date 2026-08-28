@@ -1259,18 +1259,27 @@ pub fn component_labels(schema: &str, joint_names: &[String]) -> Vec<String> {
 /// the bytes and nothing else. It exists because [`profile_streaming`] never builds a trace, and
 /// the receipt used to arrive as a by-product of building one.
 pub fn receipt_streaming<R: std::io::Read>(r: R) -> Option<Receipt> {
+    Receipt::from_pairs(&metadata_streaming(r, RECEIPT_BLOCK)?)
+}
+
+/// Read one metadata block out of a recording, parsing no payloads at all.
+///
+/// Every message is skipped by opcode, so this costs one pass over the bytes and nothing else —
+/// which is what a question like "what did producing this file cost?" should cost, rather than
+/// the whole recording in memory.
+pub fn metadata_streaming<R: std::io::Read>(r: R, block: &str) -> Option<Vec<(String, String)>> {
     use ferroscope_mcap::{Flow, Record};
-    let mut receipt = None;
+    let mut found = None;
     ferroscope_mcap::stream(r, |rec| {
         if let Record::Metadata { name, kv } = rec
-            && name == RECEIPT_BLOCK
+            && name == block
         {
-            receipt = Receipt::from_pairs(&kv);
+            found = Some(kv);
         }
         Ok(Flow::Continue)
     })
     .ok()?;
-    receipt
+    found
 }
 
 /// One recording's comparable samples, produced a block at a time.

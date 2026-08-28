@@ -438,7 +438,17 @@ impl Store {
 
     /// The recording bytes for one run.
     pub fn recording(&self, id: &str) -> Option<Vec<u8>> {
-        fs::read(self.dir_of(id).join("run.mcap")).ok()
+        fs::read(self.recording_path(id)?).ok()
+    }
+
+    /// Where a run's recording lives, for the questions that would rather READ it than hold it.
+    ///
+    /// Comparing two runs is one of those: it is a fold over pairs, so its floor is what the
+    /// report keeps rather than the two files, and handing out a path instead of a `Vec<u8>` is
+    /// what lets the comparator stay flat over recordings of any size.
+    pub fn recording_path(&self, id: &str) -> Option<std::path::PathBuf> {
+        let p = self.dir_of(id).join("run.mcap");
+        p.exists().then_some(p)
     }
 
     /// Every record, newest first, filtered and limited.

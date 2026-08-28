@@ -524,8 +524,8 @@ fn run_inspect(args: &Value) -> Result<String, String> {
 
 fn run_verify(args: &Value) -> Result<String, String> {
     let path = arg(args, "run")?;
-    let bytes = read(path)?;
-    let v = ferroscope_schema::verify(&bytes)
+    // Recomputing a receipt is a fold, so it reads the file rather than holding it.
+    let v = ferroscope_schema::verify_streaming(|| std::fs::File::open(path))
         .ok_or_else(|| format!("{path} carries no Ferroscope receipt"))?;
     Ok(format!(
         "{path}\n  scenario      {}\n  precision     {}\n  platform      {}\n  messages      \
@@ -548,8 +548,8 @@ fn run_verify(args: &Value) -> Result<String, String> {
 
 fn run_energy(args: &Value) -> Result<String, String> {
     let path = arg(args, "run")?;
-    let bytes = read(path)?;
-    let v = ferroscope_schema::verify(&bytes)
+    // The ledger is a fold too: total each sample as it goes past.
+    let v = ferroscope_schema::verify_streaming(|| std::fs::File::open(path))
         .ok_or_else(|| format!("{path} is not a Ferroscope recording"))?;
     let q = &v.quote;
     let mut r = format!(
@@ -575,10 +575,10 @@ fn run_energy(args: &Value) -> Result<String, String> {
             r.push_str(&format!("  {rail:?}{:<4} {name:<18} {j:>12.3}\n", ""));
         }
     }
-    if let Some(kv) = ferroscope_schema::mcap::read(&bytes).ok().and_then(|log| {
-        log.metadata_block(ferroscope_schema::PRODUCTION_BLOCK)
-            .map(<[_]>::to_vec)
-    }) {
+    if let Some(kv) = std::fs::File::open(path)
+        .ok()
+        .and_then(|f| ferroscope_schema::metadata_streaming(f, ferroscope_schema::PRODUCTION_BLOCK))
+    {
         r.push_str("\n  PRODUCTION (what the producing machine spent making this file)\n");
         for (k, v) in kv {
             r.push_str(&format!("    {k:<22} {v}\n"));
@@ -597,22 +597,44 @@ fn run_energy(args: &Value) -> Result<String, String> {
 fn run_diff(args: &Value) -> Result<String, String> {
     let a = arg(args, "a")?;
     let b = arg(args, "b")?;
-    let (ba, bb) = (read(a)?, read(b)?);
-    let (ra, ta) = ferroscope_schema::trace_from(&ba)
-        .ok_or_else(|| format!("{a} is not a Ferroscope recording"))?;
-    let (rb, tb) = ferroscope_schema::trace_from(&bb)
-        .ok_or_else(|| format!("{b} is not a Ferroscope recording"))?;
+    // Read, do not hold. An agent may be pointed at recordings far larger than whatever it is
+    // running inside, and comparing two runs is a fold over pairs in file order — so the floor
+    // is what the report keeps, not the two files.
+    let open_a = || std::fs::File::open(a);
+    let open_b = || std::fs::File::open(b);
+    let ra = ferroscope_schema::receipt_streaming(
+        open_a().map_err(|e| format!("cannot read {a}: {e}"))?,
+    );
+    let rb = ferroscope_schema::receipt_streaming(
+        open_b().map_err(|e| format!("cannot read {b}: {e}"))?,
+    );
 
     // Recompute both receipts before answering. An agent asking "did this reproduce?" and
     // getting a yes has no way to tell that nothing checked whether either file still stands
     // behind its own digest, and this tool answers exactly that question.
-    let va = ferroscope_schema::verify(&ba);
-    let vb = ferroscope_schema::verify(&bb);
+    let va = ferroscope_schema::verify_streaming(open_a);
+    let vb = ferroscope_schema::verify_streaming(open_b);
     let ok = |v: &Option<ferroscope_schema::Verification>| v.as_ref().is_some_and(|v| v.ok());
     let (a_ok, b_ok) = (ok(&va), ok(&vb));
     let trustworthy = a_ok && b_ok;
 
-    let p = ferroscope_receipt::profile(&ta, &tb, ferroscope_receipt::Tolerance::default());
+    let tol = ferroscope_receipt::Tolerance::default();
+    // The lockstep walk refuses any pair whose samples do not line up rather than guessing at
+    // which sample belongs with which; when it does, build both trajectories instead.
+    let p = match ferroscope_schema::profile_streaming(open_a, open_b, tol) {
+        Some(p) => p,
+        None => {
+            let read_trace = |path: &str, f: std::io::Result<std::fs::File>| {
+                f.ok()
+                    .and_then(ferroscope_schema::trace_from_streaming)
+                    .map(|(_, t)| t)
+                    .ok_or_else(|| format!("{path} is not a Ferroscope recording"))
+            };
+            let ta = read_trace(a, open_a())?;
+            let tb = read_trace(b, open_b())?;
+            ferroscope_receipt::profile(&ta, &tb, tol)
+        }
+    };
     let v = &p.verdict;
 
     let mut out = format!(
