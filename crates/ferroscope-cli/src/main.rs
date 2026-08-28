@@ -113,6 +113,7 @@ USAGE
                      port 8737 by default, which is the port the viewer's live button dials
   ferroscope demo    <out.mcap>            write a synthetic run
                      [--seed <n>] [--steps <n>] [--drift <step>] [--platform <s>]
+                     [--precision exact|<0-52>]   the precision the receipt declares
   ferroscope urdf    <robot.urdf> <out.mcap>  record YOUR robot, and check its description
                      [--check] [--steps <n>] [--rate <hz>] [--sweep all|each]
                      [--no-collision] [--no-inertial] [--meshes <dir>]

@@ -38,6 +38,11 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
     let mut drift_at: Option<u64> = None;
     let mut platform = default_platform();
     let mut steps = 1_000u64;
+    // The precision the receipt DECLARES, which is the whole point of having one: bit-exact if
+    // you can afford it, mantissa-quantized if you cannot. Two platforms running the same spec
+    // do not agree bit for bit, and a receipt that pretended otherwise would be useless — so
+    // this is settable, and what it takes to make two machines agree is measurable.
+    let mut precision = Precision::Quantized { drop_bits: 12 };
     let mut i = 0;
     while i < flags.len() {
         match flags[i] {
@@ -71,6 +76,23 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
                     .to_string();
                 i += 2;
             }
+            "--precision" => {
+                let v = flags.get(i + 1).ok_or(
+                    "--precision needs `exact` or a number of mantissa bits to drop (0-52)",
+                )?;
+                precision = if *v == "exact" {
+                    Precision::Exact
+                } else {
+                    let drop_bits: u8 = v
+                        .parse()
+                        .map_err(|_| format!("--precision {v}: want `exact` or 0-52"))?;
+                    if drop_bits > 52 {
+                        return Err(format!("--precision {drop_bits}: at most 52 bits to drop"));
+                    }
+                    Precision::Quantized { drop_bits }
+                };
+                i += 2;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -79,7 +101,7 @@ pub fn write_with(out: &str, flags: &[&str]) -> Result<bool, String> {
 
     let mut meter = crate::production::start();
 
-    let mut rec = Recorder::new(Vec::new(), Precision::Quantized { drop_bits: 12 });
+    let mut rec = Recorder::new(Vec::new(), precision);
     let mut rng = Lcg(seed);
     let mut wall = 0u64;
 

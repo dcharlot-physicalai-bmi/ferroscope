@@ -913,6 +913,112 @@ jobs:
           PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
             node ci/viewer-blocks.mjs blocks-a.mcap blocks-b.mcap "$CHROME"
 
+  platforms:
+    # **Comparing across platforms is the receipt's entire reason for existing** — the platform
+    # is deliberately excluded from the spec digest so that two machines running one spec share
+    # it, and the interesting question is whether their TRACES then agree. This project had
+    # never measured that. It records the same spec on three operating systems, at a ladder of
+    # declared precisions, and the next job reads off the answer.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-cli
+      - name: record one spec at a ladder of precisions
+        shell: bash
+        run: |
+          B=target/release/ferroscope
+          mkdir -p out
+          # `demo` is deterministic given a seed, so the only thing that varies here is the
+          # machine underneath. The platform string is left alone: it belongs in the receipt as
+          # provenance, and it is not an input to the spec digest.
+          for p in exact 8 12 16 20 24 28 32; do
+            $B demo "out/$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
+          done
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recordings-${{ matrix.os }}
+          path: out/
+          retention-days: 1
+
+  platform-agreement:
+    # The measurement. Three machines, one spec: how far apart are their trajectories, and at
+    # what declared precision do their receipts finally agree?
+    needs: platforms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p ferroscope-cli
+      - uses: actions/download-artifact@v4
+        with: { path: recordings }
+      - name: how far apart are three machines running one spec
+        shell: bash
+        run: |
+          B=$PWD/target/release/ferroscope
+          ls recordings
+          LINUX=recordings/recordings-ubuntu-latest
+          MAC=recordings/recordings-macos-latest
+          WIN=recordings/recordings-windows-latest
+          for d in "$LINUX" "$MAC" "$WIN"; do
+            test -f "$d/exact.mcap" || { echo "missing $d/exact.mcap"; exit 1; }
+          done
+
+          # Comparable at all? The spec digest excludes the platform, so these must match or the
+          # whole exercise is measuring the wrong thing.
+          # `|| true` is not decoration: GitHub runs `shell: bash` with `-eo pipefail`, and
+          # `diff` exits 1 by design when two runs differ — which is the case being measured.
+          # Without it the step aborts on the interesting result and passes on the boring one.
+          spec() { $B verify "$1" 2>/dev/null | awk '/spec digest/ {print $3}' || true; }
+          SL=$(spec "$LINUX/exact.mcap"); SM=$(spec "$MAC/exact.mcap"); SW=$(spec "$WIN/exact.mcap")
+          echo "spec digests: linux ${SL:0:16} macos ${SM:0:16} windows ${SW:0:16}"
+          test "$SL" = "$SM" && test "$SL" = "$SW" \
+            || { echo "the three runs are not even comparable: the spec digest differs"; exit 1; }
+          echo "all three runs share a spec digest, as the receipt intends"
+
+          # How far apart, in the numbers themselves. A tolerance of 1 means nothing crosses, so
+          # the verdict reports the worst difference rather than stopping at the first one.
+          echo
+          echo "trajectory difference, same spec, different machine:"
+          for pair in "linux:$LINUX macos:$MAC" "linux:$LINUX windows:$WIN" "macos:$MAC windows:$WIN"; do
+            set -- $pair
+            an=${1%%:*}; ad=${1#*:}; bn=${2%%:*}; bd=${2#*:}
+            line=$($B diff "$ad/exact.mcap" "$bd/exact.mcap" --abs 1 --rel 1 2>/dev/null \
+                   | grep -E 'bit-exact|within tolerance|diverged' | head -1 || true)
+            echo "  $an vs $bn: ${line#  }"
+          done
+
+          # And the question the receipt exists to answer: at what DECLARED precision do the
+          # trace digests agree?
+          echo
+          echo "trace digest agreement by declared precision:"
+          trace() { $B verify "$1" 2>/dev/null | awk '/trace digest/ {print $3}' || true; }
+          agreed=""
+          for p in exact 8 12 16 20 24 28 32; do
+            tl=$(trace "$LINUX/$p.mcap"); tm=$(trace "$MAC/$p.mcap"); tw=$(trace "$WIN/$p.mcap")
+            if [ "$tl" = "$tm" ] && [ "$tl" = "$tw" ]; then
+              echo "  $p: ALL THREE AGREE"
+              [ -z "$agreed" ] && agreed="$p"
+            else
+              lm=$([ "$tl" = "$tm" ] && echo "linux=macos" || echo "linux≠macos")
+              lw=$([ "$tl" = "$tw" ] && echo "linux=windows" || echo "linux≠windows")
+              mw=$([ "$tm" = "$tw" ] && echo "macos=windows" || echo "macos≠windows")
+              echo "  $p: $lm  $lw  $mw"
+            fi
+          done
+          echo
+          if [ -n "$agreed" ]; then
+            echo "the three machines agree at declared precision: $agreed"
+          else
+            # Not a failure: a measured answer of "not at any of these" is still the answer, and
+            # is exactly why the receipt DECLARES a precision instead of claiming bit-exactness.
+            echo "the three machines do not agree at any precision on this ladder"
+          fi
+
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and
     # nothing else; a transitive dependency that arrives by accident fails the build.
