@@ -542,8 +542,50 @@ two further things fall out that matter more than the headline:
   ordering must land in one bucket, not merely be close.
 - **A near-cancelling sum cannot be pinned by a relative precision at all.** Where the terms are
   large and the answer is near zero, the same absolute spread costs 14 dropped bits instead of 5.
-  Masking is relative; a quantity at equilibrium has no relative accuracy left. The *comparator*
-  already knows this — it ranks by |Δ| against each channel's own scale — and the digest does not.
+  Masking is relative; a quantity at equilibrium has no relative accuracy left.
+
+#### And that one is not synthetic
+
+Two runs of the demo, differing only from step 1,500 on, agreeing to about **1e-6 of every
+channel's own scale** — and the best precision their receipts can declare is **`drop_bits` 51 of
+52**. One bit of mantissa. Verified end to end against the real digest, not modelled:
+
+```
+ bits   channel                        scale   worst |Δ|    smallest
+   51   /control/height_error       7.786e-2    2.048e-8    6.677e-8   ← binds the whole trace
+   47   /robot/joints                1.225e2    1.396e-4    3.253e-6
+   46   /robot/contacts              3.829e2    4.362e-4    1.084e-6
+   44   /energy/actuation/leg        8.726e1    1.545e-4    3.010e-3
+   44   /robot/base                  4.840e0    2.048e-8    1.000e-4
+```
+
+`ferroscope demo` twice, then
+`cargo run --release --example declarable_precision -p ferroscope-schema -- a.mcap b.mcap`.
+
+`/control/height_error` is a control error, so it lives near zero by construction — that is what
+being a control error means. Its two runs are 2.048e-8 apart, which is **2.63e-7 of its own
+scale**, but it *visits* 6.677e-8, and the mask is applied to each value's own magnitude. So one
+channel doing its job drags the entire recording's declarable precision to 51 bits, and the fast
+path — "a digest match is proof" — can essentially never fire for a run with a control loop in it.
+
+What binds is neither the channel's scale nor the size of the disagreement. It is the **sum** of
+the pointwise relative differences, because every sample must land in the *same* bucket rather
+than merely be close: `52 + log2(Σ)` predicts the measured bits within 0–2 on most channels, and
+under-predicts by up to 7 where a channel crosses binades.
+
+**This is an asymmetry inside the project, not a fact about floating point.** The comparator
+carries an absolute *and* a relative tolerance and ranks by |Δ| against each channel's own scale.
+The digest carries only the relative half, and applies it pointwise. The comparator learned this
+lesson — twice, under correction — and the digest has not.
+
+It is deliberately not fixed here, because the fix is not a one-line change and the reason is
+worth stating: **the digest is computed while the recording is being written, so it cannot
+normalise by a scale it has not yet seen.** A correct fix means the scale is *declared* — "this
+channel is metres, resolution 1 µm" — which is a physical statement rather than a floating-point
+one, and a change to what a receipt contains. That is a decision about the format, not a bug fix.
+
+Until then the escalation rule below is doing more work than it looks like it is: on any run with
+a channel through zero, the digest will miss and the comparator will answer.
 
 None of which is a reason to distrust a receipt. It is the reason for the rule below.
 
