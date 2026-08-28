@@ -451,10 +451,7 @@ impl DiffStream {
                 self.ra = self.fa.receipt().cloned();
                 self.rb = self.fb.receipt().cloned();
                 self.labels = self.fa.labels();
-                let (fa, fb) = (
-                    std::mem::take(&mut self.fa),
-                    std::mem::take(&mut self.fb),
-                );
+                let (fa, fb) = (std::mem::take(&mut self.fa), std::mem::take(&mut self.fb));
                 self.va = fa.finish();
                 self.vb = fb.finish();
                 self.walk = Some(ferroscope_schema::PairStream::new(self.tol));

@@ -563,8 +563,15 @@ fn long_recording(steps: u64) -> Vec<u8> {
     for step in 0..steps {
         let t = Stamp::at(step * 1_000_000, step * 1_000_000, step);
         let x = (step as f64) * 1e-4;
-        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
-            .unwrap();
+        rec.transform(
+            "/body",
+            t,
+            "world",
+            "body",
+            [x, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
         rec.scalar("/err", t, x, "m").unwrap();
         rec.energy("/energy/motor", t, Rail::Actuation, "motor", 3.0)
             .unwrap();
@@ -627,10 +634,7 @@ fn a_pushed_fold_that_never_rewinds_yields_nothing() {
             break;
         }
     }
-    assert!(
-        fold.finish().is_none(),
-        "a one-pass fold produced a bundle"
-    );
+    assert!(fold.finish().is_none(), "a one-pass fold produced a bundle");
 }
 
 #[test]
@@ -730,7 +734,13 @@ fn a_pushed_fold_refuses_two_passes_over_different_bytes() {
 }
 
 /// Compare two recordings both ways: by building the trajectories, and by walking both files.
-fn both_ways(a: &[u8], b: &[u8]) -> (ferroscope_receipt::Profile, Option<ferroscope_receipt::Profile>) {
+fn both_ways(
+    a: &[u8],
+    b: &[u8],
+) -> (
+    ferroscope_receipt::Profile,
+    Option<ferroscope_receipt::Profile>,
+) {
     let tol = ferroscope_receipt::Tolerance::default();
     let ta = ferroscope_schema::trace_from(a).expect("trace a").1;
     let tb = ferroscope_schema::trace_from(b).expect("trace b").1;
@@ -755,7 +765,8 @@ fn a_streamed_comparison_is_the_same_comparison() {
         ("different seeds", record(11, None), record(12, None)),
     ] {
         let (held, streamed) = both_ways(&a, &b);
-        let streamed = streamed.unwrap_or_else(|| panic!("{name}: streaming refused an aligned pair"));
+        let streamed =
+            streamed.unwrap_or_else(|| panic!("{name}: streaming refused an aligned pair"));
         assert_eq!(held, streamed, "{name}: the two comparisons disagree");
     }
 }
@@ -773,7 +784,10 @@ fn a_streamed_comparison_handles_a_run_that_stopped_early() {
         held.structural.is_some(),
         "the fixture is not actually a short run"
     );
-    assert_eq!(held, streamed, "the two comparisons disagree about a short run");
+    assert_eq!(
+        held, streamed,
+        "the two comparisons disagree about a short run"
+    );
 }
 
 #[test]
@@ -854,8 +868,15 @@ fn record_steps(seed: u64, steps: u64) -> Vec<u8> {
         let f = -40.0 * x;
         v += f * 1e-3;
         x += v * 1e-3;
-        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
-            .unwrap();
+        rec.transform(
+            "/body",
+            t,
+            "world",
+            "body",
+            [x, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
         rec.joints(
             "/joints",
             t,
@@ -867,7 +888,8 @@ fn record_steps(seed: u64, steps: u64) -> Vec<u8> {
             },
         )
         .unwrap();
-        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0).unwrap();
+        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0)
+            .unwrap();
         rec.energy("/energy/motor", t, Rail::Actuation, "motor", f.abs() * 2.0)
             .unwrap();
         rec.scalar("/err", t, x, "m").unwrap();
@@ -912,9 +934,17 @@ fn reordered(_original: &[u8]) -> Vec<u8> {
         x += v * 1e-3;
         // `/err` first, `/body` last: the same numbers, a different file order.
         rec.scalar("/err", t, x, "m").unwrap();
-        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0).unwrap();
-        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0)
             .unwrap();
+        rec.transform(
+            "/body",
+            t,
+            "world",
+            "body",
+            [x, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
     }
     let spec = ferroscope_receipt::RunSpec::new("spring", 11)
         .dt_ns(1_000_000)

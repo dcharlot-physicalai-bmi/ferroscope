@@ -941,7 +941,11 @@ impl VerifyFold {
     pub fn labels(&self) -> BTreeMap<String, Vec<String>> {
         let mut out = BTreeMap::new();
         for (topic, schema_id) in self.channels.values() {
-            let schema = self.schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
+            let schema = self
+                .schemas
+                .get(schema_id)
+                .map(|s| s.as_str())
+                .unwrap_or("");
             let joint = self.joint_names.get(topic).cloned().unwrap_or_default();
             let labels = component_labels(schema, &joint);
             if !labels.is_empty() {
@@ -1580,7 +1584,10 @@ impl PairStream {
         // B's samples for this step, by channel, in order.
         let mut by_channel: BTreeMap<&str, std::collections::VecDeque<usize>> = BTreeMap::new();
         for (i, s) in gb.iter().enumerate() {
-            by_channel.entry(s.channel.as_str()).or_default().push_back(i);
+            by_channel
+                .entry(s.channel.as_str())
+                .or_default()
+                .push_back(i);
         }
         let mut used = vec![false; gb.len()];
 

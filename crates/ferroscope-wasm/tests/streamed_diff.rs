@@ -5,8 +5,8 @@
 //! answers to one question, so the only acceptable relationship between them is identity: the
 //! same JSON, character for character, from the same pair of recordings.
 
-use ferroscope_receipt::Precision;
 use ferroscope_ledger::Rail;
+use ferroscope_receipt::Precision;
 use ferroscope_schema::{JointState, Recorder, Stamp};
 
 fn recording(seed: u64, perturb_at: Option<u64>, steps: u64) -> Vec<u8> {
@@ -21,8 +21,15 @@ fn recording(seed: u64, perturb_at: Option<u64>, steps: u64) -> Vec<u8> {
         }
         v += f * 1e-3;
         x += v * 1e-3;
-        rec.transform("/body", t, "world", "body", [x, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
-            .unwrap();
+        rec.transform(
+            "/body",
+            t,
+            "world",
+            "body",
+            [x, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
         rec.joints(
             "/joints",
             t,
@@ -36,7 +43,8 @@ fn recording(seed: u64, perturb_at: Option<u64>, steps: u64) -> Vec<u8> {
         .unwrap();
         rec.energy("/energy/motor", t, Rail::Actuation, "motor", f.abs() * 2.0)
             .unwrap();
-        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0).unwrap();
+        rec.energy("/energy/soc", t, Rail::Compute, "soc", 6.0)
+            .unwrap();
         rec.scalar("/err", t, x, "m").unwrap();
     }
     let spec = ferroscope_receipt::RunSpec::new("spring", seed)
@@ -95,8 +103,16 @@ fn streamed(a: &[u8], b: &[u8], block: usize) -> Result<String, String> {
 #[test]
 fn a_streamed_comparison_is_the_same_json_as_a_held_one() {
     for (name, a, b) in [
-        ("identical", recording(11, None, 300), recording(11, None, 300)),
-        ("perturbed", recording(11, None, 300), recording(11, Some(90), 300)),
+        (
+            "identical",
+            recording(11, None, 300),
+            recording(11, None, 300),
+        ),
+        (
+            "perturbed",
+            recording(11, None, 300),
+            recording(11, Some(90), 300),
+        ),
         (
             "different seeds",
             recording(11, None, 300),
@@ -112,7 +128,10 @@ fn a_streamed_comparison_is_the_same_json_as_a_held_one() {
         // Several block sizes, because nothing makes `File.slice()` land on a record boundary.
         for block in [4096usize, 65536, a.len().max(b.len())] {
             let s = streamed(&a, &b, block).unwrap_or_else(|e| panic!("{name} at {block}: {e}"));
-            assert_eq!(held, s, "{name}: streamed diff differs at block size {block}");
+            assert_eq!(
+                held, s,
+                "{name}: streamed diff differs at block size {block}"
+            );
         }
     }
 }
@@ -229,7 +248,10 @@ fn a_mesh_can_be_pulled_from_a_recording_read_in_blocks() {
     let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
     let file = with_attachment(&payload);
     let held = ferroscope_wasm::attachment(&file, "robot.glb").expect("held attachment");
-    assert_eq!(held, payload, "the fixture's own attachment does not round-trip");
+    assert_eq!(
+        held, payload,
+        "the fixture's own attachment does not round-trip"
+    );
 
     // Every block size, because nothing makes `File.slice()` land on a record boundary and an
     // attachment is the one record big enough to span many blocks.

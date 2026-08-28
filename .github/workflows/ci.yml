@@ -585,11 +585,15 @@ jobs:
           import os, time, sys
           p = sys.argv[1]; t0 = time.monotonic()
           # Atomic replace, not truncate-then-write: the reader must never see an empty file.
+          # And a 1 ms tick, not 10 ms: the fake meter has to resolve finer than the thing being
+          # measured, exactly as a real one does. At 10 ms this gate failed the day the scene
+          # got fast enough to finish in 19 ms -- the tool did the right thing (it refused to
+          # invent joules over an interval it could not resolve) and the FIXTURE was what broke.
           while time.monotonic() - t0 < 12.0:
               tmp = p + '.tmp'
               open(tmp, 'w').write(str(int((time.monotonic() - t0) * 20.0 * 1e6)) + chr(10))
               os.replace(tmp, p)
-              time.sleep(0.01)
+              time.sleep(0.001)
           " "$D/intel-rapl:0/energy_uj" &
           WRITER=$!
           FERROSCOPE_POWERCAP="$D" $B scene examples/scenes/warehouse.json /tmp/measured.mcap > /tmp/m.txt 2>&1

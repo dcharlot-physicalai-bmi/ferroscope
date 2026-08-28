@@ -562,7 +562,11 @@ fn long_sample() -> Vec<u8> {
     let c = w.add_channel("/robot/pose", s, "json", &[]).unwrap();
     for i in 0..40_000u32 {
         let t = 1_000_000_000 + i as u64 * 1_000_000;
-        let pose = format!(r#"{{"x":{:.4},"y":{:.4},"step":{i}}}"#, i as f64 * 0.01, i as f64 * -0.02);
+        let pose = format!(
+            r#"{{"x":{:.4},"y":{:.4},"step":{i}}}"#,
+            i as f64 * 0.01,
+            i as f64 * -0.02
+        );
         w.write_message(c, i, t, t, pose.as_bytes()).unwrap();
     }
     w.finish().unwrap()
@@ -581,7 +585,10 @@ fn a_feed_compacts_without_losing_its_place() {
     );
     let reference = walk_feed(&bytes, bytes.len());
     assert_eq!(
-        reference.iter().filter(|r| r.starts_with("message ")).count(),
+        reference
+            .iter()
+            .filter(|r| r.starts_with("message "))
+            .count(),
         40_000,
         "fixture lost messages"
     );
