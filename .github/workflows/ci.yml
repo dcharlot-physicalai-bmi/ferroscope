@@ -1065,6 +1065,55 @@ jobs:
             echo "  exceeds the cell, which is what a run long enough will always do."
           fi
 
+  install:
+    # What a USER gets, on every platform, from a directory with nothing checked out.
+    #
+    # The workspace tests cannot see this class of defect, because in the workspace every path
+    # resolves: `ferroscope urdf so101` failed for months while `scene` resolved the same name,
+    # and it took installing the published crate into an empty directory to notice. Everything
+    # here runs after `cd` into a fresh temp dir, deliberately.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install it the way a reader would
+        shell: bash
+        run: cargo install --path crates/ferroscope-cli --root "$RUNNER_TEMP/fs" --locked
+      - name: and use it, from nowhere in particular
+        shell: bash
+        run: |
+          # `.exe` on Windows; bash on that runner does not add it for a path with a slash.
+          B="$RUNNER_TEMP/fs/bin/ferroscope"
+          [ -x "$B" ] || B="$B.exe"
+          test -x "$B" || { echo "no installed binary at $B"; ls -l "$RUNNER_TEMP/fs/bin"; exit 1; }
+          cd "$(mktemp -d)"
+          "$B" demo a.mcap --steps 500 --seed 7 > /dev/null
+          "$B" demo b.mcap --steps 500 --seed 7 --drift 250 > /dev/null
+          "$B" inspect a.mcap > /dev/null
+          "$B" verify a.mcap | grep -q VERIFIED || { echo "a fresh demo does not verify"; exit 1; }
+          "$B" energy a.mcap > /dev/null
+          "$B" export a.mcap bundle.json > /dev/null
+          "$B" say "a crate falls beside a sweeping arm" said.mcap > /dev/null
+          "$B" verify said.mcap | grep -q VERIFIED || { echo "a described scene does not verify"; exit 1; }
+          # The built-in robot, by name, with no repository anywhere near.
+          "$B" urdf so101 arm.mcap --steps 60 > /dev/null
+          "$B" verify arm.mcap | grep -q VERIFIED || { echo "the built-in robot does not verify"; exit 1; }
+          # And a scene that names it, which is the other resolver.
+          printf '%s' '{"name":"arm","duration_s":1,"rate_hz":100,"robots":[{"id":"arm","urdf":"so101","at":[0,0,0.22]}]}' > s.json
+          "$B" scene s.json scene.mcap > /dev/null
+          "$B" verify scene.mcap | grep -q VERIFIED || { echo "a scene naming the built-in robot does not verify"; exit 1; }
+          # The documented exit codes, from the installed binary.
+          rc=0; "$B" diff a.mcap b.mcap > /dev/null 2>&1 || rc=$?
+          test "$rc" -eq 1 || { echo "a diverged pair must exit 1, got $rc"; exit 1; }
+          rc=0; "$B" diff a.mcap a.mcap > /dev/null 2>&1 || rc=$?
+          test "$rc" -eq 0 || { echo "an identical pair must exit 0, got $rc"; exit 1; }
+          rc=0; "$B" verify nosuchfile.mcap > /dev/null 2>&1 || rc=$?
+          test "$rc" -eq 2 || { echo "a missing file must exit 2, got $rc"; exit 1; }
+          echo "every verb works from an empty directory on ${{ matrix.os }}"
+
   no-deps:
     # The other claim on the tin. `cargo tree` for each core crate must list the crate and
     # nothing else; a transitive dependency that arrives by accident fails the build.
