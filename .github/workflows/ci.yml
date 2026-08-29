@@ -12,6 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
         with: { components: rustfmt, clippy }
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -28,6 +29,7 @@ jobs:
         id: msrv
         run: echo "v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2.7.8
         with: { toolchain: "${{ steps.msrv.outputs.v }}" }
       - run: cargo build --workspace --all-features
       - run: echo "the workspace builds on its declared MSRV ${{ steps.msrv.outputs.v }}"
@@ -39,6 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
         with: { targets: wasm32-unknown-unknown }
       - run: >
           cargo build --target wasm32-unknown-unknown
@@ -216,6 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release --example hopper -p ferroscope-run
       - name: declare, run, query, compare
         run: |
@@ -243,6 +247,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release
       - name: the checker passes a sound description and refuses a broken one
         # This is the gate the survey said nobody ships: a robot description checked for the
@@ -320,6 +325,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-cli
       - name: a described scene becomes a verified recording
         run: |
@@ -401,6 +407,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-cli
       - name: a sentence becomes a verified recording
         run: |
@@ -450,6 +457,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-mcp
       - name: the server speaks MCP and records what it is asked for
         run: |
@@ -517,6 +525,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-cli
       - name: with no meter, it refuses to invent joules
         run: |
@@ -666,6 +675,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-motion -p ferroscope-cli
       - name: the embedded description matches the repository's
         run: |
@@ -708,6 +718,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-motion -p ferroscope-cli
       - name: the stream is the file
         run: |
@@ -851,6 +862,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
         with: { targets: wasm32-unknown-unknown }
       # PINNED. The action defaults to the latest wasm-pack, and a release landed that cannot
       # parse `license.workspace = true` — "invalid type: map, expected a string for key
@@ -921,6 +933,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - run: npm install --no-save puppeteer-core@25
@@ -950,6 +963,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-cli
       - name: record one spec at a ladder of precisions
         shell: bash
@@ -1031,6 +1045,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-cli
       - uses: actions/download-artifact@v4
         with: { path: recordings }
@@ -1129,6 +1144,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - name: install it the way a reader would
         shell: bash
         run: cargo install --path crates/ferroscope-cli --root "$RUNNER_TEMP/fs" --locked
@@ -1171,6 +1187,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - name: core crates have no runtime dependencies
         run: |
           for c in ferroscope-mcap ferroscope-ledger ferroscope-receipt ferroscope-mesh \
@@ -1185,6 +1202,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release
       - name: the package is ferroscope-cli, the binary is ferroscope
         run: test -x target/release/ferroscope
