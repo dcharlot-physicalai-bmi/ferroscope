@@ -67,8 +67,21 @@ pub fn run(urdf_path: &str, out: &str, flags: &[&str]) -> Result<bool, String> {
         }
     }
 
-    let text =
-        std::fs::read_to_string(urdf_path).map_err(|e| format!("cannot read {urdf_path}: {e}"))?;
+    // A built-in name first, then a path — the same rule `scene` applies to `"urdf": "so101"`.
+    // They disagreed until now: a scene could name the demo robot and this verb could not, so
+    // `ferroscope urdf so101 arm.mcap` — the obvious thing to type after reading the README —
+    // answered "cannot read so101: No such file or directory". Found by installing the
+    // published crate into an empty directory and using it the way a reader would.
+    let text = crate::builtin::load(urdf_path).ok_or_else(|| {
+        format!(
+            "cannot read {urdf_path}: no such file, and not a built-in robot ({})",
+            crate::builtin::BUILTIN
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
     let robot = Robot::parse(&text).map_err(|e| format!("{urdf_path}: {e}"))?;
 
     let movable: Vec<_> = robot.movable_joints().cloned().collect();

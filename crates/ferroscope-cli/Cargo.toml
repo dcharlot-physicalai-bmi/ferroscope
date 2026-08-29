@@ -35,7 +35,11 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.26 adds `diff --declare`: the resolution each channel would have to declare for these
 # two runs to hash alike, measured. Off by default for the report's sake, not the clock — it
 # costs about 1% of CPU.
-version = "0.1.26"
+# 0.1.27: `urdf` resolves a built-in robot name, as `scene` already did. The two disagreed —
+# a scene could say "so101" and `ferroscope urdf so101` could not — and an unknown name now
+# says which robots ARE built in. Found by installing the published crate into an empty
+# directory and using it the way a reader would.
+version = "0.1.27"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

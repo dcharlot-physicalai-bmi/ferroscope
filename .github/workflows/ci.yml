@@ -272,6 +272,25 @@ jobs:
           test ! -e './--check' || { echo "--check was treated as a filename"; exit 1; }
           test -z "$(ls -A)" || { echo "--check wrote something: $(ls -A)"; exit 1; }
           echo "the SO-101 checks clean and --check writes nothing"
+      - name: a built-in robot is nameable, from anywhere
+        # `scene` resolved `"urdf": "so101"` to the shipped robot and this verb did not, so
+        # `ferroscope urdf so101 out.mcap` — the obvious thing to type after reading the README
+        # — answered "cannot read so101: No such file or directory". Found by installing the
+        # PUBLISHED crate into an empty directory and using it the way a reader would, which is
+        # a thing the workspace tests cannot see.
+        run: |
+          B=$PWD/target/release/ferroscope
+          cd "$(mktemp -d)"        # nothing checked out here, like a user's directory
+          $B urdf so101 built-in.mcap --steps 60 > /dev/null
+          $B verify built-in.mcap | grep -q VERIFIED \
+            || { echo "a recording made from the built-in robot does not verify"; exit 1; }
+          # And a name that is neither a file nor a built-in must say what IS available.
+          rc=0; $B urdf nosuchbot out.mcap > /tmp/miss.txt 2>&1 || rc=$?
+          test "$rc" -eq 2 || { echo "an unknown robot should exit 2, got $rc"; exit 1; }
+          grep -q "not a built-in robot (so101" /tmp/miss.txt \
+            || { echo "the error does not name the robots that ARE built in"; cat /tmp/miss.txt; exit 1; }
+          echo "the shipped robot is nameable, and an unknown one says what is not"
+
       - name: a URDF becomes a verified recording
         run: |
           B=target/release/ferroscope
