@@ -1,0 +1,9 @@
+{
+  "name": "chain at the origin",
+  "duration_s": 4.0,
+  "rate_hz": 100,
+  "ground": [6, 6],
+  "robots": [
+    { "id": "arm", "urdf": "so101", "at": [0, 0, 0], "sweep": "each" }
+  ]
+}

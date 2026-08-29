@@ -974,6 +974,13 @@ jobs:
           for p in exact 8 12 16 20 24; do
             $B scene examples/scenes/arithmetic-only.json "out/arith-$p.mcap" --precision "$p" > /dev/null
             $B scene examples/scenes/transcendental.json "out/trans-$p.mcap" --precision "$p" > /dev/null
+            # Splitting the eight bits between `trans` (12) and the warehouse `scene` (20). The
+            # same robot, the same sweep, mounted at the origin and then 4.4 m away from it. If
+            # those bits are PROXIMITY TO ZERO — the warehouse gripper reaches 5.0e-5 while
+            # `trans` never goes below 0.29 — the offset one drops toward 12. If they are the
+            # chain itself, both stay at 20.
+            $B scene examples/scenes/chain-origin.json "out/chainzero-$p.mcap" --precision "$p" > /dev/null
+            $B scene examples/scenes/chain-offset.json "out/chainaway-$p.mcap" --precision "$p" > /dev/null
           done
           for p in exact 8 12 16 17 18 19 20 24; do
             $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
@@ -1027,7 +1034,7 @@ jobs:
             || { echo "the three runs are not even comparable: the spec digest differs"; exit 1; }
           echo "all three runs share a spec digest, as the receipt intends"
 
-          for kind in demo scene arith trans; do
+          for kind in demo scene arith trans chainzero chainaway; do
             echo
             echo "=== $kind ==="
             echo "trajectory difference, same spec, different machine:"
@@ -1044,7 +1051,7 @@ jobs:
             # The two new families were recorded on a shorter ladder; asking for a rung that
             # was never written would read as a disagreement rather than as a missing file.
             case "$kind" in
-              arith|trans) ladder="exact 8 12 16 20 24" ;;
+              arith|trans|chainzero|chainaway) ladder="exact 8 12 16 20 24" ;;
               *)           ladder="exact 8 12 16 17 18 19 20 24" ;;
             esac
             for p in $ladder; do

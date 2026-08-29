@@ -1,0 +1,9 @@
+{
+  "name": "the same chain, away from the origin",
+  "duration_s": 4.0,
+  "rate_hz": 100,
+  "ground": [6, 6],
+  "robots": [
+    { "id": "arm", "urdf": "so101", "at": [2.5, 3.5, 1.0], "sweep": "each" }
+  ]
+}
