@@ -480,12 +480,12 @@ point* — and this project had never measured what that comparison returns. It 
 every push: the same spec recorded on **Linux x86-64, macOS arm64 and Windows x86-64**, at a
 ladder of declared precisions, then compared.
 
-|  | `demo` — only `+ − × ÷` and `abs` | `scene` — sweeps joints with `sin`, `cos` |
-|---|---|---|
-| linux vs macos | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
-| linux vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
-| macos vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 5.179e-12 |
-| digests agree at | **exact** | **drop 20 of 52 mantissa bits** (≈2⁻³² relative) |
+| family | the maths it uses | worst \|Δ\| across the three | digests agree at |
+|---|---|---|---|
+| `demo` | `+ − × ÷`, `abs` | **bit-exact** | **exact** |
+| `arith` | + `rem_euclid`, `sqrt` | **bit-exact** | **exact** |
+| `trans` | `sin`, `cos`, `atan2` | 2.220e-16 — **1 ULP** | **12 bits** |
+| `scene` | those *and* a robot's kinematic chain | 4.441e-16 — **2 ULP** | **20 bits** |
 
 And then the same question asked in units instead of in mantissa bits. The scene declares what
 it claims — a nanometre, a nanoradian — and the three machines produce **one digest**:
@@ -517,12 +517,17 @@ integrator — `+ − × ÷`, `abs` — is exactly specified by IEEE-754, so two
 adds nothing of its own: no reordering, no contraction, no width surprises. That is worth knowing
 before anyone trusts a receipt.
 
-**What costs you determinism is specific and nameable.** A scene sweeps joints with `sin` and
-`cos`, and a libm is not the same function on three operating systems. The price is **4.441e-16,
-which is 2.00 units in the last place** at magnitude ~1 — two machines disagreeing about the last
-bit of a sine, twice — and it costs **20 mantissa bits** to declare them equal. At 19 bits Linux
-and macOS already agree and Windows does not, which is the two Unix libms converging one bit
-before the third.
+**What costs you determinism is specific, nameable, and smaller than this README used to say.**
+A libm is not the same function on three operating systems — but transcendentals *alone* cost
+**12 bits**, not 20. The 20 was measured on a scene with a robot in it; adding `trans` (orbits and
+oscillations, nothing else) as a control showed the difference. Only one of those eight extra bits
+is the extra ULP. The rest belongs to the kinematic chain and to a `gripper_frame_link` component
+whose relative difference is 8.861e-12 against `trans`'s 7.765e-16, because it passes near zero —
+the near-zero pathology of the receipt section appearing inside a portability measurement. This
+work has not separated the two causes.
+
+At 19 bits Linux and macOS already agree on that scene and Windows does not, which is the two Unix
+libms converging one bit before the third.
 
 The relative figure is much larger than the absolute one (8.9e-12 against 4.4e-16) because it
 lands on a transform component passing near zero, where relative error is meaningless. The

@@ -53,26 +53,35 @@ The spec digest deliberately excludes the platform, so two machines running one 
 it and the question becomes whether their **traces** agree. CI records the same spec on all three
 runners at a ladder of declared precisions and reads off the answer.
 
-|  | `demo` — only `+ − × ÷` and `abs` | `scene` — sweeps joints with `sin`, `cos` |
-|---|---|---|
-| linux vs macos | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
-| linux vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 8.861e-12 |
-| macos vs windows | **identical at bit-exact** | worst \|Δ\| **4.441e-16** · worst rel 5.179e-12 |
-| digests agree at | **exact** | **drop 20 of 52 mantissa bits** |
-| at 19 bits | — | linux = macos, windows differs |
+Four families, chosen so that one is the control for the next:
 
-**Cross-machine bit-exactness is achievable, and it is not luck.** Every operation in the demo's
-integrator is exactly specified by IEEE-754, so two conforming machines *must* agree. That they do
-says the pipeline between the arithmetic and the digest adds nothing of its own — no reordering,
-no contraction, no width surprises — which is worth establishing before trusting any receipt.
+| family | the maths it uses | worst \|Δ\| across the three | digests agree at |
+|---|---|---|---|
+| `demo` | `+ − × ÷`, `abs` | **bit-exact** | **exact** |
+| `arith` | + `rem_euclid`, `sqrt` | **bit-exact** | **exact** |
+| `trans` | `sin`, `cos`, `atan2` | 2.220e-16 — **1 ULP** | **12 bits** |
+| `scene` | those *and* a robot's kinematic chain | 4.441e-16 — **2 ULP** | **20 bits** |
 
-**What costs determinism is specific and nameable.** A libm is not the same function on three
-operating systems. The price is 4.441e-16, which is **2.00 units in the last place** at magnitude
-~1: two machines disagreeing about the last bit of a sine, twice. The two Unix libms converge one
-bit before the third.
+**Cross-machine bit-exactness is achievable, and it is not luck.** Every operation in the first
+two families is exactly specified by IEEE-754 — including `sqrt`, which is correctly rounded, and
+`rem_euclid`, which is exact — so two conforming machines *must* agree. That they do says the
+pipeline between the arithmetic and the digest adds nothing of its own: no reordering, no
+contraction, no width surprises.
 
-The relative figure is four orders larger than the absolute one because it lands on a transform
-component passing near zero, where relative error is meaningless. It is printed, not ranked on.
+**And an earlier version of this document was wrong about the rest.** It said `sin` and `cos` cost
+20 mantissa bits, on the evidence of the `scene` family alone. Adding `trans` — orbits and
+oscillations and nothing else — shows transcendentals alone cost **12**. The warehouse `scene`
+costs eight bits more than that, and only one of those eight is explained by its extra ULP.
+
+What else that scene has is a robot: a chain of transforms, more operations per value, and a
+`gripper_frame_link` component whose worst *relative* difference is **8.861e-12** against `trans`'s
+7.765e-16 — four orders larger, because it passes near zero. That is the §5 pathology appearing
+inside a §2 measurement. This work has not separated the chain from the near-zero channel, so the
+honest statement is: **transcendentals cost about 12 bits here; a kinematic chain carrying a
+quantity through zero costs eight more.**
+
+The two Unix libms converge one bit before the third: at 19 bits linux and macos agree on `scene`
+and windows does not.
 
 ### The same fact, said in units
 
@@ -214,8 +223,15 @@ ferroscope diff a.mcap b.mcap --declare
 
 ## Where this is weakest
 
-The single most load-bearing untested assumption is §2's generality: **one demo and one scene, on
-three runners.** The claim that pure IEEE-754 arithmetic is portable to the bit is a theorem and
-the measurement agrees with it; the claim that 20 mantissa bits is what `sin` and `cos` cost is one
-scene's worth of evidence, and a different trajectory through those functions could cost more. A
-second and third scene family would turn a data point into a range.
+§2 used to say this: *one demo and one scene, so "20 mantissa bits for sin and cos" is a single
+trajectory's evidence.* Two more families were added for exactly that reason and the claim did not
+survive them — transcendentals alone cost 12, and the 20 belonged to a scene with a robot in it.
+Naming a weakness turned out to be worth more than defending it.
+
+What is weakest now is one layer down: **the eight-bit gap between `trans` and `scene` is not
+separated.** A kinematic chain and a channel through zero are both present and either could
+dominate. A scene with the chain but no near-zero component, or the reverse, would split them —
+and the same construction that produced `arith` and `trans` would produce it.
+
+Below that: three libms is not a survey (§Method), and every trajectory here comes from this
+repository rather than from a physics engine with a contact solver.
