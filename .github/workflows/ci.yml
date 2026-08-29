@@ -12,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2.7.8
         with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -29,8 +29,8 @@ jobs:
         id: msrv
         run: echo "v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
-      - uses: Swatinem/rust-cache@v2.7.8
         with: { toolchain: "${{ steps.msrv.outputs.v }}" }
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --workspace --all-features
       - run: echo "the workspace builds on its declared MSRV ${{ steps.msrv.outputs.v }}"
 
@@ -41,8 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2.7.8
         with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2.7.8
       - run: >
           cargo build --target wasm32-unknown-unknown
           -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
@@ -862,8 +862,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2.7.8
         with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2.7.8
       # PINNED. The action defaults to the latest wasm-pack, and a release landed that cannot
       # parse `license.workspace = true` — "invalid type: map, expected a string for key
       # package.license". Nothing in this repo changed; a green job went red on its own. An
