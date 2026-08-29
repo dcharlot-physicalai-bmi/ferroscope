@@ -1104,3 +1104,53 @@ fn no_declaration_means_the_digest_this_crate_has_always_produced() {
         "a recording that declared nothing carries declarations"
     );
 }
+
+#[test]
+fn the_stored_worst_lag_keeps_its_sign() {
+    // A run that finished AHEAD of real time and one that fell BEHIND are different findings —
+    // it is the difference between a controller that is too slow and one that is not, and the
+    // reason a recording carries three clocks rather than one. The recorder stored `.abs()`, so
+    // the two were indistinguishable in the file while `inspect`, which recomputes from the
+    // messages, reported them correctly. One question, two implementations, one of them lossy.
+    let make = |wall_ahead: bool| {
+        let mut rec = Recorder::new(Vec::new(), Precision::Exact);
+        for step in 0..100u64 {
+            let sim = step * 1_000_000;
+            let drift = step * 300_000;
+            let (sim_ns, wall_ns) = if wall_ahead {
+                (sim, sim + drift)
+            } else {
+                (sim + drift, sim)
+            };
+            rec.scalar("/err", Stamp::at(sim_ns, wall_ns, step), step as f64, "m")
+                .unwrap();
+        }
+        let spec = ferroscope_receipt::RunSpec::new("clock", 1)
+            .dt_ns(1_000_000)
+            .steps(100)
+            .integrator("none")
+            .solver("none")
+            .build("integration-test");
+        let bytes = rec.seal_with(spec, "test-platform", Vec::new).unwrap().0;
+        let log = mcap::read(&bytes).expect("readable");
+        let kv = log
+            .metadata_block(RECEIPT_BLOCK)
+            .expect("receipt block")
+            .to_vec();
+        kv.iter()
+            .find(|(k, _)| k == "clock.max_lag_ns")
+            .map(|(_, v)| v.parse::<i64>().expect("a number"))
+            .expect("clock.max_lag_ns")
+    };
+    let ahead = make(true);
+    let behind = make(false);
+    assert!(
+        ahead > 0,
+        "a run ahead of real time should store a positive lag, got {ahead}"
+    );
+    assert!(
+        behind < 0,
+        "a run behind real time should store a negative lag, got {behind}"
+    );
+    assert_eq!(ahead, -behind, "the two should be equal and opposite");
+}

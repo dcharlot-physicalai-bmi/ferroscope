@@ -482,7 +482,14 @@ impl<W: Write> Recorder<W> {
         }
         self.first_sim_ns.get_or_insert(t.sim_ns);
         self.last_sim_ns = self.last_sim_ns.max(t.sim_ns);
-        self.max_lag_ns = self.max_lag_ns.max(t.lag_ns().abs());
+        // The largest lag BY MAGNITUDE, keeping its sign. Storing `.abs()` here made a run that
+        // finished ahead of real time indistinguishable from one falling behind — which is the
+        // difference between a controller that is too slow and one that is not, and the whole
+        // reason this file carries three clocks rather than one. `inspect` recomputes it signed
+        // from the messages, so the two disagreed: one question, two implementations, one lossy.
+        if t.lag_ns().abs() > self.max_lag_ns.abs() {
+            self.max_lag_ns = t.lag_ns();
+        }
         Ok(())
     }
 
@@ -698,6 +705,7 @@ impl<W: Write> Recorder<W> {
         ));
         kv.push(("energy.quotable".into(), quote.quotable.to_string()));
         kv.push(("energy.coverage".into(), quote.coverage.to_string()));
+        // Signed: negative means the wall clock ran BEHIND simulated time.
         kv.push(("clock.max_lag_ns".into(), self.max_lag_ns.to_string()));
         self.w.write_metadata(RECEIPT_BLOCK, &kv)?;
         let note = production();

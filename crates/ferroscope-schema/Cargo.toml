@@ -30,7 +30,11 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # ways is not a receipt.
 # 0.1.20 adds `Recorder::default_resolution`.
 # 0.1.21 threads the resolution sieve through `profile_streaming_declaring`.
-version = "0.1.21"
+# 0.1.22: the stored `clock.max_lag_ns` keeps its SIGN. It was an absolute value, so a run
+# that finished ahead of real time was indistinguishable in the file from one falling behind —
+# while `inspect`, recomputing from the messages, reported both correctly. Informational only:
+# the field is not hashed, and every recording sealed before this still verifies.
+version = "0.1.22"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
