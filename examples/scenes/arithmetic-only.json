@@ -1,0 +1,18 @@
+{
+  "name": "arithmetic-only",
+  "duration_s": 4,
+  "rate_hz": 100,
+  "ground": [6, 6],
+  "bodies": [
+    { "id": "shuttle", "shape": "box", "size": [0.3, 0.2, 0.2],
+      "motion": { "kind": "linear", "from": [-1.5, -0.8, 0.3], "to": [1.5, -0.8, 0.3], "period_s": 3 } },
+    { "id": "crate", "shape": "box", "size": [0.25, 0.25, 0.25],
+      "motion": { "kind": "fall", "from": [0.4, 0.6, 2.0] } },
+    { "id": "ball", "shape": "sphere", "size": [0.15, 0.15, 0.15],
+      "motion": { "kind": "fall", "from": [-0.7, 0.4, 1.4] } },
+    { "id": "sled", "shape": "box", "size": [0.4, 0.3, 0.1],
+      "motion": { "kind": "linear", "from": [0.0, 1.2, 0.05], "to": [0.0, -1.2, 0.05], "period_s": 5 } },
+    { "id": "post", "shape": "cylinder", "size": [0.08, 0.08, 1.0],
+      "motion": { "kind": "static", "at": [1.2, 1.2, 0.5] } }
+  ]
+}

@@ -965,6 +965,16 @@ jobs:
           # units of the thing rather than of the float, and checkable against the physics.
           $B scene examples/scenes/warehouse.json out/declared.mcap \
              --precision exact --resolution 1e-9 > /dev/null
+          # Two more scene families, chosen as a CONTROL and its opposite rather than as more
+          # scenes. `arith` moves bodies with `linear` and `fall`, which use rem_euclid, sqrt
+          # and arithmetic — every one of them exactly specified by IEEE-754. `trans` uses
+          # `orbit` and `oscillate`, which are sin, cos and atan2. If the 20 bits the warehouse
+          # scene costs is the transcendental path, `arith` should be free and `trans` should
+          # not, and one scene's evidence becomes a controlled contrast.
+          for p in exact 8 12 16 20 24; do
+            $B scene examples/scenes/arithmetic-only.json "out/arith-$p.mcap" --precision "$p" > /dev/null
+            $B scene examples/scenes/transcendental.json "out/trans-$p.mcap" --precision "$p" > /dev/null
+          done
           for p in exact 8 12 16 17 18 19 20 24; do
             $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
             # And a SCENE, which is the contrast that makes the demo's result mean something:
@@ -1017,7 +1027,7 @@ jobs:
             || { echo "the three runs are not even comparable: the spec digest differs"; exit 1; }
           echo "all three runs share a spec digest, as the receipt intends"
 
-          for kind in demo scene; do
+          for kind in demo scene arith trans; do
             echo
             echo "=== $kind ==="
             echo "trajectory difference, same spec, different machine:"
@@ -1031,7 +1041,13 @@ jobs:
 
             echo "trace digest agreement by declared precision:"
             agreed=""
-            for p in exact 8 12 16 17 18 19 20 24; do
+            # The two new families were recorded on a shorter ladder; asking for a rung that
+            # was never written would read as a disagreement rather than as a missing file.
+            case "$kind" in
+              arith|trans) ladder="exact 8 12 16 20 24" ;;
+              *)           ladder="exact 8 12 16 17 18 19 20 24" ;;
+            esac
+            for p in $ladder; do
               tl=$(trace "$LINUX/$kind-$p.mcap"); tm=$(trace "$MAC/$kind-$p.mcap"); tw=$(trace "$WIN/$kind-$p.mcap")
               if [ -n "$tl" ] && [ "$tl" = "$tm" ] && [ "$tl" = "$tw" ]; then
                 echo "  $p: ALL THREE AGREE"
