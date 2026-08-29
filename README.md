@@ -1326,7 +1326,9 @@ get the distance and the per-axis deltas. It measures what you can see, includin
 has never been told anything about.
 
 Drop a file on **A** to read it, a second on **B** to compare. No bundler, no worker, no upload,
-no account. **Turn your network off and it still works**: three.js is vendored into the repository rather
+no account. **Turn your network off and it still works** — verified in CI, not asserted: a
+headless Chrome loads the page, goes offline, and then opens a recording, compares two, and draws
+their meshes, while any outbound request at all fails the build. It currently makes none. three.js is vendored into the repository rather
 than pulled from a CDN, for exactly that reason.
 
 The same functions are callable from any page:

@@ -320,6 +320,62 @@ try {
     await page.close();
   }
 
+  // ---- 5. with the network turned off -------------------------------------------------------
+  // The README says "turn your network off and it still works" and the crate docs say the page
+  // opens *your* recording with the network turned off. That is a claim someone with a
+  // confidential run might rely on, and it had never been tested. So: load the page, go
+  // OFFLINE, and then do the work.
+  {
+    const page = await browser.newPage();
+    const errors = [];
+    const attempted = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(`${base}/index.html`, { waitUntil: 'load' });
+    await page.waitForSelector('#fileA', { timeout: 60000 });
+    await page.waitForFunction(() => /^v\d/.test(document.getElementById('ver').textContent),
+      { timeout: 120000, polling: 250 });
+
+    // Everything the page needs must already be here. Record anything it reaches for anyway —
+    // a request that fails silently would leave the page working and the claim still broken.
+    page.on('request', r => attempted.push(r.url()));
+    await page.setOfflineMode(true);
+
+    await (await page.$('#fileA')).uploadFile(resolve(file));
+    await page.waitForFunction(
+      () => document.getElementById('tree').textContent.length > 20
+         || document.getElementById('err').style.display === 'block',
+      { timeout: 300000, polling: 250 }).catch(() => {});
+    await (await page.$('#fileB')).uploadFile(resolve(fileB));
+    await page.waitForFunction(
+      () => { const s = document.getElementById('strip');
+              return s.textContent.length > 0 && !/^comparing /.test(s.textContent); },
+      { timeout: 300000, polling: 250 }).catch(() => {});
+
+    const off = await page.evaluate(() => ({
+      tree: document.getElementById('tree').textContent.length,
+      strip: document.getElementById('strip').textContent,
+      err: document.getElementById('err').style.display === 'block'
+        ? document.getElementById('err').textContent : '',
+      meshes: +document.body.dataset.meshes || 0,
+    }));
+    await page.setOfflineMode(false);
+    await page.close();
+
+    if (off.err) fail(`offline: the page reported "${off.err.slice(0, 90)}"`);
+    else if (off.tree < 20) fail('offline: the recording did not open');
+    else if (!/vs/.test(off.strip)) fail(`offline: no verdict — "${off.strip.slice(0, 80)}"`);
+    else ok(`offline: opened, compared and drew ${off.meshes} mesh(es) with the network off`);
+    for (const e of errors) fail(`offline: page error: ${e}`);
+    if (attempted.length) {
+      // A FAILURE, not a note. "Nothing is uploaded" is a claim someone with a confidential run
+      // relies on, and a page that reaches out and silently swallows the error still works
+      // offline while breaking it. If a request ever becomes legitimate, this forces the
+      // decision to be made deliberately rather than noticed later.
+      fail(`offline: the page attempted ${attempted.length} request(s) — nothing should leave it`);
+      for (const u of [...new Set(attempted)].slice(0, 5)) console.error(`      ${u}`);
+    } else ok('offline: the page made no requests at all');
+  }
+
   if (!/read in blocks/.test(blocks.label)) fail('the viewer did not say it read the file in blocks');
   else ok('the viewer said it read the file in blocks');
   if (/read in blocks/.test(whole.label)) fail('a whole-file read claimed to be a block read');
