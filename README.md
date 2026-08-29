@@ -471,6 +471,10 @@ $ ferroscope verify a.mcap
 
 #### So how far apart are three machines, actually?
 
+> Every determinism measurement in this README — with the machine that made it and the command
+> that makes it again — is collected in **[docs/DETERMINISM.md](docs/DETERMINISM.md)**, including
+> what this work did *not* measure and where it is weakest.
+
 The platform is left out of the spec digest *because comparing across platforms is the entire
 point* — and this project had never measured what that comparison returns. It does now, in CI, on
 every push: the same spec recorded on **Linux x86-64, macOS arm64 and Windows x86-64**, at a
