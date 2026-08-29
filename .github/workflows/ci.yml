@@ -982,6 +982,23 @@ jobs:
             $B scene examples/scenes/chain-origin.json "out/chainzero-$p.mcap" --precision "$p" > /dev/null
             $B scene examples/scenes/chain-offset.json "out/chainaway-$p.mcap" --precision "$p" > /dev/null
           done
+          # How much of a bit count is SAMPLING LUCK? The same robot and sweep came out at 20
+          # bits at 120 Hz and 24 at 100 Hz, which is two points and an anecdote. This is the
+          # same scene at five rates, changing nothing else: how close a trajectory passes to
+          # zero depends on where the samples land, so the spread across rates IS the scatter.
+          for hz in 80 100 120 150 200; do
+            # sed, not a heredoc: an indented `<<EOF` inside a YAML block does not terminate,
+            # because the closing marker carries the block's leading spaces. Caught before
+            # pushing it; a job that silently swallows the rest of the script is a bad way to
+            # learn that.
+            sed "s/\"rate_hz\": 4.0/\"rate_hz\": $hz.0/; s/\"rate_hz\": 100/\"rate_hz\": $hz/" \
+              examples/scenes/chain-origin.json > "rate-$hz.json"
+            grep -q "\"rate_hz\": $hz" "rate-$hz.json" \
+              || { echo "rate substitution did not take for $hz"; cat "rate-$hz.json"; exit 1; }
+            for p in exact 8 12 16 20 24 28; do
+              $B scene "rate-$hz.json" "out/rate${hz}-$p.mcap" --precision "$p" > /dev/null
+            done
+          done
           for p in exact 8 12 16 17 18 19 20 24; do
             $B demo "out/demo-$p.mcap" --steps 4000 --seed 7 --precision "$p" > /dev/null
             # And a SCENE, which is the contrast that makes the demo's result mean something:
@@ -1034,7 +1051,7 @@ jobs:
             || { echo "the three runs are not even comparable: the spec digest differs"; exit 1; }
           echo "all three runs share a spec digest, as the receipt intends"
 
-          for kind in demo scene arith trans chainzero chainaway; do
+          for kind in demo scene arith trans chainzero chainaway rate80 rate100 rate120 rate150 rate200; do
             echo
             echo "=== $kind ==="
             echo "trajectory difference, same spec, different machine:"
@@ -1051,6 +1068,7 @@ jobs:
             # The two new families were recorded on a shorter ladder; asking for a rung that
             # was never written would read as a disagreement rather than as a missing file.
             case "$kind" in
+              rate*)       ladder="exact 8 12 16 20 24 28" ;;
               arith|trans|chainzero|chainaway) ladder="exact 8 12 16 20 24" ;;
               *)           ladder="exact 8 12 16 17 18 19 20 24" ;;
             esac
