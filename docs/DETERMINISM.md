@@ -83,49 +83,39 @@ quantity through zero costs eight more.**
 The two Unix libms converge one bit before the third: at 19 bits linux and macos agree on `scene`
 and windows does not.
 
-### 2.1 Trying to split those eight bits
+### 2.1 Trying to split those eight bits, and finding the scatter instead
 
 Two candidates were named above — the chain, and a component passing near zero — so: the same
-robot, the same joint sweep, mounted at the origin and then 4.4 m away from it, nothing else
-different.
+robot, the same joint sweep, mounted at the origin and then 4.4 m away, nothing else different.
+Then, because the first pass produced a number that looked like an answer, the same scene at five
+sample rates with *nothing at all* different.
 
 | family | robot | rate | agrees at |
 |---|---|---|---|
-| `trans` | none | 100 Hz | 12 |
-| `scene` | at the origin | 120 Hz | 20 |
-| `chainzero` | at the origin | 100 Hz | **24** |
-| `chainaway` | at [2.5, 3.5, 1.0] | 100 Hz | **20** |
+| `trans` | none | 100 Hz | ≤ 12 |
+| `chainzero` | at the origin | 100 Hz | 22 |
+| `chainaway` | at [2.5, 3.5, 1.0] | 100 Hz | 19 |
+| the same scene at | 80 · 100 · 120 · 150 · 200 Hz | — | **19 · 22 · 20 · 21 · 22** |
 
-**Moving the base off the origin bought four bits, and did not get near twelve.** So proximity to
-the world origin matters a little and is not the explanation. The reason is visible in the
-binding channel, which is `/scene/arm/tf/gripper_frame_link` in *both* runs with the same worst
-relative difference either way: **translating the base did not translate the near-zero quantity**.
-Whatever the chain is producing small, it produces small wherever it stands.
+**The sample rate alone moves the answer by three bits**, with no trend — 80 Hz is the cheapest
+and 100 Hz the dearest. How close a trajectory happens to pass to zero depends on where the
+samples land, and that is luck.
 
-**And the sampling matters as much as the geometry.** `scene` and `chainzero` are the same robot
-running the same sweep — 20 bits and 24 bits, differing in rate and in what else is in the scene.
-The closest a trajectory happens to pass to zero depends on where the samples land, and that is
-luck, not physics.
+**Which means the offset result does not survive.** `chainaway` came out at 19, and 19 is the
+bottom of the band the origin-mounted scene produces on its own. One measurement against a
+distribution three bits wide is not a finding. The honest statement is that **mounting the chain
+away from the origin was not shown to help**, not that it helps by three bits — which is what an
+earlier version of this section said, on the strength of a single pair.
 
-So the eight bits are still not attributed, and the more useful finding is the one that came out
-sideways: **these counts carry about four bits of scatter from sampling alone.** A single number
-for "what sin and cos cost" was always going to be too precise a question.
+Nor is either number what it first appeared. On a ladder with rungs every four bits the pair read
+24 and 20 and the rate sweep read "20 or 24"; stepping one bit at a time gives 22, 19, and a
+19–22 band. **The coarse ladder was reporting its own granularity.** That is the same error this
+document warns about in §5 — reading the nearest rung above as though it were the number — made
+twice more before it was caught.
 
-### The same fact, said in units
-
-```sh
-ferroscope scene examples/scenes/warehouse.json out.mcap --precision exact --resolution 1e-9
-```
-
-Declare what the run claims — a nanometre, a nanoradian — and the three machines produce **one
-digest at bit-exact precision**. `drop_bits 20` and `1e-9 of each unit` are the same underlying
-fact, but only one of them is a sentence about a robot.
-
-That works here because the scene is 400 steps and the differences sum to about 2e-13, far inside
-a nanometre cell. See §5: a longer run needs a coarser claim.
-
-*Reproduce:* the `platforms` and `platform-agreement` jobs in `.github/workflows/ci.yml`, on every
-push.
+So the eight bits between `trans` and a scene with a robot in it remain unattributed, and the
+useful result is the one that came out sideways: **a chain costs 19–22 bits, and where in that
+band a particular run lands is sampling luck rather than physics.**
 
 ## 3. A fabric that reduces in parallel
 

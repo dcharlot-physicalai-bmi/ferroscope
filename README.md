@@ -529,14 +529,14 @@ work has not separated the two causes.
 At 19 bits Linux and macOS already agree on that scene and Windows does not, which is the two Unix
 libms converging one bit before the third.
 
-**A follow-up tried to split those eight bits and could not** — which produced a more useful
-number than success would have. The same robot, the same sweep, mounted at the origin and 4.4 m
-away: **24 bits and 20**. Moving the base bought four bits and did not approach twelve, and the
-binding channel stayed the same transform component with the same relative error, so translating
-the base did not translate the near-zero quantity. Meanwhile that robot at the origin costs 24 at
-100 Hz and 20 at 120 Hz — same robot, same sweep. **These counts carry about four bits of scatter
-from sampling alone**, and a single number for "what `sin` and `cos` cost" was always too precise
-a question. [docs/DETERMINISM.md §2.1](docs/DETERMINISM.md) has the table.
+**A follow-up tried to split those eight bits, could not, and found something better.** The same
+robot at five sample rates — nothing else different — agrees at **19, 22, 20, 21 and 22 bits**.
+The sample rate alone moves the answer by three bits, with no trend, because how close a
+trajectory passes to zero depends on where the samples land. So the mounting experiment that
+looked like it "bought four bits" does not survive: its 19 is the bottom of the band the same
+scene produces by itself. **A chain costs 19–22 bits, and where in that band a run lands is
+luck.** [docs/DETERMINISM.md §2.1](docs/DETERMINISM.md) has the table, including the two numbers
+that turned out to be the ladder's granularity rather than the effect's.
 
 The relative figure is much larger than the absolute one (8.9e-12 against 4.4e-16) because it
 lands on a transform component passing near zero, where relative error is meaningless. The
