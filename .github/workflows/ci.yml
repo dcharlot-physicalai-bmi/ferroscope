@@ -995,7 +995,11 @@ jobs:
               examples/scenes/chain-origin.json > "rate-$hz.json"
             grep -q "\"rate_hz\": $hz" "rate-$hz.json" \
               || { echo "rate substitution did not take for $hz"; cat "rate-$hz.json"; exit 1; }
-            for p in exact 8 12 16 20 24 28; do
+            # ONE BIT AT A TIME across the range these land in. The first pass used the
+            # 4-bit ladder and reported "20 or 24" — which is the granularity of the ladder,
+            # not of the effect, and measures the instrument rather than the thing. Same
+            # mistake as reading "agrees at 20" off a coarse ladder earlier in this file.
+            for p in 17 18 19 20 21 22 23 24 25 26; do
               $B scene "rate-$hz.json" "out/rate${hz}-$p.mcap" --precision "$p" > /dev/null
             done
           done
@@ -1068,7 +1072,7 @@ jobs:
             # The two new families were recorded on a shorter ladder; asking for a rung that
             # was never written would read as a disagreement rather than as a missing file.
             case "$kind" in
-              rate*)       ladder="exact 8 12 16 20 24 28" ;;
+              rate*)       ladder="17 18 19 20 21 22 23 24 25 26" ;;
               arith|trans|chainzero|chainaway) ladder="exact 8 12 16 20 24" ;;
               *)           ladder="exact 8 12 16 17 18 19 20 24" ;;
             esac
