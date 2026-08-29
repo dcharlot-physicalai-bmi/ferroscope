@@ -83,6 +83,34 @@ quantity through zero costs eight more.**
 The two Unix libms converge one bit before the third: at 19 bits linux and macos agree on `scene`
 and windows does not.
 
+### 2.1 Trying to split those eight bits
+
+Two candidates were named above — the chain, and a component passing near zero — so: the same
+robot, the same joint sweep, mounted at the origin and then 4.4 m away from it, nothing else
+different.
+
+| family | robot | rate | agrees at |
+|---|---|---|---|
+| `trans` | none | 100 Hz | 12 |
+| `scene` | at the origin | 120 Hz | 20 |
+| `chainzero` | at the origin | 100 Hz | **24** |
+| `chainaway` | at [2.5, 3.5, 1.0] | 100 Hz | **20** |
+
+**Moving the base off the origin bought four bits, and did not get near twelve.** So proximity to
+the world origin matters a little and is not the explanation. The reason is visible in the
+binding channel, which is `/scene/arm/tf/gripper_frame_link` in *both* runs with the same worst
+relative difference either way: **translating the base did not translate the near-zero quantity**.
+Whatever the chain is producing small, it produces small wherever it stands.
+
+**And the sampling matters as much as the geometry.** `scene` and `chainzero` are the same robot
+running the same sweep — 20 bits and 24 bits, differing in rate and in what else is in the scene.
+The closest a trajectory happens to pass to zero depends on where the samples land, and that is
+luck, not physics.
+
+So the eight bits are still not attributed, and the more useful finding is the one that came out
+sideways: **these counts carry about four bits of scatter from sampling alone.** A single number
+for "what sin and cos cost" was always going to be too precise a question.
+
 ### The same fact, said in units
 
 ```sh
@@ -228,10 +256,10 @@ trajectory's evidence.* Two more families were added for exactly that reason and
 survive them — transcendentals alone cost 12, and the 20 belonged to a scene with a robot in it.
 Naming a weakness turned out to be worth more than defending it.
 
-What is weakest now is one layer down: **the eight-bit gap between `trans` and `scene` is not
-separated.** A kinematic chain and a channel through zero are both present and either could
-dominate. A scene with the chain but no near-zero component, or the reverse, would split them —
-and the same construction that produced `arith` and `trans` would produce it.
+The attempt to split that gap is §2.1, and it did not split cleanly. What is weakest now is that
+**several of these bit counts carry a few bits of sampling luck**, which no amount of care about
+the maths removes: the closest a trajectory happens to pass to zero depends on where the samples
+land, and the same robot at 100 Hz and 120 Hz differs by four bits. Read the numbers as a range.
 
 Below that: three libms is not a survey (§Method), and every trajectory here comes from this
 repository rather than from a physics engine with a contact solver.
