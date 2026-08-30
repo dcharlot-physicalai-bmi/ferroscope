@@ -957,6 +957,20 @@ jobs:
       - uses: jetli/wasm-pack-action@v0.4.0
         with: { version: 'v0.15.0' }
       - run: ./viewer/build.sh
+      # `viewer/pkg` is committed so the directory can be served as-is, and the `browser` job now
+      # builds its own copy -- which means nothing was checking the COMMITTED one any more. Its
+      # generated glue is deterministic given the crate API and a pinned wasm-pack, so a diff on
+      # it catches a bundle whose exports have gone stale. The `.wasm` is NOT compared: it is
+      # built on a different platform here and its bytes legitimately differ.
+      - name: the committed bundle is not stale against the crate it wraps
+        run: |
+          git diff --exit-code -- viewer/pkg/ferroscope_wasm.js || {
+            echo
+            echo "The committed viewer bundle does not match a fresh build of the wasm crate."
+            echo "Run ./viewer/build.sh and commit viewer/pkg."
+            exit 1
+          }
+          echo "  the committed bundle's exports match the crate at this commit"
       - name: the bundle landed in viewer/pkg and nowhere else
         # wasm-pack resolves --out-dir against the crate path, so this check once passed
         # vacuously while the real bundle was never rewritten.
