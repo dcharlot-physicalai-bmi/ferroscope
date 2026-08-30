@@ -119,3 +119,57 @@ mod serde_lite {
         }
     }
 }
+
+/// Two runs that differ must not be called identical.
+///
+/// This is the failure that prompted the whole check: the streaming comparator could not decode
+/// CDR, so it compared ZERO values across two recordings differing in 600 messages and reported
+/// "bit-exact: every float identical". A false negative from the tool's flagship verdict.
+#[test]
+fn a_diverging_ros2_pair_is_not_reported_identical() {
+    let a = recording();
+    // The same recording with one message perturbed by a nanosecond in `nanosec`.
+    let b = {
+        let mut w = Writer::new(Vec::new(), WriterOptions::new("ros2", "ros2-test"));
+        let s = w
+            .add_schema("builtin_interfaces/Time", "ros2msg", DEF.as_bytes())
+            .unwrap();
+        let c = w.add_channel("/clock", s, "cdr", &[]).unwrap();
+        for i in 0..200u32 {
+            let t = u64::from(i) * 1_000_000;
+            let n = if i == 150 { i * 7 + 1 } else { i * 7 };
+            w.write_message(c, i, t, t, &cdr_time(i as i32, n)).unwrap();
+        }
+        w.finish().unwrap()
+    };
+    assert_ne!(a, b, "the fixtures are identical: the test proves nothing");
+
+    let (_, ta) = ferroscope_schema::trace_from(&a).expect("trace a");
+    let (_, tb) = ferroscope_schema::trace_from(&b).expect("trace b");
+    assert!(
+        !ta.samples.is_empty(),
+        "no samples decoded from a ROS 2 file"
+    );
+
+    let verdict = ferroscope_receipt::compare(&ta, &tb, ferroscope_receipt::Tolerance::default());
+    assert!(
+        !matches!(verdict, ferroscope_receipt::Verdict::BitExact),
+        "two different ROS 2 recordings were reported bit-exact"
+    );
+}
+
+/// The slice and streaming TRACE readers must agree too — the same equality that caught the
+/// bundle readers diverging.
+#[test]
+fn both_trace_readers_agree_on_ros2() {
+    let bytes = recording();
+    let (_, slice) = ferroscope_schema::trace_from(&bytes).expect("slice trace");
+    let (_, streamed) = ferroscope_schema::trace_from_streaming(std::io::Cursor::new(&bytes))
+        .expect("streaming trace");
+    assert_eq!(
+        slice.samples.len(),
+        streamed.samples.len(),
+        "the two trace readers disagree about how many samples a ROS 2 file has"
+    );
+    assert_eq!(slice.samples, streamed.samples);
+}

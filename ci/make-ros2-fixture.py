@@ -37,12 +37,16 @@ def position(i):
     return [math.sin(i * 0.01) * 1.2, math.cos(i * 0.013) * 0.8, i * 0.0004]
 
 
-def main(out):
+def main(out, drift_at=None, eps=1e-9):
+    """`drift_at` perturbs position[0] from that message on, for comparator fixtures."""
     with open(out, "wb") as f:
         w = Writer(f, compression=CompressionType.ZSTD)
         schema = w.register_msgdef("sensor_msgs/msg/JointState", DEF)
         for i in range(MESSAGES):
             t = i * 10_000_000  # 100 Hz
+            p = position(i)
+            if drift_at is not None and i >= drift_at:
+                p = [p[0] + eps, p[1], p[2]]
             w.write_message(
                 "/joint_states",
                 schema,
@@ -52,7 +56,7 @@ def main(out):
                         "frame_id": "base",
                     },
                     "name": ["shoulder", "elbow", "wrist"],
-                    "position": position(i),
+                    "position": p,
                     "velocity": [0.0, 0.0, 0.0],
                     "effort": [1.5, -0.25, 0.0],
                 },
@@ -64,4 +68,6 @@ def main(out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "ros2.mcap")
+    out = sys.argv[1] if len(sys.argv) > 1 else "ros2.mcap"
+    drift = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    main(out, drift)

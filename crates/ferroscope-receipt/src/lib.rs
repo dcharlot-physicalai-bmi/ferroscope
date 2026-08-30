@@ -746,6 +746,14 @@ pub struct Comparison {
     /// The first terminal verdict wins, because [`compare`] returns on the first one it meets.
     /// Once set, further pairs change nothing.
     settled: Option<Verdict>,
+    /// How many value pairs were actually compared.
+    ///
+    /// Without this, `finish` answered BitExact for two traces with NOTHING in them: the fold
+    /// asks "was any bit different", and over zero pairs the answer is no. That is how two ROS 2
+    /// recordings that differ in 600 messages were reported as "bit-exact: every float
+    /// identical" -- the comparator could not decode their payloads, so it compared nothing and
+    /// called it agreement. A verdict about no evidence has to say so.
+    pairs: u64,
     any_bit_difference: bool,
     first_bit_diff: Option<(u64, String)>,
     max_abs: f64,
@@ -761,6 +769,7 @@ impl Comparison {
         Self {
             tol,
             settled: None,
+            pairs: 0,
             any_bit_difference: false,
             first_bit_diff: None,
             max_abs: 0.0,
@@ -807,6 +816,7 @@ impl Comparison {
         // demo pair it named a hip velocity at rel 3.7e-8 while the injected perturbation —
         // the contact force, in the same message — differed at rel 1e-4.
         let mut crossing: Option<(usize, f64, f64, f64, f64)> = None;
+        self.pairs += xs.len() as u64;
         for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
             if !x.is_finite() || !y.is_finite() {
                 self.settled = Some(Verdict::NonFinite {
@@ -865,6 +875,12 @@ impl Comparison {
     pub fn finish(mut self) -> Verdict {
         if let Some(v) = self.settled {
             return v;
+        }
+        if self.pairs == 0 {
+            return Verdict::Incomparable {
+                reason: "no values were compared: neither recording yielded any readable numbers"
+                    .to_string(),
+            };
         }
         if !self.any_bit_difference {
             return Verdict::BitExact;
@@ -1014,6 +1030,32 @@ mod tests {
             }
             other => panic!("expected divergence at step 6, got {other}"),
         }
+    }
+
+    /// Comparing NOTHING is not agreement.
+    ///
+    /// `finish` asks "was any bit different", and over zero pairs the answer is no — so it
+    /// answered `BitExact`. That is how two ROS 2 recordings differing in 600 messages were
+    /// reported as "bit-exact: every float identical": the comparator could not decode their
+    /// payloads, compared nothing, and called it a match. The flagship verdict of this tool
+    /// must not be reachable without evidence.
+    #[test]
+    fn a_comparison_with_no_pairs_is_incomparable_not_bit_exact() {
+        let c = Comparison::new(Tolerance::default());
+        match c.finish() {
+            Verdict::Incomparable { reason } => {
+                assert!(reason.contains("no values"), "unhelpful reason: {reason}");
+            }
+            other => panic!("comparing nothing produced {other}"),
+        }
+    }
+
+    /// And one real pair is enough to make the verdict meaningful again.
+    #[test]
+    fn a_single_matching_pair_is_bit_exact() {
+        let mut c = Comparison::new(Tolerance::default());
+        c.push(0, "/a", &[1.0, 2.0], &[1.0, 2.0]);
+        assert_eq!(c.finish(), Verdict::BitExact);
     }
 
     #[test]

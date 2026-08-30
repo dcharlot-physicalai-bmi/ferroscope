@@ -757,6 +757,8 @@ pub fn verify(bytes: &[u8]) -> Option<Verification> {
     let mut ledger = Ledger::new();
     let mut count = 0usize;
 
+    let defs = ros2_defs(&log);
+    let mut seq: BTreeMap<String, u64> = BTreeMap::new();
     for m in &log.messages {
         let ch = log.channel(m.channel_id)?;
         let schema = log
@@ -767,9 +769,21 @@ pub fn verify(bytes: &[u8]) -> Option<Verification> {
         if schema == "ferroscope.Event" {
             continue;
         }
-        let text = std::str::from_utf8(&m.data).ok()?;
-        let v = json::parse(text)?;
-        let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+        let is_cdr = ch.message_encoding == "cdr";
+        // Skipped, not fatal and not zero-filled. `?` here abandoned the whole verification on
+        // one unreadable message, which reads to a caller as "no receipt" -- the diagnostic that
+        // was already blaming the wrong thing for a truncated file.
+        let Some(v) = payload_value(&m.data, is_cdr, defs.get(&ch.schema_id)) else {
+            continue;
+        };
+        let step = if is_cdr {
+            let n = seq.entry(ch.topic.clone()).or_insert(0);
+            let at = *n;
+            *n += 1;
+            at
+        } else {
+            v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64
+        };
 
         let values = digest_values(schema, &v);
         digest.step(step, &ch.topic, &values);
@@ -861,6 +875,11 @@ fn pour_into<R: std::io::Read>(
 pub struct VerifyFold {
     feed: ferroscope_mcap::Feed,
     schemas: BTreeMap<u16, String>,
+    /// ROS 2 definitions, so the recomputed digest covers the same values the comparator reads.
+    /// A digest over payloads one reader can decode and another cannot is not a receipt.
+    defs: BTreeMap<u16, ferroscope_ros2::MessageDef>,
+    cdr: BTreeMap<u16, bool>,
+    seq: BTreeMap<String, u64>,
     channels: BTreeMap<u16, (String, u16)>,
     receipt: Option<Receipt>,
     /// Pass two only.
@@ -883,6 +902,9 @@ impl VerifyFold {
         Self {
             feed: ferroscope_mcap::Feed::new(),
             schemas: BTreeMap::new(),
+            defs: BTreeMap::new(),
+            cdr: BTreeMap::new(),
+            seq: BTreeMap::new(),
             channels: BTreeMap::new(),
             receipt: None,
             digest: None,
@@ -901,8 +923,23 @@ impl VerifyFold {
             return false;
         }
         self.feed.push(block);
-        let (schemas, channels, receipt, digest, ledger, count, joint_names, second) = (
+        let (
+            schemas,
+            defs,
+            cdr,
+            seq,
+            channels,
+            receipt,
+            digest,
+            ledger,
+            count,
+            joint_names,
+            second,
+        ) = (
             &mut self.schemas,
+            &mut self.defs,
+            &mut self.cdr,
+            &mut self.seq,
             &mut self.channels,
             &mut self.receipt,
             &mut self.digest,
@@ -914,9 +951,16 @@ impl VerifyFold {
         let outcome = self.feed.drain(&mut |rec| {
             match rec {
                 Record::Schema(sc) => {
+                    if sc.encoding == "ros2msg"
+                        && let Ok(text) = std::str::from_utf8(&sc.data)
+                        && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+                    {
+                        defs.insert(sc.id, d);
+                    }
                     schemas.insert(sc.id, sc.name);
                 }
                 Record::Channel(ch) => {
+                    cdr.insert(ch.id, ch.message_encoding == "cdr");
                     channels.insert(ch.id, (ch.topic, ch.schema_id));
                 }
                 Record::Metadata { name, kv } if !second => {
@@ -933,10 +977,8 @@ impl VerifyFold {
                     if schema == "ferroscope.Event" {
                         return Ok(Flow::Continue);
                     }
-                    let Ok(text) = std::str::from_utf8(m.data) else {
-                        return Ok(Flow::Continue);
-                    };
-                    let Some(v) = json::parse(text) else {
+                    let is_cdr = cdr.get(&m.channel_id).copied().unwrap_or(false);
+                    let Some(v) = crate::payload_value(m.data, is_cdr, defs.get(schema_id)) else {
                         return Ok(Flow::Continue);
                     };
                     // Joint names live in the payload, so the FIRST message on a topic is the
@@ -953,7 +995,14 @@ impl VerifyFold {
                             .unwrap_or_default();
                         joint_names.insert(topic.clone(), names);
                     }
-                    let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                    let step = if is_cdr {
+                        let n = seq.entry(topic.clone()).or_insert(0);
+                        let at = *n;
+                        *n += 1;
+                        at
+                    } else {
+                        v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64
+                    };
                     if let Some(d) = digest.as_mut() {
                         d.step(step, topic, &digest_values(schema, &v));
                         *count += 1;
@@ -1145,13 +1194,23 @@ pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<
     let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
     let mut names: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut defs: BTreeMap<u16, ferroscope_ros2::MessageDef> = BTreeMap::new();
+    let mut cdr: BTreeMap<u16, bool> = BTreeMap::new();
+    let mut ros2: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     let _ = ferroscope_mcap::stream(r, |rec| {
         match rec {
             Record::Schema(sc) => {
+                if sc.encoding == "ros2msg"
+                    && let Ok(text) = std::str::from_utf8(&sc.data)
+                    && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+                {
+                    defs.insert(sc.id, d);
+                }
                 schemas.insert(sc.id, sc.name);
             }
             Record::Channel(ch) => {
+                cdr.insert(ch.id, ch.message_encoding == "cdr");
                 channels.insert(ch.id, (ch.topic, ch.schema_id));
             }
             Record::Message(m) => {
@@ -1160,6 +1219,16 @@ pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<
                 let Some((topic, schema_id)) = channels.get(&m.channel_id) else {
                     return Ok(Flow::Continue);
                 };
+                // A ROS 2 message names its own fields, so the comparator can say
+                // `position[0]` instead of `[2]` without knowing anything about the message.
+                if cdr.get(&m.channel_id).copied().unwrap_or(false)
+                    && let Some(def) = defs.get(schema_id)
+                    && !ros2.contains_key(topic)
+                    && let Ok((_, labels)) = def.decode_labeled(m.data)
+                {
+                    ros2.insert(topic.clone(), labels);
+                    return Ok(Flow::Continue);
+                }
                 if schemas.get(schema_id).map(|s| s.as_str()) != Some("ferroscope.JointState") {
                     return Ok(Flow::Continue);
                 }
@@ -1185,6 +1254,10 @@ pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<
     });
 
     for (topic, schema_id) in channels.values() {
+        if let Some(l) = ros2.get(topic) {
+            out.insert(topic.clone(), l.clone());
+            continue;
+        }
         let schema = schemas.get(schema_id).map(|s| s.as_str()).unwrap_or("");
         let joint = names.get(topic).cloned().unwrap_or_default();
         let labels = component_labels(schema, &joint);
@@ -1195,6 +1268,23 @@ pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<
     out
 }
 
+/// The ROS 2 message definitions a recording carries, by schema id.
+///
+/// Shared by every slice-side reader, because the streaming and slice readers of one question
+/// diverging is exactly how the browser came to show a `ros2 bag` with no lanes.
+pub(crate) fn ros2_defs(log: &Log) -> BTreeMap<u16, ferroscope_ros2::MessageDef> {
+    let mut defs = BTreeMap::new();
+    for sc in &log.schemas {
+        if sc.encoding == "ros2msg"
+            && let Ok(text) = std::str::from_utf8(&sc.data)
+            && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+        {
+            defs.insert(sc.id, d);
+        }
+    }
+    defs
+}
+
 /// Rebuild the comparable trace from a recording, so two files produced on two machines can
 /// be handed straight to [`ferroscope_receipt::compare`].
 pub fn trace_from(bytes: &[u8]) -> Option<(Option<Receipt>, Trace)> {
@@ -1203,6 +1293,8 @@ pub fn trace_from(bytes: &[u8]) -> Option<(Option<Receipt>, Trace)> {
         .metadata_block(RECEIPT_BLOCK)
         .and_then(Receipt::from_pairs);
     let mut trace = Trace::default();
+    let defs = ros2_defs(&log);
+    let mut seq: BTreeMap<String, u64> = BTreeMap::new();
     for m in &log.messages {
         let ch = log.channel(m.channel_id)?;
         let schema = log
@@ -1212,8 +1304,20 @@ pub fn trace_from(bytes: &[u8]) -> Option<(Option<Receipt>, Trace)> {
         if schema == "ferroscope.Event" {
             continue;
         }
-        let v = json::parse(std::str::from_utf8(&m.data).ok()?)?;
-        let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+        let is_cdr = ch.message_encoding == "cdr";
+        // A payload this reader cannot decode is skipped, not zero-filled. It used to abandon
+        // the WHOLE trace instead (`?` on a single bad message), which is worse than either.
+        let Some(v) = payload_value(&m.data, is_cdr, defs.get(&ch.schema_id)) else {
+            continue;
+        };
+        let step = if is_cdr {
+            let n = seq.entry(ch.topic.clone()).or_insert(0);
+            let at = *n;
+            *n += 1;
+            at
+        } else {
+            v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64
+        };
         trace.push(step, ch.topic.clone(), digest_values(schema, &v));
     }
     Some((receipt, trace))
@@ -1286,11 +1390,21 @@ fn digest_values(schema: &str, v: &json::Value) -> Vec<f64> {
 pub fn channel_labels(bytes: &[u8]) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let Ok(log) = read(bytes) else { return out };
+    let defs = ros2_defs(&log);
     for ch in &log.channels {
         let schema = log
             .schema(ch.schema_id)
             .map(|s| s.name.as_str())
             .unwrap_or("");
+        // A ROS 2 message names its own fields, so `position[0]` needs nothing but the file.
+        if ch.message_encoding == "cdr"
+            && let Some(def) = defs.get(&ch.schema_id)
+            && let Some(m) = log.messages_on(&ch.topic).next()
+            && let Ok((_, labels)) = def.decode_labeled(&m.data)
+        {
+            out.insert(ch.topic.clone(), labels);
+            continue;
+        }
         // Joint names live in the payload, so the first message on the topic is the source.
         let names: Vec<String> = if schema == "ferroscope.JointState" {
             log.messages_on(&ch.topic)
@@ -1403,6 +1517,12 @@ pub fn metadata_streaming<R: std::io::Read>(r: R, block: &str) -> Option<Vec<(St
 struct SampleFeed {
     feed: ferroscope_mcap::Feed,
     schemas: BTreeMap<u16, String>,
+    /// ROS 2 definitions the file carries, so the comparator reads a `ros2 bag` too. Without
+    /// these it decoded nothing from one and reported "bit-exact" over an empty comparison.
+    defs: BTreeMap<u16, ferroscope_ros2::MessageDef>,
+    cdr: BTreeMap<u16, bool>,
+    /// Per-topic message counter, standing in for the step a ROS 2 message does not carry.
+    seq: BTreeMap<String, u64>,
     channels: BTreeMap<u16, (String, u16)>,
     queue: std::collections::VecDeque<ferroscope_receipt::Sample>,
     /// Every sample this file produced, whether or not it found a partner. It is what turns a
@@ -1424,6 +1544,9 @@ impl SampleFeed {
         Self {
             feed: ferroscope_mcap::Feed::new(),
             schemas: BTreeMap::new(),
+            defs: BTreeMap::new(),
+            cdr: BTreeMap::new(),
+            seq: BTreeMap::new(),
             channels: BTreeMap::new(),
             queue: std::collections::VecDeque::new(),
             total: 0,
@@ -1442,8 +1565,11 @@ impl SampleFeed {
             return false;
         }
         self.feed.push(block);
-        let (schemas, channels, queue, total, last_step, seen, ordered) = (
+        let (schemas, defs, cdr, seq, channels, queue, total, last_step, seen, ordered) = (
             &mut self.schemas,
+            &mut self.defs,
+            &mut self.cdr,
+            &mut self.seq,
             &mut self.channels,
             &mut self.queue,
             &mut self.total,
@@ -1454,9 +1580,16 @@ impl SampleFeed {
         let outcome = self.feed.drain(&mut |rec| {
             match rec {
                 Record::Schema(sc) => {
+                    if sc.encoding == "ros2msg"
+                        && let Ok(text) = std::str::from_utf8(&sc.data)
+                        && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+                    {
+                        defs.insert(sc.id, d);
+                    }
                     schemas.insert(sc.id, sc.name);
                 }
                 Record::Channel(ch) => {
+                    cdr.insert(ch.id, ch.message_encoding == "cdr");
                     channels.insert(ch.id, (ch.topic, ch.schema_id));
                 }
                 Record::Message(m) => {
@@ -1469,13 +1602,21 @@ impl SampleFeed {
                     if schema == "ferroscope.Event" {
                         return Ok(Flow::Continue);
                     }
-                    let Ok(text) = std::str::from_utf8(m.data) else {
+                    let is_cdr = cdr.get(&m.channel_id).copied().unwrap_or(false);
+                    let Some(v) = crate::payload_value(m.data, is_cdr, defs.get(schema_id)) else {
                         return Ok(Flow::Continue);
                     };
-                    let Some(v) = json::parse(text) else {
-                        return Ok(Flow::Continue);
+                    // A ROS 2 message has no step field; a per-topic counter is the analogue,
+                    // and it has to match what `trace_from_streaming` does or the two readers
+                    // would pair samples differently.
+                    let step = if is_cdr {
+                        let n = seq.entry(topic.clone()).or_insert(0);
+                        let at = *n;
+                        *n += 1;
+                        at
+                    } else {
+                        v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64
                     };
-                    let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
                     *total += 1;
                     if step < *last_step {
                         *ordered = false;

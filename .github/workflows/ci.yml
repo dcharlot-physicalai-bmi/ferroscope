@@ -1522,6 +1522,25 @@ jobs:
               print(f"{bad} decoded values do not match what was recorded"); sys.exit(1)
           print("  11 named lanes, 4500 values decoded exactly from CDR")
           EOF
+          # And the verdict. This is the one that was WRONG: the comparator could not decode CDR,
+          # so it compared zero values across two recordings differing in 600 messages and said
+          # "bit-exact: every float identical". A false negative from the flagship verdict.
+          python3 ci/make-ros2-fixture.py ros2-same.mcap
+          python3 ci/make-ros2-fixture.py ros2-drift.mcap 900
+          cmp -s ros2.mcap ros2-same.mcap || { echo "the identical fixture is not identical"; exit 1; }
+          cmp -s ros2.mcap ros2-drift.mcap && { echo "the drifted fixture did not drift"; exit 1; }
+          # The VERDICT is what is asserted here, not the exit code. A recording with no receipt
+          # exits 1 whether its values match or not -- `reproduced() && trustworthy` is false
+          # either way -- so the code alone cannot tell a clean comparison from a divergence.
+          # That is pinned as it stands rather than changed under a published contract.
+          ./target/release/ferroscope diff ros2.mcap ros2-same.mcap > same.txt 2>&1 || true
+          grep -q 'bit-exact' same.txt || { echo "identical runs were not bit-exact:"; cat same.txt; exit 1; }
+          ./target/release/ferroscope diff ros2.mcap ros2-drift.mcap > drift.txt 2>&1 || true
+          grep -q 'bit-exact' drift.txt && { echo "a diverging pair was called bit-exact"; cat drift.txt; exit 1; }
+          grep -q 'step 900' drift.txt || { echo "the onset was not located at step 900:"; cat drift.txt; exit 1; }
+          # Named from the definition the file carries, not by array index.
+          grep -q 'position\[0\]' drift.txt || { echo "the divergence was not named:"; cat drift.txt; exit 1; }
+          echo "  identical runs compare bit-exact; a 1e-9 drift is located at step 900 on position[0]"
       - name: a recording that stops mid-record is readable, and says that it did
         # A robot log is very often incomplete -- the recorder was killed, the disk filled --
         # and that file is frequently the most interesting one on the machine. Refusing all of
