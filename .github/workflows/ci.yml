@@ -482,6 +482,54 @@ jobs:
           done
           echo "the version the client asked for is the version it is answered with"
 
+      - name: the protocol behaviours a real client leans on
+        # Probed by hand and found already correct — which is exactly when to write them down,
+        # because correct-and-ungated is how things regress. The version negotiation above was
+        # the one of these that was broken, and it was broken because nothing looked.
+        run: |
+          python3 - <<'EOF'
+          import subprocess, json, sys
+          B = './target/release/ferroscope-mcp'
+          def rt(msgs):
+              p = subprocess.run([B], input='\n'.join(json.dumps(m) for m in msgs) + '\n',
+                                 capture_output=True, text=True)
+              return [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
+          bad = []
+          # JSON-RPC ids may be strings. A server that assumed numbers would break silently for
+          # every client that uses them, and the reply would look fine in isolation.
+          r = rt([{"jsonrpc":"2.0","id":"abc","method":"initialize","params":{}}])
+          if not r or r[0].get('id') != 'abc': bad.append(f'string id not echoed: {r}')
+          # An unknown METHOD is a protocol error.
+          r = rt([{"jsonrpc":"2.0","id":1,"method":"no/such","params":{}}])
+          if not r or r[0].get('error', {}).get('code') != -32601:
+              bad.append(f'unknown method should be -32601: {r}')
+          # A notification has no id and must draw no reply at all; replying desyncs a client.
+          r = rt([{"jsonrpc":"2.0","method":"notifications/initialized"}])
+          if r: bad.append(f'replied to a notification: {r}')
+          # An unknown TOOL and a missing argument are tool errors, not protocol errors: the
+          # model has to be able to read them and try again, so they carry isError and say what
+          # would have worked.
+          r = rt([{"jsonrpc":"2.0","id":1,"method":"tools/call",
+                   "params":{"name":"nope","arguments":{}}}])
+          res = r[0].get('result', {}) if r else {}
+          if not res.get('isError'): bad.append(f'unknown tool must set isError: {r}')
+          if 'run_verify' not in json.dumps(res): bad.append('unknown tool does not name what is available')
+          r = rt([{"jsonrpc":"2.0","id":1,"method":"tools/call",
+                   "params":{"name":"run_verify","arguments":{}}}])
+          res = r[0].get('result', {}) if r else {}
+          if not res.get('isError'): bad.append(f'missing argument must set isError: {r}')
+          # Every tool must be callable from its own advertised schema.
+          tools = rt([{"jsonrpc":"2.0","id":1,"method":"tools/list"}])[0]['result']['tools']
+          if len(tools) < 10: bad.append(f'only {len(tools)} tools advertised')
+          for t in tools:
+              if not t.get('description'): bad.append(f'{t["name"]}: no description')
+              if t.get('inputSchema', {}).get('type') != 'object':
+                  bad.append(f'{t["name"]}: inputSchema is not an object')
+          if bad:
+              print('\n'.join(bad)); sys.exit(1)
+          print(f'{len(tools)} tools, ids, notifications and both error paths behave')
+          EOF
+
       - name: the server speaks MCP and records what it is asked for
         run: |
           python3 - > /tmp/in.jsonl <<'PY'
@@ -1030,10 +1078,11 @@ jobs:
           # same scene at five rates, changing nothing else: how close a trajectory passes to
           # zero depends on where the samples land, so the spread across rates IS the scatter.
           for hz in 80 100 120 150 200; do
-            # sed, not a heredoc: an indented `<<EOF` inside a YAML block does not terminate,
-            # because the closing marker carries the block's leading spaces. Caught before
-            # pushing it; a job that silently swallows the rest of the script is a bad way to
-            # learn that.
+            # sed rather than a heredoc, for legibility only. An earlier comment here claimed
+            # an indented `<<EOF` inside a YAML block cannot terminate. THAT WAS WRONG: a YAML
+            # block scalar strips the common indentation before the shell ever sees it, so the
+            # marker lands at column 0 and matches. Tested rather than assumed, after asserting
+            # the opposite in a commit message.
             sed "s/\"rate_hz\": 4.0/\"rate_hz\": $hz.0/; s/\"rate_hz\": 100/\"rate_hz\": $hz/" \
               examples/scenes/chain-origin.json > "rate-$hz.json"
             grep -q "\"rate_hz\": $hz" "rate-$hz.json" \
