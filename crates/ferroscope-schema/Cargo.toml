@@ -37,7 +37,11 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.23 is a MANIFEST change only, and worth a version for what it enables: it takes
 # ferroscope-mcap 0.1.9 with the chunk codecs on, so the recording model can read what
 # `ros2 bag record` and Foxglove actually write. No source in this crate changed.
-version = "0.1.23"
+# 0.1.24 reads ROS 2 payloads: `cdr` messages are decoded through ferroscope-ros2 using the
+# message definition the file carries inline, so a `ros2 bag` produces lanes rather than a topic
+# list. An unrecognised schema is no longer dropped either -- its numbers become one named lane
+# each, capped so a point cloud cannot turn one message into hundreds of series.
+version = "0.1.24"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

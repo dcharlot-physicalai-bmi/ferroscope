@@ -43,7 +43,9 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # decoders, so the browser build survives), and `inspect --recover` reads a recording that stops
 # mid-record instead of refusing all of it. `verify` now names WHY it failed rather than
 # blaming a missing receipt for every cause.
-version = "0.1.28"
+# 0.1.29 turns a `ros2 bag` into numbers: CDR payloads decoded from the message definition the
+# recording carries, with no ROS installed.
+version = "0.1.29"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
