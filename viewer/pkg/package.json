@@ -2,10 +2,10 @@
   "name": "ferroscope-wasm",
   "type": "module",
   "collaborators": [
-    "Institute for Physical AI @ BMI"
+    "Institute for Physical AI @ JBI"
   ],
   "description": "Ferroscope in the browser: open a recording, verify its receipt, and diff two runs, entirely client-side. No server, no upload, no account.",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

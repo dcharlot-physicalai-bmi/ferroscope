@@ -1019,10 +1019,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2.7.8
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with: { version: v0.15.0 }
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - run: npm install --no-save puppeteer-core@25
+      # `viewer/pkg` is COMMITTED, because the viewer has to work when the directory is served
+      # as-is. That quietly made every browser gate below a test of whatever bytes were checked
+      # in, which can be older than the Rust they are meant to exercise: change the wasm crate,
+      # forget `viewer/build.sh`, and these pass green against the previous bundle. Build it here,
+      # so the browser tests the code at THIS commit.
+      - run: ./viewer/build.sh
       - name: a recording read in blocks is the same recording, and can be compared
         run: |
           cargo build --release -p ferroscope-cli
@@ -1035,6 +1044,18 @@ jobs:
           test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
           PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
             node ci/viewer-blocks.mjs blocks-a.mcap blocks-b.mcap "$CHROME"
+      - name: the browser reads the compression the world actually writes
+        # Pure-Rust decoders are the whole reason `ferroscope-mcap` can take a compression
+        # dependency at all -- the C ones cannot go to wasm. "It is pure Rust, so it behaves the
+        # same in a browser" is an assumption; this is the measurement. The fixtures come from the
+        # REFERENCE writer, because a file we compressed ourselves would only prove our decoder
+        # agrees with our encoder.
+        run: |
+          cargo run --release --example make_compressed_fixtures -p ferroscope-mcap -- fixtures
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser)"
+          test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
+          PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
+            node ci/browser-codecs.mjs fixtures "$CHROME"
 
   platforms:
     # **Comparing across platforms is the receipt's entire reason for existing** — the platform

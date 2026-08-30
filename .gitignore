@@ -3,3 +3,4 @@
 *.mcap
 !viewer/*.mcap
 *.bundle.json
+/node_modules
