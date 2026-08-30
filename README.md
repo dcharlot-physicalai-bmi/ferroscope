@@ -1544,7 +1544,7 @@ the CLI's eleven verbs, the in-browser WebGPU viewer with glTF meshes and a meas
 scenario harness, URDF import with its physical-usability checks and ground-clearance report, the
 LeRobot SO-101 as a demo device, STL-to-glTF with exact mass properties, the LUT-first material
 bridge, described scenes, the MCP server, the HTTP API and browser SDK, and `ferroscope power`
-reading real counters. **259 tests, clean clippy, three platforms in CI plus wasm32**, and jobs
+reading real counters. **265 tests, clean clippy, three platforms in CI plus wasm32**, and jobs
 that gate the zero-dependency claim, the viewer bundle's export surface, the scene format, the
 MCP protocol surface, that no read verb holds its recording, and that a real headless Chrome can
 open, compare and pull a mesh from a file it never held. Fourteen crates on crates.io.
