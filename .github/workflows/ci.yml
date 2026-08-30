@@ -27,7 +27,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: read the declared MSRV
         id: msrv
-        run: echo "v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+        # An empty capture must not reach the toolchain action. `$(...)` swallows the failure of
+        # a grep that finds nothing, so a renamed or moved rust-version key would set v="" and
+        # this job would install SOME toolchain and report a green "MSRV build" that tested
+        # nothing. Assert the shape instead of trusting the extraction.
+        run: |
+          v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          case "$v" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "Cargo.toml no longer declares rust-version at the workspace root (got '$v')"; exit 1 ;;
+          esac
+          echo "v=$v" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ steps.msrv.outputs.v }}" }
       - uses: Swatinem/rust-cache@v2.7.8
