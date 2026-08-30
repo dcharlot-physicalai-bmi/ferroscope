@@ -17,6 +17,7 @@
 import { createServer } from 'node:http';
 import { createReadStream, statSync } from 'node:fs';
 import { extname, resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 const puppeteer = (await import(process.env.PUPPETEER || 'puppeteer-core')).default;
 
 const dir = process.argv[2];
@@ -33,7 +34,8 @@ const root = resolve(new URL('../viewer', import.meta.url).pathname);
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const m = url.pathname.match(/^\/codec-(none|zstd|lz4)\.mcap$/);
-  const path = m ? resolve(join(dir, `codec-${m[1]}.mcap`))
+  const path = url.pathname === '/ros2.mcap' ? resolve(join(dir, 'ros2.mcap'))
+             : m ? resolve(join(dir, `codec-${m[1]}.mcap`))
                  : resolve(root, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
   try {
     const st = statSync(path);
@@ -102,6 +104,29 @@ try {
       fail(`codec-zstd.mcap (${out.zstd.bytes}) is not meaningfully smaller than codec-none.mcap (${out.none.bytes}): is it actually compressed?`);
     } else {
       console.log(`  ok  the zstd fixture really is compressed (${out.zstd.bytes} vs ${out.none.bytes} bytes)`);
+    }
+  }
+  // ---- a real ROS 2 bag, in the tab ------------------------------------------------------
+  // Reading the container is not reading the data, and the two bundle readers are separate
+  // implementations: CDR decoding was added to the streaming one first, and the CLI plotted a
+  // `ros2 bag` while the BROWSER — which uses the slice reader — showed the same file as a topic
+  // list with nothing in it. A Rust test now pins the two readers equal; this pins the claim
+  // that actually gets made, which is that a tab opens a robot log.
+  if (existsSync(join(dir, 'ros2.mcap'))) {
+    const out = await page.evaluate(async () => {
+      const bytes = new Uint8Array(await (await fetch('/ros2.mcap')).arrayBuffer());
+      try {
+        const b = JSON.parse(window.__T.open(bytes));
+        return { ok: true, scalars: Object.keys(b.scalars || {}), messages: b.messages };
+      } catch (e) { return { ok: false, err: String(e) }; }
+    });
+    if (!out.ok) fail(`the browser could not open a ROS 2 bag: ${out.err}`);
+    else if (out.scalars.length !== 11) {
+      fail(`expected 11 lanes from JointState in the browser, got ${out.scalars.length}: ${out.scalars}`);
+    } else if (!out.scalars.includes('/joint_states:position[1]')) {
+      fail(`lanes are not named from the definition: ${out.scalars}`);
+    } else {
+      console.log(`  ok  a ROS 2 bag opened in the browser: ${out.messages} messages, ${out.scalars.length} named lanes`);
     }
   }
 } finally {

@@ -962,15 +962,35 @@ jobs:
       # generated glue is deterministic given the crate API and a pinned wasm-pack, so a diff on
       # it catches a bundle whose exports have gone stale. The `.wasm` is NOT compared: it is
       # built on a different platform here and its bytes legitimately differ.
-      - name: the committed bundle is not stale against the crate it wraps
+      - name: the committed bundle exports the same API as the crate
         run: |
           git diff --exit-code -- viewer/pkg/ferroscope_wasm.js || {
             echo
-            echo "The committed viewer bundle does not match a fresh build of the wasm crate."
+            echo "The committed viewer bundle's generated glue does not match a fresh build."
             echo "Run ./viewer/build.sh and commit viewer/pkg."
             exit 1
           }
           echo "  the committed bundle's exports match the crate at this commit"
+      # The check above compares the generated GLUE, which only moves when the exported API does.
+      # It cannot see a stale BINARY: adding the ROS 2 decoder grew the wasm by 31 KB and left the
+      # glue byte-identical, so a bundle that could not read a `ros2 bag` would have passed it.
+      # The `.wasm` itself cannot be diffed -- it is built on a different platform here and its
+      # bytes legitimately differ -- so ask git instead: the bundle must not be older than any
+      # crate that goes into it.
+      - name: the committed bundle is not older than the code it was built from
+        run: |
+          pkg=$(git log -1 --format=%ct -- viewer/pkg)
+          src=$(git log -1 --format=%ct -- crates/ferroscope-wasm crates/ferroscope-schema \
+                  crates/ferroscope-mcap crates/ferroscope-receipt crates/ferroscope-ledger \
+                  crates/ferroscope-ros2 crates/ferroscope-mesh)
+          test -n "$pkg" && test -n "$src" || { echo "could not date viewer/pkg or its sources"; exit 1; }
+          if [ "$pkg" -lt "$src" ]; then
+            echo "viewer/pkg was last committed $(( (src - pkg) / 60 )) minutes BEFORE the code it wraps."
+            echo "Anyone serving the directory as-is gets a viewer built from older Rust."
+            echo "Run ./viewer/build.sh and commit viewer/pkg."
+            exit 1
+          fi
+          echo "  the committed bundle is at least as new as every crate that goes into it"
       - name: the bundle landed in viewer/pkg and nowhere else
         # wasm-pack resolves --out-dir against the crate path, so this check once passed
         # vacuously while the real bundle was never rewritten.
@@ -1066,6 +1086,8 @@ jobs:
         # agrees with our encoder.
         run: |
           cargo run --release --example make_compressed_fixtures -p ferroscope-mcap -- fixtures
+          python3 -m pip install --quiet mcap-ros2-support
+          python3 ci/make-ros2-fixture.py fixtures/ros2.mcap
           CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser)"
           test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
           PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \
@@ -1468,46 +1490,9 @@ jobs:
         # topic list with nothing to plot: the payloads are CDR, not JSON. MCAP carries the
         # message definition inline, so the file is self-describing and none of this needs ROS
         # installed -- which is the only reason it can work in a browser too.
-        #
-        # The fixture is written by the ROS 2 tooling people actually record with. A file we
-        # encoded ourselves would prove only that our decoder matches our encoder.
         run: |
           python3 -m pip install --quiet mcap-ros2-support
-          python3 - <<'EOF'
-          import math
-          from mcap_ros2.writer import Writer
-          from mcap.writer import CompressionType
-          DEF = """std_msgs/Header header
-          string[] name
-          float64[] position
-          float64[] velocity
-          float64[] effort
-
-          ================================================================================
-          MSG: std_msgs/Header
-          builtin_interfaces/Time stamp
-          string frame_id
-
-          ================================================================================
-          MSG: builtin_interfaces/Time
-          int32 sec
-          uint32 nanosec
-          """
-          DEF = "\n".join(l.strip() for l in DEF.splitlines())
-          with open("ros2.mcap", "wb") as f:
-              w = Writer(f, compression=CompressionType.ZSTD)
-              s = w.register_msgdef("sensor_msgs/msg/JointState", DEF)
-              for i in range(1500):
-                  t = i * 10_000_000
-                  w.write_message("/joint_states", s, {
-                      "header": {"stamp": {"sec": t // 10**9, "nanosec": t % 10**9}, "frame_id": "base"},
-                      "name": ["shoulder", "elbow", "wrist"],
-                      "position": [math.sin(i*0.01)*1.2, math.cos(i*0.013)*0.8, i*0.0004],
-                      "velocity": [0.0, 0.0, 0.0],
-                      "effort": [1.5, -0.25, 0.0],
-                  }, log_time=t, publish_time=t)
-              w.finish()
-          EOF
+          python3 ci/make-ros2-fixture.py ros2.mcap
           ./target/release/ferroscope inspect ros2.mcap | tee ros2.txt
           grep -q 'sensor_msgs/msg/JointState' ros2.txt || { echo "the ROS 2 schema was not read"; exit 1; }
           ./target/release/ferroscope export ros2.mcap ros2-bundle.json > /dev/null
@@ -1517,13 +1502,12 @@ jobs:
           sc = b.get("scalars", {})
           if len(sc) != 11:
               print(f"expected 11 lanes from JointState, got {len(sc)}: {sorted(sc)}"); sys.exit(1)
-          # Named by the path that reaches them, from the definition in the file.
           for want in ("/joint_states:position[1]", "/joint_states:header.stamp.sec",
                        "/joint_states:effort[0]"):
               if want not in sc:
                   print(f"missing lane {want}; got {sorted(sc)}"); sys.exit(1)
-          # And the VALUES must be the ones that were recorded, not merely present. The bundle
-          # rounds lanes to six decimals on purpose, so compare at that precision.
+          # The VALUES must be the ones recorded, not merely present. The bundle rounds lanes to
+          # six decimals on purpose, so compare at exactly that precision.
           bad = 0
           for lane, f in [("position[0]", lambda i: math.sin(i*0.01)*1.2),
                           ("position[1]", lambda i: math.cos(i*0.013)*0.8),
@@ -1536,7 +1520,7 @@ jobs:
                       bad += 1
           if bad:
               print(f"{bad} decoded values do not match what was recorded"); sys.exit(1)
-          print(f"  11 named lanes, 4500 values decoded exactly from CDR")
+          print("  11 named lanes, 4500 values decoded exactly from CDR")
           EOF
       - name: a recording that stops mid-record is readable, and says that it did
         # A robot log is very often incomplete -- the recorder was killed, the disk filled --

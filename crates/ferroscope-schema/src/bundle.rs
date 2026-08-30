@@ -41,13 +41,34 @@ fn bundle_log(log: mcap::Log, v: Option<crate::Verification>) -> Option<String> 
         *counts.entry(ch.topic.clone()).or_default() += 1;
     }
     let mut lanes = Lanes::with_strides(strides_from(&counts));
+    // The ROS 2 definitions this file carries, parsed once. Without this the SLICE path decodes
+    // no CDR while the STREAMING path does -- and the browser uses this one, so a `ros2 bag`
+    // opened in a tab showed a topic list and no lanes while the CLI plotted it. One question
+    // with two implementations is how this project has shipped a defect on one surface before;
+    // both now go through `payload_value`.
+    let mut defs: BTreeMap<u16, ferroscope_ros2::MessageDef> = BTreeMap::new();
+    for sc in &log.schemas {
+        if sc.encoding == "ros2msg"
+            && let Ok(text) = std::str::from_utf8(&sc.data)
+            && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+        {
+            defs.insert(sc.id, d);
+        }
+    }
     for m in &log.messages {
         let ch = log.channel(m.channel_id)?;
         let schema = log
             .schema(ch.schema_id)
             .map(|s| s.name.as_str())
             .unwrap_or("");
-        lanes.push(&ch.topic, schema, m.log_time, m.publish_time, &m.data);
+        let Some(v) = crate::payload_value(
+            &m.data,
+            ch.message_encoding == "cdr",
+            defs.get(&ch.schema_id),
+        ) else {
+            continue;
+        };
+        lanes.push_parsed(&ch.topic, schema, m.log_time, m.publish_time, &v);
     }
     let attachments: Vec<(String, String, usize)> = log
         .attachments
@@ -502,20 +523,6 @@ impl Lanes {
             }
             _ => true,
         }
-    }
-
-    /// Feed one message. `schema` is the schema NAME, which is what dispatch keys on.
-    fn push(&mut self, topic: &str, schema: &str, log_time: u64, publish_time: u64, data: &[u8]) {
-        if !self.note(topic, schema, log_time) {
-            return;
-        }
-        let Ok(text) = std::str::from_utf8(data) else {
-            return;
-        };
-        let Some(val) = crate::json::parse(text) else {
-            return;
-        };
-        self.absorb(topic, schema, log_time, publish_time, &val);
     }
 
     fn absorb(&mut self, topic: &str, schema: &str, log_time: u64, publish_time: u64, val: &Value) {
