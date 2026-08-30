@@ -45,7 +45,11 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # the SLICE one, so `bundle()` -- which is what the browser uses -- returned a ROS 2 recording
 # with no lanes while `bundle_streaming()` returned all of them. Both now share one payload
 # decoder, and a test pins the two readers equal rather than testing either alone.
-version = "0.1.25"
+# 0.1.26: CDR decoding reached four readers and not the other six, so `diff` extracted nothing
+# from a ROS 2 pair and (with the receipt fix above) called it bit-exact. Every reader that
+# parses a payload now goes through `payload_value`, and the slice-side ones share `ros2_defs`.
+# `trace_from` also abandoned a whole trace on one unparseable message; it now skips it.
+version = "0.1.26"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

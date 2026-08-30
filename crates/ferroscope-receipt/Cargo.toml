@@ -18,7 +18,11 @@ description = "Determinism receipts for physics runs: a canonical run digest, a 
 # have to declare to call these one run?" is MEASURED per channel rather than guessed. No
 # rule of thumb survived: over six pairs the smallest working resolution ran 1.0x to 109x
 # the summed difference. `cell` is the one definition of a grid cell, shared with the digest.
-version = "0.1.9"
+# 0.1.10: a comparison with NO pairs returned BitExact, because the fold asks "was any bit
+# different" and over zero pairs the answer is no. Two recordings the caller could not decode
+# were reported "bit-exact: every float identical". It now counts compared pairs and returns
+# Incomparable when that is zero -- a verdict about no evidence has to say so.
+version = "0.1.10"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

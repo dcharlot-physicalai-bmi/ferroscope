@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-cli"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-live",
@@ -691,7 +691,7 @@ version = "0.1.2"
 
 [[package]]
 name = "ferroscope-receipt"
-version = "0.1.9"
+version = "0.1.10"
 
 [[package]]
 name = "ferroscope-ros2"
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-schema"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
