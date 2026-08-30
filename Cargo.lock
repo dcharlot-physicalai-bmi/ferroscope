@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "ferroscope-schema"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",

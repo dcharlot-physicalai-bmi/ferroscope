@@ -41,7 +41,11 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # message definition the file carries inline, so a `ros2 bag` produces lanes rather than a topic
 # list. An unrecognised schema is no longer dropped either -- its numbers become one named lane
 # each, capped so a point cloud cannot turn one message into hundreds of series.
-version = "0.1.24"
+# 0.1.25 fixes 0.1.24 on one surface: CDR decoding reached the STREAMING bundle reader but not
+# the SLICE one, so `bundle()` -- which is what the browser uses -- returned a ROS 2 recording
+# with no lanes while `bundle_streaming()` returned all of them. Both now share one payload
+# decoder, and a test pins the two readers equal rather than testing either alone.
+version = "0.1.25"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
