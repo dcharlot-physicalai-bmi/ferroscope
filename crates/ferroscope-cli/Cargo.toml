@@ -39,7 +39,11 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # a scene could say "so101" and `ferroscope urdf so101` could not — and an unknown name now
 # says which robots ARE built in. Found by installing the published crate into an empty
 # directory and using it the way a reader would.
-version = "0.1.27"
+# 0.1.28: reads the compression the world actually writes (zstd and lz4 chunks, pure-Rust
+# decoders, so the browser build survives), and `inspect --recover` reads a recording that stops
+# mid-record instead of refusing all of it. `verify` now names WHY it failed rather than
+# blaming a missing receipt for every cause.
+version = "0.1.28"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
