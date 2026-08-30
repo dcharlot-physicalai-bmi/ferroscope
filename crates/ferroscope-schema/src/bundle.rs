@@ -111,6 +111,11 @@ struct FrontMatter {
     counts: BTreeMap<String, usize>,
     chan: BTreeMap<u16, (String, u16)>,
     schema_names: BTreeMap<u16, String>,
+    /// Parsed ROS 2 message definitions, by schema id: an MCAP from `ros2 bag record` carries
+    /// them inline, which is what makes a recording readable with no ROS on the machine.
+    defs: BTreeMap<u16, ferroscope_ros2::MessageDef>,
+    /// Whether a channel's payloads are CDR rather than JSON.
+    cdr: BTreeMap<u16, bool>,
     attachments: Vec<(String, String, usize)>,
     receipt_kv: Option<Vec<(String, String)>>,
     production_kv: Option<Vec<(String, String)>>,
@@ -197,9 +202,16 @@ impl BundleFold {
                     match rec {
                         Record::Header { profile: p, .. } => front.profile = p.to_string(),
                         Record::Schema(sc) => {
+                            if sc.encoding == "ros2msg"
+                                && let Ok(text) = std::str::from_utf8(&sc.data)
+                                && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+                            {
+                                front.defs.insert(sc.id, d);
+                            }
                             front.schema_names.insert(sc.id, sc.name);
                         }
                         Record::Channel(ch) => {
+                            front.cdr.insert(ch.id, ch.message_encoding == "cdr");
                             front.chan.insert(ch.id, (ch.topic, ch.schema_id));
                         }
                         Record::Attachment(a) => {
@@ -348,10 +360,11 @@ fn absorb_message(front: &FrontMatter, second: &mut Second, m: &ferroscope_mcap:
         .get(schema_id)
         .map(|s| s.as_str())
         .unwrap_or("");
-    let Ok(text) = std::str::from_utf8(m.data) else {
-        return;
-    };
-    let Some(v) = crate::json::parse(text) else {
+    let Some(v) = crate::payload_value(
+        m.data,
+        front.cdr.get(&m.channel_id).copied().unwrap_or(false),
+        front.defs.get(schema_id),
+    ) else {
         return;
     };
     second
@@ -389,6 +402,10 @@ pub(crate) fn strides_from(counts: &BTreeMap<String, usize>) -> BTreeMap<String,
         .map(|(topic, n)| (topic.clone(), n.div_ceil(MAX_POINTS).max(1)))
         .collect()
 }
+
+/// How many numeric fields of an unrecognised message become lanes. A point cloud or a camera
+/// info message would otherwise turn one message into hundreds of series.
+const MAX_GENERIC_LANES: usize = 64;
 
 /// The lanes a viewer draws, accumulated one message at a time.
 ///
@@ -629,7 +646,23 @@ impl Lanes {
                         .push([t, p]);
                 }
             }
-            _ => {}
+            // A schema this build has no special knowledge of -- `sensor_msgs/msg/JointState`,
+            // or anyone's own JSON. Its numbers become one lane each, named by the path that
+            // reaches them, because a recording whose schema we do not recognise is still a
+            // recording and dropping it silently is how a real `ros2 bag` opened as a topic list
+            // with nothing to plot.
+            _ => {
+                let mut nums: Vec<(String, f64)> = Vec::new();
+                val.labeled_numbers("", &mut nums);
+                // A cap, because one message with a thousand fields would otherwise put a
+                // thousand lanes in a bundle meant to be small enough to hand a browser.
+                for (name, v) in nums.into_iter().take(MAX_GENERIC_LANES) {
+                    scalars
+                        .entry(format!("{ch_topic}:{name}"))
+                        .or_default()
+                        .push([t, v]);
+                }
+            }
         }
     }
 

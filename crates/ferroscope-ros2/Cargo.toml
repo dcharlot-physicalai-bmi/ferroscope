@@ -1,0 +1,19 @@
+[package]
+name = "ferroscope-ros2"
+description = "Read ROS 2 message definitions and decode CDR payloads, with no dependencies and no ROS installation: turn a `ros2 bag` recording into numbers."
+# 0.1.0: ros2msg / ros2idl definition parsing and CDR decoding, enough to pull the numeric
+# fields out of a real `ros2 bag` MCAP. MCAP carries the full message definition inline, so a
+# recording is self-describing and none of this needs ROS on the machine.
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["ros2", "cdr", "robotics", "mcap", "no-deps"]
+categories = ["science::robotics", "encoding", "parser-implementations"]
+
+# No dependencies, like the rest of the reading path: this has to build for wasm32 so a browser
+# can open a `ros2 bag`, and pulling in a ROS client library would end that immediately.
+[dependencies]

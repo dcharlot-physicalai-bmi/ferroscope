@@ -182,6 +182,32 @@ impl Value {
         }
     }
     /// Every number in the value, in document order — the trace digest's view of a payload.
+    /// Every number, with the path that reaches it: `header.stamp.sec`, `position[1]`.
+    ///
+    /// [`Value::numbers`] answers what the digest needs; this answers what a PLOT needs, because
+    /// a lane called `channel[4]` tells a reader nothing and the name is right there in the file.
+    pub fn labeled_numbers(&self, prefix: &str, out: &mut Vec<(String, f64)>) {
+        match self {
+            Value::Num(n) => out.push((prefix.to_string(), *n)),
+            Value::Arr(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    v.labeled_numbers(&format!("{prefix}[{i}]"), out);
+                }
+            }
+            Value::Obj(kv) => {
+                for (k, v) in kv {
+                    let path = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
+                    v.labeled_numbers(&path, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn numbers(&self, out: &mut Vec<f64>) {
         match self {
             Value::Num(n) => out.push(*n),

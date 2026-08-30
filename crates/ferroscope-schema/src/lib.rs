@@ -1042,6 +1042,33 @@ impl VerifyFold {
 /// The trace itself is still proportional to the run. [`profile_streaming`] is the way to
 /// compare two recordings without building either one; this remains the fallback for the pairs
 /// it refuses, and the way to get a trajectory when something other than a comparison wants it.
+/// One message's payload as a value, whatever it was encoded in.
+///
+/// JSON is the encoding Ferroscope writes. CDR is the one ROS 2 writes, and an MCAP from
+/// `ros2 bag record` carries the message definition inline, so the file is self-describing and
+/// this needs no ROS on the machine. Both arrive here as the same shape, so everything
+/// downstream — lanes, digest, comparator — has one definition of what a message is.
+///
+/// `None` means the payload was not decodable, and every caller SKIPS such a message rather than
+/// substituting zeros: a fabricated sample would enter the digest and the plot as data.
+pub(crate) fn payload_value(
+    data: &[u8],
+    is_cdr: bool,
+    def: Option<&ferroscope_ros2::MessageDef>,
+) -> Option<crate::json::Value> {
+    if is_cdr {
+        let (values, labels) = def?.decode_labeled(data).ok()?;
+        return Some(crate::json::Value::Obj(
+            labels
+                .into_iter()
+                .zip(values)
+                .map(|(k, v)| (k, crate::json::Value::Num(v)))
+                .collect(),
+        ));
+    }
+    crate::json::parse(std::str::from_utf8(data).ok()?)
+}
+
 pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, Trace)> {
     use ferroscope_mcap::{Flow, Record};
 
@@ -1049,13 +1076,28 @@ pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, 
     let mut schemas: BTreeMap<u16, String> = BTreeMap::new();
     let mut channels: BTreeMap<u16, (String, u16)> = BTreeMap::new();
     let mut trace = Trace::default();
+    // A ROS 2 recording carries its message definitions inline, so it is self-describing and
+    // needs no ROS on the machine. `cdr` payloads are bytes, not JSON, and without this a real
+    // `ros2 bag` opens as a topic list with nothing to plot.
+    let mut defs: BTreeMap<u16, ferroscope_ros2::MessageDef> = BTreeMap::new();
+    let mut cdr: BTreeMap<u16, bool> = BTreeMap::new();
+    // ROS 2 messages have no step field. A per-topic counter is the analogue, and it is what
+    // makes two recordings of the same run pair up channel by channel.
+    let mut seq: BTreeMap<String, u64> = BTreeMap::new();
 
     ferroscope_mcap::stream(r, |rec| {
         match rec {
             Record::Schema(sc) => {
+                if sc.encoding == "ros2msg"
+                    && let Ok(text) = std::str::from_utf8(&sc.data)
+                    && let Ok(d) = ferroscope_ros2::MessageDef::parse(&sc.name, text)
+                {
+                    defs.insert(sc.id, d);
+                }
                 schemas.insert(sc.id, sc.name);
             }
             Record::Channel(ch) => {
+                cdr.insert(ch.id, ch.message_encoding == "cdr");
                 channels.insert(ch.id, (ch.topic, ch.schema_id));
             }
             Record::Metadata { name, kv } => {
@@ -1071,13 +1113,20 @@ pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, 
                 if schema == "ferroscope.Event" {
                     return Ok(Flow::Continue);
                 }
-                let Ok(text) = std::str::from_utf8(m.data) else {
+                let is_cdr = cdr.get(&m.channel_id).copied().unwrap_or(false);
+                let Some(v) = payload_value(m.data, is_cdr, defs.get(schema_id)) else {
                     return Ok(Flow::Continue);
                 };
-                let Some(v) = json::parse(text) else {
-                    return Ok(Flow::Continue);
+                // A ROS 2 message has no step field. A per-topic counter is the analogue, and it
+                // is what lets two recordings of the same run pair up channel by channel.
+                let step = if is_cdr {
+                    let n = seq.entry(topic.clone()).or_insert(0);
+                    let at = *n;
+                    *n += 1;
+                    at
+                } else {
+                    v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64
                 };
-                let step = v.get("step").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
                 trace.push(step, topic.clone(), digest_values(schema, &v));
             }
             _ => {}

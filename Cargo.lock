@@ -694,6 +694,10 @@ name = "ferroscope-receipt"
 version = "0.1.9"
 
 [[package]]
+name = "ferroscope-ros2"
+version = "0.1.0"
+
+[[package]]
 name = "ferroscope-run"
 version = "0.1.5"
 dependencies = [
@@ -721,6 +725,7 @@ dependencies = [
  "ferroscope-ledger",
  "ferroscope-mcap",
  "ferroscope-receipt",
+ "ferroscope-ros2",
 ]
 
 [[package]]

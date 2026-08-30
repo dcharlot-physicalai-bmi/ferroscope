@@ -1362,6 +1362,41 @@ const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
 
 ---
 
+### A `ros2 bag`, without ROS
+
+Reading the container is not reading the data. Ferroscope could open a `ros2 bag record` file and
+show you its topics — and nothing to plot, because ROS 2 payloads are **CDR**, not JSON.
+
+An MCAP written by ROS 2 carries the **full message definition inline**, as `ros2msg` text. That
+makes the recording self-describing: everything needed to turn `/joint_states` into numbers is in
+the file. No ROS installation, no sourced workspace, no built message package — and, because
+`ferroscope-ros2` is `std` alone like the rest of the reading path, no reason a browser cannot do
+it too.
+
+```
+$ ferroscope export ros2.mcap bundle.json
+$ jq -r '.scalars | keys[]' bundle.json
+/joint_states:effort[0]
+/joint_states:header.stamp.sec
+/joint_states:position[1]
+...
+```
+
+Eleven lanes out of `sensor_msgs/JointState`, each named by the path that reaches it, because the
+field names are right there in the file and `channel[4]` tells a reader nothing.
+
+**The detail that decides whether this produces numbers or garbage:** CDR aligns each primitive to
+its own width, measured from the end of the four-byte encapsulation header — not from the start of
+the buffer. Getting it backwards raises nothing. Measured on a real recording, the wrong origin
+decodes `position` as `[0.0, -0.0, 0.0]` instead of `[0.0, 0.8, 0.0]` and leaves 36 of 164 bytes
+unread: plausible numbers, silently wrong. So the decoder insists every byte is accounted for, and
+a message whose definition and payload disagree is an error rather than a plot. That check caught a
+transcription slip in this project's own test fixture within a minute of being written.
+
+An unrecognised schema is no longer dropped, either — anyone's JSON gets the same treatment, one
+lane per numeric field, capped at 64 so a point cloud cannot turn one message into hundreds of
+series.
+
 ### When the recorder was killed
 
 A robot log is very often incomplete. The recorder was killed, the disk filled, the battery went —
@@ -1498,6 +1533,8 @@ reach outside are the two that are not published, so nothing you install pulls i
 ```
 ferroscope-mcap      MCAP v0 reader + writer.       0 deps.  wasm-clean.
                      Optional zstd/lz4 READING.     pure Rust, still wasm-clean.
+ferroscope-ros2      ros2msg definitions + CDR.     0 deps.  wasm-clean.
+                     A `ros2 bag`, without ROS.
 ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-mesh      STL in, glTF out, and what     0 deps.  wasm-clean.

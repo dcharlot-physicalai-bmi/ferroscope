@@ -49,5 +49,6 @@ categories = ["science::robotics", "encoding", "simulation"]
 
 [dependencies]
 ferroscope-mcap = { workspace = true }
+ferroscope-ros2 = { workspace = true }
 ferroscope-ledger = { workspace = true }
 ferroscope-receipt = { workspace = true }

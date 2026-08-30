@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ferroscope-mcap",
+    "crates/ferroscope-ros2",
     "crates/ferroscope-schema",
     "crates/ferroscope-ledger",
     "crates/ferroscope-receipt",
@@ -46,6 +47,7 @@ ferroscope-scene = { version = "0.1.5", path = "crates/ferroscope-scene" }
 ferroscope-phrase = { version = "0.1.1", path = "crates/ferroscope-phrase" }
 ferroscope-mcp = { version = "0.1.0", path = "crates/ferroscope-mcp" }
 ferroscope-urdf = { version = "0.1.4", path = "crates/ferroscope-urdf" }
+ferroscope-ros2 = { version = "0.1.0", path = "crates/ferroscope-ros2" }
 
 [profile.release]
 opt-level = 3
