@@ -57,6 +57,10 @@ jobs:
           cargo build --target wasm32-unknown-unknown
           -p ferroscope-mcap -p ferroscope-ledger -p ferroscope-receipt -p ferroscope-schema
           -p ferroscope-wasm
+      # The claim that justifies choosing ruzstd and lz4_flex over the C libraries: with the
+      # codecs ON, this still builds for wasm32. If it ever stops, a browser can no longer open
+      # a `ros2 bag` recording and the reason for taking the dependency at all is gone.
+      - run: cargo build --target wasm32-unknown-unknown -p ferroscope-mcap --features compression
       - name: the browser comparator recomputes receipts too
         # The page had the same hole the CLI did: `diff` compared two STORED digest strings, so
         # a file whose metadata block was edited to carry another run's digest showed as
@@ -1279,6 +1283,35 @@ jobs:
             echo "$c: $n crate(s) in the runtime graph"
             [ "$n" -eq 1 ] || { cargo tree -p $c --edges normal; exit 1; }
           done
+      # The check above resolves each crate with its OWN default features, so what it proves is
+      # "zero dependencies by default" -- true, and no longer the whole story, because the
+      # INSTALLED binary turns the chunk codecs on. What a user actually gets is the graph below,
+      # so pin it. The promise that survives is not "no dependencies", it is PURE RUST, and that
+      # is the promise the wasm build rests on.
+      - name: what `cargo install` actually pulls is pinned, and is pure Rust
+        run: |
+          cargo tree -p ferroscope-cli --edges normal --prefix none \
+            | sed 's/ (\*)$//' | awk 'NF {print $1}' | sort -u > /tmp/graph.txt
+          python3 - <<'EOF'
+          import sys
+          got = {l.strip() for l in open('/tmp/graph.txt') if l.strip()}
+          third = {c for c in got if not c.startswith('ferroscope-')}
+          expected = {'ruzstd', 'lz4_flex', 'twox-hash'}
+          if third != expected:
+              print(f'the installed dependency set CHANGED\n  expected {sorted(expected)}\n  got      {sorted(third)}')
+              sys.exit(1)
+          bad = sorted(c for c in got if c.endswith('-sys') or c == 'cc')
+          if bad:
+              print(f'C-linking crates are back in the shipped graph: {bad}')
+              sys.exit(1)
+          print(f'  ferroscope-cli ships {len(got)} crates: {sorted(third)}, and nothing that links C')
+          EOF
+      # Compression is optional, so the WORKSPACE test run has it on (feature unification) and
+      # never executes the refusal path. Run the crate on its own to reach both.
+      - name: both feature builds are tested, not just the unified one
+        run: |
+          cargo test -p ferroscope-mcap --no-default-features --test reference
+          cargo test -p ferroscope-mcap --features compression --test reference
 
   end-to-end:
     runs-on: ubuntu-latest

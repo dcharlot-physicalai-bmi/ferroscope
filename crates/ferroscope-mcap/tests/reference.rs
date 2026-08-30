@@ -114,13 +114,19 @@ fn reference_reads_our_summary_and_metadata() {
     assert_eq!(pose.encoding, "jsonschema");
 }
 
-#[test]
-fn we_read_reference_files() {
-    // Now the other direction: the reference crate writes, we read. Its default writer
-    // uses zstd chunks, so this also pins our refusal to guess at a codec we do not link.
+/// Write ten messages with the REFERENCE implementation at a chosen codec.
+///
+/// Payloads differ per message on purpose. A reader that returns the right *count* has proved
+/// only that it read the summary, which sits outside the chunks; comparing bytes is what proves
+/// a chunk was actually decoded.
+#[cfg(test)]
+fn reference_file(compression: Option<mcap::Compression>) -> Vec<u8> {
     let mut out = std::io::Cursor::new(Vec::new());
     {
-        let mut w = mcap::Writer::new(&mut out).unwrap();
+        let mut w = mcap::WriteOptions::new()
+            .compression(compression)
+            .create(&mut out)
+            .unwrap();
         let schema = w
             .add_schema("ref.Thing", "jsonschema", br#"{"type":"object"}"#)
             .unwrap();
@@ -132,32 +138,69 @@ fn we_read_reference_files() {
                 &mcap::records::MessageHeader {
                     channel_id: id,
                     sequence: i,
-                    log_time: 1_000 + i as u64,
-                    publish_time: 1_000 + i as u64,
+                    log_time: 1_000 + u64::from(i),
+                    publish_time: 1_000 + u64::from(i),
                 },
-                br#"{"n":1}"#,
+                format!(r#"{{"n":{i}}}"#).as_bytes(),
             )
             .unwrap();
         }
         w.finish().unwrap();
     }
-    let bytes = out.into_inner();
+    out.into_inner()
+}
 
-    match read(&bytes) {
-        Ok(log) => {
-            // The reference crate chose an uncompressed or unchunked layout we can parse.
-            assert_eq!(log.messages.len(), 10);
-            assert_eq!(log.channels[0].topic, "/ref");
-        }
+/// The payloads every codec must reproduce, byte for byte.
+#[cfg(test)]
+fn expect_ten_messages(bytes: &[u8], what: &str) {
+    let log = read(bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(log.messages.len(), 10, "{what}: message count");
+    assert_eq!(log.channels[0].topic, "/ref", "{what}: topic");
+    for (i, m) in log.messages.iter().enumerate() {
+        assert_eq!(
+            m.data,
+            format!(r#"{{"n":{i}}}"#).as_bytes(),
+            "{what}: payload {i} did not survive the chunk"
+        );
+    }
+}
+
+#[test]
+fn we_read_uncompressed_reference_files() {
+    expect_ten_messages(&reference_file(None), "uncompressed");
+}
+
+// The two codecs the world actually writes. `ros2 bag record` and Foxglove default to zstd, so a
+// reader that handles only uncompressed chunks cannot open a real robot log. These are gated on
+// the feature rather than tolerated at runtime: an earlier version of this test accepted EITHER a
+// successful read OR an UnsupportedCompression error, which meant it passed identically before and
+// after the codecs were implemented and could not witness the change.
+#[cfg(feature = "zstd")]
+#[test]
+fn we_read_reference_zstd() {
+    expect_ten_messages(
+        &reference_file(Some(mcap::Compression::Zstd)),
+        "zstd chunks",
+    );
+}
+
+#[cfg(feature = "lz4")]
+#[test]
+fn we_read_reference_lz4() {
+    expect_ten_messages(&reference_file(Some(mcap::Compression::Lz4)), "lz4 chunks");
+}
+
+/// Without the feature, the refusal must still NAME the codec rather than surfacing as a short
+/// read, and must say what this build can do instead.
+#[cfg(not(feature = "zstd"))]
+#[test]
+fn without_the_feature_we_name_the_codec() {
+    match read(&reference_file(Some(mcap::Compression::Zstd))) {
         Err(ferroscope_mcap::Error::UnsupportedCompression(codec)) => {
-            // The expected outcome for a zstd-chunked file, and the error we promise: it
-            // names the codec instead of returning a short read.
-            assert!(
-                codec == "zstd" || codec == "lz4",
-                "unexpected codec {codec}"
-            );
+            assert_eq!(codec, "zstd");
         }
-        Err(e) => panic!("unexpected error reading a reference file: {e}"),
+        Ok(_) => panic!("read a zstd file without the zstd feature"),
+        Err(e) => panic!("expected UnsupportedCompression, got {e}"),
     }
 }
 

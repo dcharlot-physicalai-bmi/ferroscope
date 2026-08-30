@@ -323,7 +323,7 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
     let mut b = Cur::new(body);
     let _start = b.u64()?;
     let _end = b.u64()?;
-    let _uncompressed = b.u64()?;
+    let uncompressed_size = b.u64()?;
     let stored_crc = b.u32()?;
     let compression = b.string()?;
     let n = b.u64()? as usize;
@@ -334,10 +334,12 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
             have: b.remaining(),
         });
     }
-    let records = &b.buf[b.pos..b.pos + n];
-    if !(compression.is_empty() || compression == "none") {
-        return Err(Error::UnsupportedCompression(compression));
-    }
+    let stored = &b.buf[b.pos..b.pos + n];
+    // Borrowed when the chunk is stored plainly, owned when a codec decoded it. The CRC below is
+    // the MCAP `uncompressed_crc`, so it must be taken over these bytes either way.
+    let decoded = crate::decompress::chunk_records(&compression, stored, uncompressed_size)?;
+    let records: &[u8] = &decoded;
+
     if stored_crc != 0 {
         let actual = crate::crc32(records);
         if actual != stored_crc {

@@ -1,16 +1,22 @@
 //! **MCAP without the C.**
 //!
 //! A reader and writer for [MCAP](https://mcap.dev) v0 — the self-describing container the
-//! robotics field standardized on — implemented in `std` alone. No `zstd`, no `lz4`, no
-//! `binrw`, no build script, no C toolchain. The consequence is the point: this crate
-//! compiles for `wasm32-unknown-unknown` unchanged, so a browser tab can open the same
-//! recording a workstation wrote, byte for byte, with no server in between.
+//! robotics field standardized on — with no C toolchain, no build script and no `binrw`. The
+//! consequence is the point: this crate compiles for `wasm32-unknown-unknown` unchanged, so a
+//! browser tab can open the same recording a workstation wrote, byte for byte, with no server
+//! in between.
 //!
-//! Files are written with **uncompressed chunks**, which is a conforming MCAP profile that
-//! every reader must accept. Compression is a codec decision, not a format decision, and
-//! paying for a C codec on every platform in order to sometimes save bytes is what keeps
-//! robotics log tooling off the browser. If you want the bytes smaller, the transport
-//! (HTTP, WebTransport) already compresses.
+//! Files are **written** with uncompressed chunks, a conforming MCAP profile every reader must
+//! accept. Compression is a codec decision, not a format decision, and if you want the bytes
+//! smaller the transport (HTTP, WebTransport) already compresses them.
+//!
+//! **Reading** is a different question, because the files already exist. `ros2 bag record` and
+//! Foxglove write zstd by default, so a reader that handles only uncompressed chunks cannot open
+//! a real robot log — and reading only what we write is not interoperability. The `zstd` and
+//! `lz4` features add exactly that, through **pure-Rust** decoders (`ruzstd`, `lz4_flex`) that
+//! build for wasm unchanged. They are off by default, so the zero-dependency core is still there
+//! when you want it; turned on, a tab opens a `ros2 bag` file, which the C-linked
+//! implementations cannot do at any price.
 //!
 //! ```
 //! use ferroscope_mcap::{Writer, WriterOptions, read};
@@ -32,6 +38,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 mod crc32;
+mod decompress;
 mod read;
 mod stream;
 mod write;
@@ -127,8 +134,13 @@ pub enum Error {
         want: usize,
         have: usize,
     },
-    /// A chunk uses a compression codec this crate deliberately does not link.
+    /// A chunk uses a compression codec this build does not include.
     UnsupportedCompression(String),
+    /// A chunk's codec is present but the payload did not decode.
+    Decompress {
+        codec: &'static str,
+        detail: String,
+    },
     /// A chunk's stored CRC32 does not match its contents.
     ChunkCrcMismatch {
         expected: u32,
@@ -171,9 +183,13 @@ impl fmt::Display for Error {
             ),
             Error::UnsupportedCompression(c) => write!(
                 f,
-                "chunk compression {c:?} is not linked by this crate (it writes and reads \
-                 uncompressed chunks so it can build for wasm32); decompress upstream"
+                "chunk compression {c:?} is not available in this build (this one reads: {}); \
+                 rebuild ferroscope-mcap with the matching feature, or decompress upstream",
+                crate::decompress::available()
             ),
+            Error::Decompress { codec, detail } => {
+                write!(f, "a {codec} chunk did not decode: {detail}")
+            }
             Error::ChunkCrcMismatch { expected, actual } => write!(
                 f,
                 "chunk CRC32 mismatch: stored {expected:#010x}, computed {actual:#010x}"

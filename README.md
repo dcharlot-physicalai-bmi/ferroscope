@@ -1456,12 +1456,14 @@ A CI gate is one line:
 
 ## Architecture
 
-**Five crates carry zero runtime dependencies** — `std` and nothing else — and build for
-`wasm32-unknown-unknown` unchanged. Everything above them is additive, and the two crates that
+**Five crates carry zero runtime dependencies by default** — `std` and nothing else — and build
+for `wasm32-unknown-unknown` unchanged. The one optional exception is `ferroscope-mcap`'s chunk
+codecs, and they are pure Rust, so turning them on keeps the wasm build. Everything above them is additive, and the two crates that
 reach outside are the two that are not published, so nothing you install pulls in a tree.
 
 ```
 ferroscope-mcap      MCAP v0 reader + writer.       0 deps.  wasm-clean.
+                     Optional zstd/lz4 READING.     pure Rust, still wasm-clean.
 ferroscope-ledger    E_task arithmetic + coverage.  0 deps.  wasm-clean.
 ferroscope-receipt   SHA-256, digests, comparator.  0 deps.  wasm-clean.
 ferroscope-mesh      STL in, glTF out, and what     0 deps.  wasm-clean.
@@ -1492,9 +1494,19 @@ them C libraries, for compression it carries whether or not a given file is comp
 precisely what keeps robotics log tooling off the browser.
 
 `ferroscope-mcap` writes **uncompressed chunks**, which is a conforming MCAP profile every reader
-must accept, and stays `std`-only. Compression is a codec decision, not a format decision; if you
-want the bytes smaller, the transport already compresses them. What you get in exchange is a
-recording layer that runs in a tab.
+must accept. Compression is a codec decision, not a format decision; if you want the bytes
+smaller, the transport already compresses them. What you get in exchange is a recording layer
+that runs in a tab.
+
+Reading is the other half, and it is not a choice we get to make: the files already exist, and
+`ros2 bag record` and Foxglove write **zstd** by default. A reader that handles only uncompressed
+chunks cannot open a real robot log, and reading only what we write is not interoperability. So
+the `zstd` and `lz4` features add chunk decoding through **pure-Rust** decoders — `ruzstd` and
+`lz4_flex` — which is what makes this possible at all: they build for `wasm32` unchanged, so the
+browser opens a `ros2 bag` file. The C-linked implementations cannot, at any price. The features
+are off by default, so the dependency-free core is still there for anyone who wants it, and
+`cargo install ferroscope-cli` turns them on because a tool that reads recordings should read
+the ones people have.
 
 And an implementation that only round-trips against itself proves nothing: two matching bugs read
 as a pass. So the reference crate is a **dev-dependency**, and the test suite is an oracle:

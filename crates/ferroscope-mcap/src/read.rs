@@ -332,7 +332,7 @@ fn read_chunk(log: &mut Log, body: &[u8]) -> Result<()> {
     let mut b = Cur::new(body);
     let _start = b.u64()?;
     let _end = b.u64()?;
-    let _uncompressed_size = b.u64()?;
+    let uncompressed_size = b.u64()?;
     let stored_crc = b.u32()?;
     let compression = b.string()?;
     let n = b.u64()? as usize;
@@ -343,11 +343,12 @@ fn read_chunk(log: &mut Log, body: &[u8]) -> Result<()> {
             have: b.remaining(),
         });
     }
-    let records = &b.buf[b.pos..b.pos + n];
+    let stored = &b.buf[b.pos..b.pos + n];
+    // Borrowed when the chunk is stored plainly, owned when a codec decoded it. The CRC below is
+    // the MCAP `uncompressed_crc`, so it must be taken over these bytes either way.
+    let decoded = crate::decompress::chunk_records(&compression, stored, uncompressed_size)?;
+    let records: &[u8] = &decoded;
 
-    if !(compression.is_empty() || compression == "none") {
-        return Err(Error::UnsupportedCompression(compression));
-    }
     if stored_crc != 0 {
         let actual = crate::crc32(records);
         if actual != stored_crc {
