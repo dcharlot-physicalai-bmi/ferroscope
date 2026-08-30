@@ -1362,6 +1362,39 @@ const curve   = JSON.parse(divergence_curve(bytesA, bytesB, '/robot/joints'));
 
 ---
 
+### When the recorder was killed
+
+A robot log is very often incomplete. The recorder was killed, the disk filled, the battery went —
+and that file is frequently the most interesting one on the machine, because it is the run that
+failed. Refusing all of it because the last record is a stub throws away everything that was
+written correctly before the failure.
+
+```
+$ ferroscope inspect cut.mcap
+ferroscope: truncated at byte 26817629: record wants 65613 bytes, 12143 remain
+  this recording stops mid-record -- the recorder was probably killed. Re-run with
+  `--recover` to read what was written before that point.
+
+$ ferroscope inspect cut.mcap --recover
+  ** TRUNCATED at byte 26817629 -- a record there claims 65613 bytes and 12143 are present.
+     What follows is only what was COMPLETE before that point.
+  messages    128388
+```
+
+**128,388 of 255,364 messages out of a file cut exactly in half.** What is lost is the messages
+inside the unfinished record — a chunk is one record, so a recording with 64 KB chunks loses at
+most the last 64 KB of messages.
+
+Recovery is **opt-in, and it announces itself**, which is the part that matters. A short file that
+reads like a complete one is how a comparison comes to report divergence that is really absence, so
+the default stays strict and every surface carries the truncation through to what it prints.
+`verify` refuses a truncated recording outright and says why — a receipt covers a whole run — rather
+than reporting it as a missing receipt, which is what it used to do.
+
+This recovers; it does not repair. A CRC mismatch or a nonsense record length is still an error,
+because those mean the bytes are not what they claim to be, and that is a different thing from a
+file that ends early.
+
 ## Install
 
 ```sh
@@ -1423,6 +1456,7 @@ anyone to try a new one.**
 
 ```
 ferroscope inspect <run.mcap>            topics, schemas, clocks, receipt
+                   [--recover]           ...from a recording that stops mid-record
 ferroscope verify  <run.mcap>            recompute the receipt from the file itself
 ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
 ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run

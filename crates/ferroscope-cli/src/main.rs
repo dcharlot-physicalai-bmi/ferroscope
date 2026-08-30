@@ -39,7 +39,7 @@ fn main() -> ExitCode {
             println!("ferroscope {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        ["inspect", file] => run(cmd_inspect(file)),
+        ["inspect", file, rest @ ..] => run(cmd_inspect(file, rest)),
         ["verify", file] => run(cmd_verify(file)),
         ["energy", file] => run(cmd_energy(file)),
         ["diff", a, b, rest @ ..] => run(cmd_diff(a, b, rest)),
@@ -102,6 +102,7 @@ ferroscope {v}, the open interface layer for physical AI
 
 USAGE
   ferroscope inspect <run.mcap>            topics, schemas, clocks, receipt
+  ferroscope inspect <run.mcap> --recover  ...from a recording that stops mid-record
   ferroscope verify  <run.mcap>            recompute the receipt from the file itself
   ferroscope energy  <run.mcap>            E_task = E_compute + E_actuation
   ferroscope diff    <a.mcap> <b.mcap>     did the replay reproduce the run
@@ -147,7 +148,7 @@ fn slurp(path: &str) -> Result<Vec<u8>, String> {
 
 // ---------------------------------------------------------------------------
 
-fn cmd_inspect(path: &str) -> Result<bool, String> {
+fn cmd_inspect(path: &str, flags: &[&str]) -> Result<bool, String> {
     // Streamed, like verify and export. Everything printed here is a fold — counts per topic,
     // a min and a max, the worst lag, and two metadata blocks — so none of it needs the file.
     use ferroscope_mcap::{Flow, Record};
@@ -164,8 +165,13 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
     let mut receipt_kv: Option<Vec<(String, String)>> = None;
     let mut production_kv: Option<Vec<(String, String)>> = None;
 
+    // Recovery is OPT-IN. A truncated recording is missing its tail, and a reader that quietly
+    // returned partial data would make a short file indistinguishable from a complete one --
+    // which is how a diff comes to report divergence that is really absence. The flag makes the
+    // choice visible at the call site, and the strict error below names it.
+    let recover = flags.contains(&"--recover");
     let file = std::fs::File::open(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-    ferroscope_mcap::stream(file, |rec| {
+    let mut visit = |rec: ferroscope_mcap::Record<'_>| {
         match rec {
             Record::Header {
                 profile: p,
@@ -203,10 +209,35 @@ fn cmd_inspect(path: &str) -> Result<bool, String> {
             _ => {}
         }
         Ok(Flow::Continue)
-    })
-    .map_err(|e| e.to_string())?;
+    };
+    let truncation = if recover {
+        let (_, t) = ferroscope_mcap::stream_recovering(file, &mut visit).map_err(|e| {
+            format!("{e}\n  --recover reads a file that stops early; it cannot repair one")
+        })?;
+        t
+    } else {
+        ferroscope_mcap::stream(file, &mut visit).map_err(|e| match e {
+            ferroscope_mcap::Error::Truncated { .. } => format!(
+                "{e}\n  this recording stops mid-record -- the recorder was probably killed. \
+                 Re-run with `--recover` to read what was written before that point."
+            ),
+            other => other.to_string(),
+        })?;
+        None
+    };
 
     println!("{path}");
+    if let Some(t) = truncation {
+        println!(
+            "  ** TRUNCATED at byte {} -- a record there claims {} bytes and {} are present.",
+            t.offset, t.want, t.have
+        );
+        println!(
+            "     What follows is only what was COMPLETE before that point. Records inside the\n\
+             \x20    unfinished one are not here, and this file cannot verify against a receipt\n\
+             \x20    that covers the whole run."
+        );
+    }
     println!("  profile     {profile}");
     println!("  library     {library}");
     println!("  messages    {messages}");
@@ -269,7 +300,28 @@ fn cmd_verify(path: &str) -> Result<bool, String> {
     // memory — and this is the verb you reach for on a recording too big to open. Measured, the
     // slice path costs about 2.1x the file; this costs the largest record.
     let v = ferroscope_schema::verify_streaming(|| std::fs::File::open(path)).ok_or_else(|| {
-        format!("{path} has no Ferroscope receipt, or its payloads are unreadable")
+        // `verify_streaming` returns an Option, so the REASON is gone by the time it gets here,
+        // and this used to answer "no receipt, or unreadable payloads" for every failure --
+        // including a file in a compression this build cannot read, and a file that simply
+        // stops early. Both were reported as a missing receipt, which sends the reader looking
+        // for the wrong thing. Ask the reader directly; it costs a pass only when verification
+        // has already failed.
+        let why = std::fs::File::open(path)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                ferroscope_mcap::stream(f, |_| Ok(ferroscope_mcap::Flow::Continue))
+                    .map_err(|e| e.to_string())
+            })
+            .err();
+        match why {
+            Some(why) if why.starts_with("truncated") => format!(
+                "{path} is {why}\n  a receipt covers a whole run, so a recording that stops \
+                 early cannot verify.\n  `ferroscope inspect {path} --recover` will show what \
+                 it does contain."
+            ),
+            Some(why) => format!("{path} cannot be read: {why}"),
+            None => format!("{path} carries no Ferroscope receipt"),
+        }
     })?;
 
     println!("{path}");

@@ -45,7 +45,7 @@ mod write;
 
 pub use crc32::{Crc32, crc32};
 pub use read::{Log, RecordSpan, Statistics, read, read_prefix, record_spans};
-pub use stream::{Feed, Flow, MessageRef, Record, stream};
+pub use stream::{Feed, Flow, MessageRef, Record, Truncation, stream, stream_recovering};
 pub use write::{Writer, WriterOptions};
 
 /// The eight bytes that open and close every MCAP file. The `0x30` is ASCII `'0'`: the
@@ -130,7 +130,10 @@ pub enum Error {
     UnsupportedVersion(u8),
     /// A record ran off the end of the buffer — the file is truncated or lying about a length.
     Truncated {
-        offset: usize,
+        /// Byte offset IN THE FILE where the incomplete record begins. `u64` rather than
+        /// `usize` because this is a position in a recording, which may be larger than memory
+        /// and is addressed by a 32-bit `usize` on wasm32.
+        offset: u64,
         want: usize,
         have: usize,
     },
@@ -288,7 +291,7 @@ impl<'a> Cur<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.remaining() < n {
             return Err(Error::Truncated {
-                offset: self.pos,
+                offset: self.pos as u64,
                 want: n,
                 have: self.remaining(),
             });

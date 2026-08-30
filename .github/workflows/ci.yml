@@ -1449,3 +1449,42 @@ jobs:
           $B diff a.mcap b.mcap > /dev/null \
             || { echo "an honest pair no longer passes"; exit 1; }
           echo "diff recomputes both receipts: a forged digest is caught, an honest pair passes"
+      - name: a recording that stops mid-record is readable, and says that it did
+        # A robot log is very often incomplete -- the recorder was killed, the disk filled --
+        # and that file is frequently the most interesting one on the machine. Refusing all of
+        # it because the last record is a stub throws away everything written correctly.
+        #
+        # Recovery must never be SILENT, though: a short file that reads like a complete one is
+        # how a diff comes to report divergence that is really absence. So the default stays
+        # strict, and this pins both halves.
+        run: |
+          ./target/release/ferroscope demo whole.mcap --steps 30000 > /dev/null
+          FULL=$(./target/release/ferroscope inspect whole.mcap | awk '/^  messages/{print $2}')
+          SZ=$(wc -c < whole.mcap)
+          head -c $((SZ / 2)) whole.mcap > cut.mcap
+          # 1. strict is still strict, and points at the way out.
+          if ./target/release/ferroscope inspect cut.mcap > strict.txt 2>&1; then
+            echo "inspect accepted a truncated recording by default"; exit 1
+          fi
+          grep -q 'truncated at byte' strict.txt || { echo "the error does not say it is truncated"; cat strict.txt; exit 1; }
+          grep -q '\-\-recover' strict.txt || { echo "the error does not name --recover"; cat strict.txt; exit 1; }
+          # The offset must be a FILE position. It reported byte 0 of a 53 MB recording until
+          # 2026-08-30, because it printed an index into a buffer that gets compacted.
+          OFF=$(sed -n 's/.*truncated at byte \([0-9]*\).*/\1/p' strict.txt)
+          HAVE=$(sed -n 's/.*bytes, \([0-9]*\) remain.*/\1/p' strict.txt)
+          test "$((OFF + 9 + HAVE))" -eq "$((SZ / 2))" \
+            || { echo "offset $OFF + 9 + $HAVE != $((SZ / 2)): the offset is not a file position"; exit 1; }
+          # 2. --recover reads what was there, and SAYS it is partial.
+          ./target/release/ferroscope inspect cut.mcap --recover > rec.txt 2>&1 \
+            || { echo "--recover could not read a truncated file"; cat rec.txt; exit 1; }
+          grep -q 'TRUNCATED at byte' rec.txt || { echo "recovery did not announce itself"; cat rec.txt; exit 1; }
+          PART=$(awk '/^  messages/{print $2}' rec.txt)
+          test "$PART" -gt 0 || { echo "recovered no messages at all"; exit 1; }
+          test "$PART" -lt "$FULL" || { echo "recovered $PART of $FULL from half a file"; exit 1; }
+          echo "  recovered $PART of $FULL messages from half a recording, at byte $OFF"
+          # 3. verify must refuse it, and for the RIGHT reason.
+          if ./target/release/ferroscope verify cut.mcap > ver.txt 2>&1; then
+            echo "verify passed a truncated recording"; exit 1
+          fi
+          grep -q 'truncated' ver.txt || { echo "verify blamed the wrong thing:"; cat ver.txt; exit 1; }
+          echo "  verify refuses it and names truncation, not a missing receipt"

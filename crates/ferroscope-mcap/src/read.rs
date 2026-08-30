@@ -110,7 +110,7 @@ pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
     while pos < body_end {
         if body_end - pos < 9 {
             return Err(Error::Truncated {
-                offset: pos,
+                offset: pos as u64,
                 want: 9,
                 have: body_end - pos,
             });
@@ -126,7 +126,7 @@ pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
             Ok(n) => n,
             Err(_) => {
                 return Err(Error::Truncated {
-                    offset: pos + 9,
+                    offset: (pos + 9) as u64,
                     want: usize::MAX,
                     have: body_end - pos - 9,
                 });
@@ -134,7 +134,7 @@ pub fn record_spans(bytes: &[u8]) -> Result<Vec<RecordSpan>> {
         };
         if body_end - pos - 9 < len {
             return Err(Error::Truncated {
-                offset: pos + 9,
+                offset: (pos + 9) as u64,
                 want: len,
                 have: body_end - pos - 9,
             });
@@ -191,7 +191,7 @@ fn read_inner(bytes: &[u8], require_end_magic: bool) -> Result<Log> {
         let len = c.u64()? as usize;
         if c.remaining() < len {
             return Err(Error::Truncated {
-                offset: c.pos,
+                offset: c.pos as u64,
                 want: len,
                 have: c.remaining(),
             });
@@ -285,7 +285,7 @@ pub(crate) fn parse_attachment(body: &[u8]) -> Result<Attachment> {
     let n = b.u64()? as usize;
     if b.remaining() < n + 4 {
         return Err(Error::Truncated {
-            offset: b.pos,
+            offset: b.pos as u64,
             want: n + 4,
             have: b.remaining(),
         });
@@ -338,7 +338,7 @@ fn read_chunk(log: &mut Log, body: &[u8]) -> Result<()> {
     let n = b.u64()? as usize;
     if b.remaining() < n {
         return Err(Error::Truncated {
-            offset: b.pos,
+            offset: b.pos as u64,
             want: n,
             have: b.remaining(),
         });
@@ -365,7 +365,7 @@ fn read_chunk(log: &mut Log, body: &[u8]) -> Result<()> {
         let len = inner.u64()? as usize;
         if inner.remaining() < len {
             return Err(Error::Truncated {
-                offset: inner.pos,
+                offset: inner.pos as u64,
                 want: len,
                 have: inner.remaining(),
             });

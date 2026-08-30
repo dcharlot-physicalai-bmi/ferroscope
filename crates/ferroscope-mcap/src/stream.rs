@@ -167,7 +167,7 @@ impl Feed {
             let Ok(len) = usize::try_from(len) else {
                 self.done = true;
                 return Err(Error::Truncated {
-                    offset: self.head,
+                    offset: self.file_pos(),
                     want: usize::MAX,
                     have: available - 9,
                 });
@@ -194,7 +194,7 @@ impl Feed {
                 }
                 op::SCHEMA => visit(Record::Schema(crate::read::parse_schema(body)?))?,
                 op::CHANNEL => visit(Record::Channel(crate::read::parse_channel(body)?))?,
-                op::MESSAGE => visit(Record::Message(message_ref(body)?))?,
+                op::MESSAGE => visit(Record::Message(message_ref(body, self.file_pos_at(at))?))?,
                 op::ATTACHMENT => visit(Record::Attachment(crate::read::parse_attachment(body)?))?,
                 op::METADATA => {
                     let mut b = Cur::new(body);
@@ -239,12 +239,27 @@ impl Feed {
                     .expect("nine bytes are available"),
             );
             return Err(Error::Truncated {
-                offset: self.head,
+                offset: self.file_pos(),
                 want: usize::try_from(len).unwrap_or(usize::MAX),
                 have: dangling - 9,
             });
         }
         Ok(())
+    }
+
+    /// Where the feed is IN THE FILE: everything pushed in, less what is still held because it
+    /// is not yet a whole record.
+    ///
+    /// Not `head`. `head` is an index into a buffer that [`Feed::compact`] resets to zero once
+    /// enough of it has been consumed, so reporting it as a position named byte 0 of a 53 MB
+    /// recording — an offset a reader would go and look at, pointing at the wrong place.
+    fn file_pos(&self) -> u64 {
+        self.file_pos_at(self.head)
+    }
+
+    /// The file position of a buffer index.
+    fn file_pos_at(&self, idx: usize) -> u64 {
+        self.bytes - (self.buf.len() - idx) as u64
     }
 
     /// How many records have been handed to a visitor.
@@ -317,6 +332,71 @@ where
     Ok(feed.records())
 }
 
+/// Where a recording stops, when it stops in the middle of a record.
+///
+/// A robot log is very often incomplete: the recorder was killed, the disk filled, the battery
+/// went. That file is frequently the MOST interesting one on the machine, and refusing all of it
+/// because its last record is a stub throws away everything that was written correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Truncation {
+    /// Byte offset in the file where the incomplete record begins.
+    pub offset: u64,
+    /// How many bytes that record's header claimed.
+    pub want: usize,
+    /// How many were actually there.
+    pub have: usize,
+}
+
+/// [`stream`], but keep what a truncated recording did contain instead of discarding all of it.
+///
+/// Returns the number of records visited and, if the file stopped mid-record, where. Every
+/// complete record before that point has already been handed to `visit` — that was true of
+/// [`stream`] too, which then returned `Err` and left the caller with no way to say so.
+///
+/// **Only truncation is recovered.** Bad magic, a CRC mismatch, an unreadable codec and a
+/// nonsense record length are still errors: they mean the bytes are not what they claim to be,
+/// which is a different thing from the file ending early, and quietly returning partial data for
+/// a corrupt file would be worse than refusing it.
+///
+/// # What this cannot recover
+///
+/// Records inside the incomplete record. In practice that means the messages in the final chunk,
+/// because a chunk IS one record — so a recording with 64 KB chunks loses at most the last 64 KB
+/// of messages, and one written as a single chunk recovers nothing but its header. This is not a
+/// general repair tool and does not rebuild an index or a summary.
+///
+/// # A recovered read is not the same read
+///
+/// The caller must say so. A receipt covers a trace that is now missing its tail, so it cannot
+/// verify; a comparison against a complete run would report divergence that is only absence. Every
+/// surface that uses this has to carry the truncation through to what it prints.
+pub fn stream_recovering<R: Read, F>(mut r: R, mut visit: F) -> Result<(u64, Option<Truncation>)>
+where
+    F: FnMut(Record<'_>) -> Result<Flow>,
+{
+    let mut feed = Feed::new();
+    let mut block = vec![0u8; READ_BLOCK];
+    loop {
+        let n = match r.read(&mut block) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(Error::Io(e)),
+        };
+        feed.push(&block[..n]);
+        if feed.drain(&mut visit)? == Flow::Stop {
+            return Ok((feed.records(), None));
+        }
+    }
+    match feed.end() {
+        Ok(()) => Ok((feed.records(), None)),
+        Err(Error::Truncated { offset, want, have }) => {
+            Ok((feed.records(), Some(Truncation { offset, want, have })))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Walk the records inside one chunk. The chunk itself is already in memory — bounded by the
 /// writer's chunk target — so this is an ordinary slice walk.
 fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) -> Result<Flow> {
@@ -329,7 +409,7 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
     let n = b.u64()? as usize;
     if b.remaining() < n {
         return Err(Error::Truncated {
-            offset: b.pos,
+            offset: b.pos as u64,
             want: n,
             have: b.remaining(),
         });
@@ -356,7 +436,7 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
         let len = inner.u64()? as usize;
         if inner.remaining() < len {
             return Err(Error::Truncated {
-                offset: inner.pos,
+                offset: inner.pos as u64,
                 want: len,
                 have: inner.remaining(),
             });
@@ -366,7 +446,7 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
         let flow = match opcode {
             op::SCHEMA => visit(Record::Schema(crate::read::parse_schema(rec)?))?,
             op::CHANNEL => visit(Record::Channel(crate::read::parse_channel(rec)?))?,
-            op::MESSAGE => visit(Record::Message(message_ref(rec)?))?,
+            op::MESSAGE => visit(Record::Message(message_ref(rec, inner.pos as u64)?))?,
             other => visit(Record::Other { opcode: other })?,
         };
         if flow == Flow::Stop {
@@ -377,10 +457,14 @@ fn stream_chunk(body: &[u8], visit: &mut dyn FnMut(Record<'_>) -> Result<Flow>) 
 }
 
 /// The message header, with the payload left where it lies.
-fn message_ref(body: &[u8]) -> Result<MessageRef<'_>> {
+///
+/// `at` is where `body` begins: a file position for the top-level reader, and a position WITHIN
+/// the enclosing chunk for the chunked one, whose records have no file position of their own
+/// because the chunk they came from may have been compressed.
+fn message_ref(body: &[u8], at: u64) -> Result<MessageRef<'_>> {
     if body.len() < 22 {
         return Err(Error::Truncated {
-            offset: 0,
+            offset: at,
             want: 22,
             have: body.len(),
         });

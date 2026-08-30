@@ -8,7 +8,10 @@ description = "MCAP v0 reader and writer: zero dependencies by default, pure Rus
 # one definition of what a record is for both directions.
 # 0.1.9 READS zstd and lz4 chunks behind optional features. Reading only what we write is not
 # interoperability: `ros2 bag record` and Foxglove write zstd by default, so uncompressed-only
-# meant we could not open a real robot log.
+# meant we could not open a real robot log. It also adds `stream_recovering`: a recording that
+# stops mid-record keeps what it had, instead of being refused whole. Recovery is opt-in and
+# reports where the file stops -- and the offset it reports is now a FILE position, where it used
+# to be an index into a buffer that gets compacted, and named byte 0 of a 53 MB recording.
 version = "0.1.9"
 edition.workspace = true
 rust-version.workspace = true
