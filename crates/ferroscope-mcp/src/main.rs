@@ -22,7 +22,28 @@ use ferroscope_schema::json::{self, Value};
 use std::io::{BufRead, Write};
 
 /// The protocol revision this server implements.
-const PROTOCOL: &str = "2025-06-18";
+/// The MCP revisions this server will speak, newest first.
+///
+/// It answers `initialize` by ECHOING the client's requested version when it is one of these,
+/// and falling back to the newest otherwise — which is what the lifecycle asks for: a server
+/// that supports the requested version must reply with that version, and a client offered one
+/// it does not know should disconnect. This server replied `2025-06-18` to every request
+/// regardless, so a client that speaks only an earlier revision was told to go away over a
+/// difference that does not exist here. Nothing in this tool surface — `tools/list` and
+/// `tools/call` — changed across these three.
+const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// The newest revision this server speaks, used when the client asks for nothing or for
+/// something unrecognised.
+const PROTOCOL: &str = PROTOCOLS[0];
+
+/// The version to answer `initialize` with, given what the client asked for.
+fn negotiated(asked: Option<&str>) -> &'static str {
+    match asked {
+        Some(v) => PROTOCOLS.into_iter().find(|p| *p == v).unwrap_or(PROTOCOL),
+        None => PROTOCOL,
+    }
+}
 
 fn main() {
     let stdin = std::io::stdin();
@@ -53,7 +74,9 @@ fn main() {
                 &id,
                 &format!(
                     r#"{{"protocolVersion":{},"capabilities":{{"tools":{{"listChanged":false}}}},"serverInfo":{{"name":"ferroscope","version":{}}}}}"#,
-                    quote(PROTOCOL),
+                    quote(negotiated(
+                        params.get("protocolVersion").and_then(|v| v.as_str())
+                    )),
                     quote(env!("CARGO_PKG_VERSION"))
                 ),
             )),

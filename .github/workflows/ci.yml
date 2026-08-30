@@ -459,6 +459,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2.7.8
       - run: cargo build --release -p ferroscope-mcp
+      - name: it negotiates the protocol version instead of announcing one
+        # The lifecycle: a server that supports the version the client asked for must reply with
+        # THAT version, and a client offered one it does not know should disconnect. This server
+        # answered 2025-06-18 to every request, so a client speaking only an earlier revision was
+        # turned away over a difference that does not exist here — `tools/list` and `tools/call`
+        # are the same across all three.
+        run: |
+          B=./target/release/ferroscope-mcp
+          ask() {
+            printf '{"jsonrpc":"2.0","id":0,"method":"initialize","params":%s}\n' "$1" \
+              | $B 2>/dev/null | head -1 \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["protocolVersion"])'
+          }
+          for v in 2024-11-05 2025-03-26 2025-06-18; do
+            got=$(ask "{\"protocolVersion\":\"$v\"}")
+            test "$got" = "$v" || { echo "asked $v, told $got — a client that only speaks $v is turned away"; exit 1; }
+          done
+          for p in '{"protocolVersion":"2099-01-01"}' '{}'; do
+            got=$(ask "$p")
+            test "$got" = "2025-06-18" || { echo "unknown/absent version should fall back to the newest, got $got"; exit 1; }
+          done
+          echo "the version the client asked for is the version it is answered with"
+
       - name: the server speaks MCP and records what it is asked for
         run: |
           python3 - > /tmp/in.jsonl <<'PY'
@@ -490,6 +513,7 @@ jobs:
           # A notification must NOT be answered; only ids 0..5 may appear.
           assert set(out) <= {0,1,2,3,4,5}, f'unexpected replies: {sorted(out)}'
           if out[0]['result']['serverInfo']['name'] != 'ferroscope': fail('bad serverInfo')
+          if out[0]['result'].get('protocolVersion') != '2025-06-18': fail('bad protocolVersion')
           names = {t['name'] for t in out[1]['result']['tools']}
           for t in ['scene_schema','scene_validate','scene_record','robot_check',
                     'mesh_check','materials_search','run_inspect','run_verify',
