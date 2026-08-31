@@ -42,7 +42,7 @@ fn main() -> ExitCode {
         ["inspect", file, rest @ ..] => run(cmd_inspect(file, rest)),
         ["verify", file] => run(cmd_verify(file)),
         ["energy", file] => run(cmd_energy(file)),
-        ["diff", a, b, rest @ ..] => run(cmd_diff(a, b, rest)),
+        ["diff", a, b, rest @ ..] => run_answer(cmd_diff(a, b, rest)),
         ["export", file, out] => run(cmd_export(file, out)),
         ["live", file, rest @ ..] => run(live::run(file, rest)),
         ["demo", rest @ ..] if !rest.is_empty() => {
@@ -79,6 +79,35 @@ fn split_out<'a>(rest: &'a [&'a str], default: &'a str) -> (&'a str, &'a [&'a st
     match rest {
         [first, tail @ ..] if !first.starts_with("--") => (first, tail),
         _ => (default, rest),
+    }
+}
+
+/// What a question-answering verb concluded.
+///
+/// `diff` asks "did the replay reproduce the run". A plain bool cannot express the third
+/// outcome, and collapsing it into `No` made two very different results identical to a script:
+/// two receiptless recordings whose floats matched exited 1, and so did two that diverged. The
+/// documented contract already reserves 2 for "could not answer"; this is the type that can say
+/// it.
+enum Answer {
+    Yes,
+    No,
+    /// The tool worked and the question has no answer from this evidence.
+    NoEvidence(&'static str),
+}
+
+fn run_answer(r: Result<Answer, String>) -> ExitCode {
+    match r {
+        Ok(Answer::Yes) => ExitCode::SUCCESS,
+        Ok(Answer::No) => ExitCode::from(1),
+        Ok(Answer::NoEvidence(why)) => {
+            println!("\n  could not answer: {why}");
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("ferroscope: {e}");
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -429,7 +458,7 @@ fn cmd_energy(path: &str) -> Result<bool, String> {
     Ok(q.quotable)
 }
 
-fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
+fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<Answer, String> {
     let mut tol = Tolerance::default();
     let mut declare = false;
     let mut i = 0;
@@ -536,8 +565,8 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
                  comparability claim)",
                 ferroscope_receipt::declared_fields(&a.spec)
             );
-            // "Did these reproduce?" has no yes available when the two runs did not ask the
-            // same question, so the exit code stays 1 however well the numbers line up. When
+            // "Did these reproduce?" has no YES available when the two runs did not ask the
+            // same question -- and no NO either, which is why this exits 2 rather than 1. When
             // only the toolchain moved, the trace comparison below is still worth reading, and
             // saying so is the difference between a useful red and a baffling one.
             if diffs.len() == 1 && diffs[0].field == "build" {
@@ -559,7 +588,7 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
                 "  (both receipts recomputed from their files and agree; no per-step comparison \
                  was needed)"
             );
-            return Ok(true);
+            return Ok(Answer::Yes);
         }
     }
 
@@ -750,7 +779,21 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<bool, String> {
             r.precision.relative_resolution()
         );
     }
-    Ok(p.verdict.reproduced() && trustworthy && !specs_differ)
+    // Three outcomes, because there are three. A divergence is an answer: the runs differ, and
+    // that is true whether or not either file carries a receipt. Everything else that falls
+    // short of yes is an absence of evidence, and saying "no" to that claims more than is known.
+    Ok(if p.verdict.reproduced() && trustworthy && !specs_differ {
+        Answer::Yes
+    } else if !p.verdict.reproduced() {
+        Answer::No
+    } else if specs_differ {
+        Answer::NoEvidence("the two runs did not declare the same experiment")
+    } else {
+        Answer::NoEvidence(
+            "neither recording stands behind its own receipt, so the values agreeing is not \
+             evidence that the run reproduced",
+        )
+    })
 }
 
 /// Report what the two runs cost, per rail, and refuse the comparison when either quote is not

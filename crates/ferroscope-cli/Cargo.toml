@@ -47,7 +47,10 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # recording carries, with no ROS installed.
 # 0.1.30 carries the comparator fix: two ROS 2 recordings that differ are no longer reported
 # identical, and a divergence is named from the message definition (`position[0]`, not `[2]`).
-version = "0.1.30"
+# 0.1.31: `diff` uses all three documented exit codes. A pair with no receipt whose values agree
+# now exits 2 (could not answer) rather than 1, which it shared with a real divergence -- so a
+# script could not tell a clean comparison from a failure. A divergence still exits 1.
+version = "0.1.31"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

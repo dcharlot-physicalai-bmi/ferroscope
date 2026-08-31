@@ -1489,6 +1489,14 @@ anyone to try a new one.**
 
 ## The CLI
 
+Every verb answers with an exit code: **0 yes, 1 no, 2 could-not-answer.** `diff` uses all three,
+and the third is not a formality. Two recordings whose floats agree but which carry no receipt
+exit **2**, not 0 and not 1 — the values matching is a fact, and it is not evidence that a run
+reproduced. Two that diverge exit **1** whether or not they carry receipts, because a difference
+is an answer. That distinction used to be collapsed into 1, so a script could not tell a clean
+comparison from a divergence.
+
+
 ```
 ferroscope inspect <run.mcap>            topics, schemas, clocks, receipt
                    [--recover]           ...from a recording that stops mid-record

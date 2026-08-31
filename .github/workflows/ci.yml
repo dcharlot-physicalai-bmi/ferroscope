@@ -1455,7 +1455,25 @@ jobs:
           check "an unknown verb"      2 $B nosuchverb
           check "a bad flag value"     2 $B live a.mcap --rate nan
           check "the scene schema"     0 $B scene --schema
-          echo "0 yes / 1 no / 2 could-not-answer, as documented"
+          # `diff` answers a QUESTION, so it uses all three codes. The receiptless cases are the
+          # ones that used to collapse: identical and diverged both exited 1, so a script could
+          # not tell a clean comparison from a divergence.
+          $B demo d-a.mcap --steps 200 --seed 3 > /dev/null
+          $B demo d-b.mcap --steps 200 --seed 3 > /dev/null
+          $B demo d-c.mcap --steps 200 --seed 3 --drift 100 > /dev/null
+          check "reproduced"                 0 $B diff d-a.mcap d-b.mcap
+          check "diverged"                   1 $B diff d-a.mcap d-c.mcap
+          # Strip both receipts: the values still agree, but nothing stands behind them.
+          python3 - <<'EOF'
+          import re
+          for src, dst in (("d-a.mcap", "n-a.mcap"), ("d-b.mcap", "n-b.mcap"), ("d-c.mcap", "n-c.mcap")):
+              b = open(src, "rb").read()
+              # Break the receipt block's name so the reader stops finding it.
+              open(dst, "wb").write(b.replace(b"ferroscope.receipt", b"ferroscope.reveipt"))
+          EOF
+          check "no receipt, values agree"   2 $B diff n-a.mcap n-b.mcap
+          check "no receipt, values differ"  1 $B diff n-a.mcap n-c.mcap
+          echo "0 yes / 1 no / 2 could-not-answer, as documented — and diff uses all three"
       - name: diff recomputes both receipts instead of trusting metadata
         # The hole this closes: diff used to compare two STORED digest strings read out of
         # metadata and return exit 0 on a match. A file whose block was edited to carry
