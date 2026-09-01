@@ -159,6 +159,36 @@ jobs:
               || { echo "the viewer no longer handles bundles: missing \"$needle\""; exit 1; }
           done
           echo "a bundle opens, and names what it cannot do"
+      - name: every slice/streaming twin has an agreement test
+        # This crate answers several questions twice -- once over a slice for a browser holding
+        # an ArrayBuffer, once over a stream for a file bigger than memory. That is the single
+        # most productive source of defects here: CDR decoding reached the streaming bundle
+        # reader and not the slice one (a `ros2 bag` plotted in the CLI and showed nothing in the
+        # browser), then reached four readers of ten (`diff` compared nothing across two
+        # different recordings and said "bit-exact").
+        #
+        # A test that reader X handles feature Y is satisfiable by fixing one surface. "The twins
+        # agree" is not. So every `foo` / `foo_streaming` pair must appear in tests/twins.rs, and
+        # a NEW pair cannot be added without one.
+        run: |
+          python3 - <<'EOF'
+          import re, sys, pathlib
+          src = ""
+          for f in ("lib.rs", "bundle.rs"):
+              src += pathlib.Path("crates/ferroscope-schema/src", f).read_text()
+          names = set(re.findall(r"^pub fn ([a-z_0-9]+)", src, re.M))
+          pairs = sorted(n[:-10] for n in names if n.endswith("_streaming") and n[:-10] in names)
+          if not pairs:
+              print("no twin pairs found -- this check has lost its subject"); sys.exit(1)
+          twins = pathlib.Path("crates/ferroscope-schema/tests/twins.rs").read_text()
+          missing = [p for p in pairs if f"{p}_streaming" not in twins or f"::{p}(" not in twins]
+          if missing:
+              print("twin pairs with no agreement test in tests/twins.rs:")
+              for m in missing:
+                  print(f"  {m} / {m}_streaming")
+              sys.exit(1)
+          print(f"  {len(pairs)} twin pairs, each asserted equal: {', '.join(pairs)}")
+          EOF
       - name: every comparator recomputes receipts, not just the one that was fixed
         # This project has now shipped the same defect on three surfaces: the CLI compared two
         # STORED digest strings, the wasm comparator had its own copy, and the scenario harness
