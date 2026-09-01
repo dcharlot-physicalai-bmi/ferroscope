@@ -85,6 +85,84 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// A decoded message, with its structure and its strings intact.
+///
+/// The first version of this decoder emitted a flat `Vec<f64>` and threw strings away, which is
+/// all a plot or a digest needs. It is not enough to place a robot: `tf2_msgs/TFMessage` says
+/// which frame moved in a `child_frame_id` STRING, and a transform without its frame is a row of
+/// numbers with nowhere to go. So the decode produces a tree, and the numeric views are walks
+/// over it -- one decoder, two views, rather than two decoders that can disagree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Num(f64),
+    Str(String),
+    Arr(Vec<Value>),
+    Obj(Vec<(String, Value)>),
+}
+
+impl Value {
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Obj(kv) => kv.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Num(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[Value]> {
+        match self {
+            Value::Arr(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Every number, in field order. Strings contribute nothing, exactly as before.
+    pub fn numbers(&self, out: &mut Vec<f64>) {
+        match self {
+            Value::Num(n) => out.push(*n),
+            Value::Arr(a) => a.iter().for_each(|v| v.numbers(out)),
+            Value::Obj(kv) => kv.iter().for_each(|(_, v)| v.numbers(out)),
+            Value::Str(_) => {}
+        }
+    }
+
+    /// Every number with the path that reaches it: `header.stamp.sec`, `position[1]`.
+    pub fn labeled(&self, prefix: &str, out: &mut Vec<(String, f64)>) {
+        match self {
+            Value::Num(n) => out.push((prefix.to_string(), *n)),
+            Value::Arr(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    v.labeled(&format!("{prefix}[{i}]"), out);
+                }
+            }
+            Value::Obj(kv) => {
+                for (k, v) in kv {
+                    let path = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
+                    v.labeled(&path, out);
+                }
+            }
+            Value::Str(_) => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ty {
     Bool,
@@ -202,8 +280,9 @@ impl MessageDef {
 
     /// The numbers in this message, in field order.
     pub fn decode_numbers(&self, payload: &[u8]) -> Result<Vec<f64>, Error> {
-        let (v, _) = self.decode(payload, false)?;
-        Ok(v)
+        let mut out = Vec::new();
+        self.decode(payload)?.numbers(&mut out);
+        Ok(out)
     }
 
     /// The numbers, and a name for each — `header.stamp.sec`, `position[1]`.
@@ -211,82 +290,57 @@ impl MessageDef {
     /// The comparator reports `channel[4]`, and `[4]` is not a name. A ROS 2 recording carries
     /// the field names in the file, so there is no reason to print an index.
     pub fn decode_labeled(&self, payload: &[u8]) -> Result<(Vec<f64>, Vec<String>), Error> {
-        self.decode(payload, true)
+        let mut pairs = Vec::new();
+        self.decode(payload)?.labeled("", &mut pairs);
+        // `labeled` yields (name, value); the caller wants values first.
+        Ok(pairs.into_iter().map(|(n, v)| (v, n)).unzip())
     }
 
-    fn decode(&self, payload: &[u8], label: bool) -> Result<(Vec<f64>, Vec<String>), Error> {
+    /// The message as a tree, with its strings.
+    pub fn decode(&self, payload: &[u8]) -> Result<Value, Error> {
         let mut c = Cdr::new(payload)?;
-        let mut out = Vec::new();
-        let mut names = Vec::new();
-        self.read_msg(&self.root, &mut c, &mut out, &mut names, label, "", 0)?;
+        let v = self.read_msg(&self.root, &mut c, 0)?;
         c.finish()?;
-        Ok((out, names))
+        Ok(v)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn read_msg(
-        &self,
-        ty: &str,
-        c: &mut Cdr<'_>,
-        out: &mut Vec<f64>,
-        names: &mut Vec<String>,
-        label: bool,
-        prefix: &str,
-        depth: u32,
-    ) -> Result<(), Error> {
+    fn read_msg(&self, ty: &str, c: &mut Cdr<'_>, depth: u32) -> Result<Value, Error> {
         if depth > 32 {
             return Err(Error::TooDeep);
         }
         let fields = self.types.get(ty).ok_or_else(|| Error::UnknownType {
-            field: prefix.trim_end_matches('.').to_string(),
+            field: String::new(),
             ty: ty.to_string(),
         })?;
+        let mut obj: Vec<(String, Value)> = Vec::with_capacity(fields.len());
         for f in fields {
-            let path = if prefix.is_empty() {
-                f.name.clone()
-            } else {
-                format!("{prefix}{}", f.name)
-            };
             let n = match f.arity {
                 Arity::One => 1,
                 Arity::Fixed(n) => n,
                 Arity::Seq => c.u32()? as usize,
             };
-            for i in 0..n {
-                let elem = if matches!(f.arity, Arity::One) {
-                    path.clone()
-                } else {
-                    format!("{path}[{i}]")
-                };
-                match &f.kind {
-                    Kind::Prim(Ty::Str) => {
-                        c.string()?;
-                    }
-                    Kind::Prim(p) => {
-                        out.push(read_prim(*p, c)?);
-                        if label {
-                            names.push(elem);
-                        }
-                    }
+            let mut elems: Vec<Value> = Vec::new();
+            for _ in 0..n {
+                elems.push(match &f.kind {
+                    Kind::Prim(Ty::Str) => Value::Str(c.string()?.to_string()),
+                    Kind::Prim(p) => Value::Num(read_prim(*p, c)?),
                     Kind::Msg(m) => {
                         let resolved = self.resolve(m, ty).ok_or_else(|| Error::UnknownType {
-                            field: path.clone(),
+                            field: f.name.clone(),
                             ty: m.clone(),
                         })?;
-                        self.read_msg(
-                            &resolved,
-                            c,
-                            out,
-                            names,
-                            label,
-                            &format!("{elem}."),
-                            depth + 1,
-                        )?;
+                        self.read_msg(&resolved, c, depth + 1)?
                     }
-                }
+                });
             }
+            let v = if matches!(f.arity, Arity::One) {
+                elems.pop().expect("arity One reads exactly one element")
+            } else {
+                Value::Arr(elems)
+            };
+            obj.push((f.name.clone(), v));
         }
-        Ok(())
+        Ok(Value::Obj(obj))
     }
 
     /// A field may name a type fully (`std_msgs/Header`) or bare (`Header`), in which case it

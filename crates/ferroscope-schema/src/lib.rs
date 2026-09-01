@@ -1106,16 +1106,27 @@ pub(crate) fn payload_value(
     def: Option<&ferroscope_ros2::MessageDef>,
 ) -> Option<crate::json::Value> {
     if is_cdr {
-        let (values, labels) = def?.decode_labeled(data).ok()?;
-        return Some(crate::json::Value::Obj(
-            labels
-                .into_iter()
-                .zip(values)
-                .map(|(k, v)| (k, crate::json::Value::Num(v)))
-                .collect(),
-        ));
+        return Some(from_ros2(&def?.decode(data).ok()?));
     }
     crate::json::parse(std::str::from_utf8(data).ok()?)
+}
+
+/// A decoded ROS 2 message as the value the rest of this crate already understands.
+///
+/// Structure is kept rather than flattened. The numbers and their paths come out the same either
+/// way -- `position[1]` is `position[1]` whether the tree is nested or not -- but a flattened
+/// message has thrown its STRINGS away, and `tf2_msgs/TFMessage` says which frame moved in one.
+/// A transform without its frame is a row of numbers with nowhere to go.
+fn from_ros2(v: &ferroscope_ros2::Value) -> crate::json::Value {
+    use crate::json::Value as J;
+    match v {
+        ferroscope_ros2::Value::Num(n) => J::Num(*n),
+        ferroscope_ros2::Value::Str(s) => J::Str(s.clone()),
+        ferroscope_ros2::Value::Arr(a) => J::Arr(a.iter().map(from_ros2).collect()),
+        ferroscope_ros2::Value::Obj(kv) => {
+            J::Obj(kv.iter().map(|(k, x)| (k.clone(), from_ros2(x))).collect())
+        }
+    }
 }
 
 pub fn trace_from_streaming<R: std::io::Read>(r: R) -> Option<(Option<Receipt>, Trace)> {

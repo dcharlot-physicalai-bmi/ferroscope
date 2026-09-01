@@ -34,7 +34,8 @@ const root = resolve(new URL('../viewer', import.meta.url).pathname);
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const m = url.pathname.match(/^\/codec-(none|zstd|lz4)\.mcap$/);
-  const path = url.pathname === '/ros2.mcap' ? resolve(join(dir, 'ros2.mcap'))
+  const path = url.pathname === '/ros2-tf.mcap' ? resolve(join(dir, 'ros2-tf.mcap'))
+             : url.pathname === '/ros2.mcap' ? resolve(join(dir, 'ros2.mcap'))
              : m ? resolve(join(dir, `codec-${m[1]}.mcap`))
                  : resolve(root, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
   try {
@@ -128,6 +129,46 @@ try {
     } else {
       console.log(`  ok  a ROS 2 bag opened in the browser: ${out.messages} messages, ${out.scalars.length} named lanes`);
     }
+  }
+  // ---- a transform tree draws, with no geometry at all ------------------------------------
+  // ROS 2 publishes WHERE things are on /tf and leaves what they look like to a separate robot
+  // description, so a real bag routinely carries a full transform tree and nothing to draw. The
+  // data landing in `frames` is one claim; that the 3-D view actually puts something on screen
+  // is another, and only the second is what a reader sees.
+  if (existsSync(join(dir, 'ros2-tf.mcap'))) {
+    const data = await page.evaluate(async () => {
+      const bytes = new Uint8Array(await (await fetch('/ros2-tf.mcap')).arrayBuffer());
+      try {
+        const b = JSON.parse(window.__T.open(bytes));
+        return { ok: true, frames: Object.keys(b.frames || {}), geometry: (b.geometry || []).length };
+      } catch (e) { return { ok: false, err: String(e) }; }
+    });
+    if (!data.ok) fail(`the browser could not open a /tf bag: ${data.err}`);
+    else if (!data.frames.includes('base_link') || !data.frames.includes('lidar')) {
+      fail(`transform tree did not become frames: ${JSON.stringify(data.frames)}`);
+    } else if (data.geometry !== 0) {
+      fail(`the /tf fixture is supposed to carry NO geometry, but has ${data.geometry}`);
+    } else {
+      console.log(`  ok  a /tf bag decodes to frames ${data.frames.join(', ')} with no geometry`);
+    }
+
+    // And now the render path: load it the way a person does and count what reached the scene.
+    const drawn = await page.evaluate(async () => {
+      const bytes = new Uint8Array(await (await fetch('/ros2-tf.mcap')).arrayBuffer());
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], 'ros2-tf.mcap'));
+      const input = document.querySelector('input[type=file]');
+      if (!input) return 'no file input on the page';
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      for (let i = 0; i < 100; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        if (document.body.dataset.frames) return document.body.dataset.frames;
+      }
+      return '0';
+    });
+    if (drawn !== '2') fail(`the 3-D view drew ${drawn} frame axes for a two-frame /tf bag`);
+    else console.log('  ok  the 3-D view drew both frames of a bag with no geometry in it');
   }
 } finally {
   await browser.close();

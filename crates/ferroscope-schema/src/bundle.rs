@@ -653,6 +653,49 @@ impl Lanes {
                         .push([t, p]);
                 }
             }
+            // ROS 2's transform tree. `tf2_msgs/TFMessage` carries a LIST of stamped
+            // transforms, each naming the frame it moves in a string -- which is why the decoder
+            // returns a tree rather than a flat row of numbers. Landing them in `frames` is what
+            // lets geometry declared against those frames follow a real robot's motion, and it is
+            // the one ROS 2 message whose meaning this crate can act on rather than plot.
+            "tf2_msgs/msg/TFMessage" | "tf2_msgs/TFMessage" => {
+                let Some(list) = val.get("transforms").and_then(|x| x.as_array()) else {
+                    return;
+                };
+                for tf in list {
+                    let child = tf
+                        .get("child_frame_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    let Some(tr) = tf.get("transform") else {
+                        continue;
+                    };
+                    let g = |k: &str, c: &str, d: f64| {
+                        tr.get(k)
+                            .and_then(|v| v.get(c))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(d)
+                    };
+                    let row = [
+                        t,
+                        g("translation", "x", 0.0),
+                        g("translation", "y", 0.0),
+                        g("translation", "z", 0.0),
+                        g("rotation", "x", 0.0),
+                        g("rotation", "y", 0.0),
+                        g("rotation", "z", 0.0),
+                        g("rotation", "w", 1.0),
+                    ];
+                    if child.is_empty() {
+                        continue;
+                    }
+                    frames.entry(child.to_string()).or_default().push(row);
+                    poses
+                        .entry(format!("{ch_topic}:{child}"))
+                        .or_default()
+                        .push(row);
+                }
+            }
             // A schema this build has no special knowledge of -- `sensor_msgs/msg/JointState`,
             // or anyone's own JSON. Its numbers become one lane each, named by the path that
             // reaches them, because a recording whose schema we do not recognise is still a

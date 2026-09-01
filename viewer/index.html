@@ -354,7 +354,7 @@ el('ver').textContent = 'v' + version();
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 let renderer=null, scene=null, camera=null, controls=null, backend='—', envFailed=false;
-const G = { parts:new Map(), ghosts:[], path:null, contacts:null, grid:null };
+const G = { parts:new Map(), frames:new Map(), ghosts:[], path:null, contacts:null, grid:null };
 const GHOST_LAYERS = 3;
 const GLTF = new GLTFLoader();
 // Meshes are cached by attachment name: a recording that reuses one mesh across ten links
@@ -544,6 +544,30 @@ function syncScene(){
   if(!renderer || !S.bundle) return;
   const tmp = new THREE.Object3D();
 
+  /* A recording can carry a transform tree and NO geometry — every `ros2 bag` with a /tf topic
+     does, because ROS 2 publishes where things are and leaves what they look like to a separate
+     description. Draw each frame as an axis triad so the motion is visible at all; a bag that
+     also carries geometry gets both, and the geometry is placed against these same frames. */
+  for(const name of Object.keys(S.bundle.frames||{})){
+    let rec = G.frames.get(name);
+    if(!rec){
+      const axes = new THREE.AxesHelper(0.25);
+      axes.name = 'frame:'+name;
+      scene.add(axes);
+      rec = {obj: axes};
+      G.frames.set(name, rec);
+      // What the 3-D view actually got, where a check can see it — the same reason the mesh
+      // counter above exists. "The page did not complain" is not evidence that anything drew.
+      document.body.dataset.frames = String(G.frames.size);
+    }
+    const hidden = S.hidden.has('frame:'+name);
+    rec.obj.visible = !hidden;
+    if(hidden) continue;
+    const fr = frameAt(name, S.t);
+    rec.obj.position.set(fr.t[0], fr.t[1], fr.t[2]);
+    rec.obj.quaternion.set(fr.q[0], fr.q[1], fr.q[2], fr.q[3]);
+  }
+
   for(const g of S.bundle.geometry||[]){
     const key = g.frame+'/'+g.id;
     const layer = layerOf(g.id);
@@ -721,6 +745,14 @@ function fitView(){
       _q.set(fr.q[0],fr.q[1],fr.q[2],fr.q[3]);
       _v.set(r[1],r[2],r[3]).applyQuaternion(_q);
       box.expandByPoint(new THREE.Vector3(fr.t[0]+_v.x, fr.t[1]+_v.y, fr.t[2]+_v.z));
+      any = true;
+    }
+  }
+  /* Frames count as scene content. Without this a recording of nothing but a transform tree
+     opens with the camera framing an empty box, which reads as "it did not load". */
+  for(const rows of Object.values(S.bundle?.frames||{})){
+    for(const r of rows){
+      box.expandByPoint(new THREE.Vector3(r[1], r[2], r[3]));
       any = true;
     }
   }

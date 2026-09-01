@@ -1118,6 +1118,7 @@ jobs:
           cargo run --release --example make_compressed_fixtures -p ferroscope-mcap -- fixtures
           python3 -m pip install --quiet mcap-ros2-support
           python3 ci/make-ros2-fixture.py fixtures/ros2.mcap
+          python3 ci/make-ros2-fixture.py --tf fixtures/ros2-tf.mcap
           CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser)"
           test -n "$CHROME" || { echo "no chrome on this runner"; exit 1; }
           PUPPETEER="$PWD/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" \

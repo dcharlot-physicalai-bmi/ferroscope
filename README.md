@@ -1397,6 +1397,31 @@ An unrecognised schema is no longer dropped, either — anyone's JSON gets the s
 lane per numeric field, capped at 64 so a point cloud cannot turn one message into hundreds of
 series.
 
+### The robot moves, with nothing to draw
+
+ROS 2 publishes **where** things are on `/tf` and leaves what they look like to a separate robot
+description. So a real bag routinely carries a full transform tree and no geometry at all — and a
+viewer that only draws geometry shows you an empty box.
+
+`tf2_msgs/TFMessage` is the one ROS 2 message Ferroscope acts on rather than plots. Each stamped
+transform lands in the bundle's frames, keyed by the child frame it moves:
+
+```
+$ ferroscope export ros2-tf.mcap bundle.json
+$ jq -r '.frames | keys[]' bundle.json
+base_link
+lidar
+```
+
+Geometry declared against those frames follows them, so a URDF recorded alongside a bag animates
+from the bag's own transforms. And a bag with no geometry still draws: the 3-D view puts an axis
+triad on every frame, which is checked in a real browser rather than asserted — two frames in, two
+triads on screen.
+
+That is also why the decoder returns a tree instead of a row of numbers. A transform says which
+frame moved in a `child_frame_id` **string**, and the first version of this decoder threw strings
+away. A transform without its frame is a row of numbers with nowhere to go.
+
 ### When the recorder was killed
 
 A robot log is very often incomplete. The recorder was killed, the disk filled, the battery went —
