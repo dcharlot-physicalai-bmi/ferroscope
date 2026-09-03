@@ -49,7 +49,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # from a ROS 2 pair and (with the receipt fix above) called it bit-exact. Every reader that
 # parses a payload now goes through `payload_value`, and the slice-side ones share `ros2_defs`.
 # `trace_from` also abandoned a whole trace on one unparseable message; it now skips it.
-version = "0.1.26"
+# 0.1.27 acts on `tf2_msgs/TFMessage` rather than plotting it: each stamped transform lands in
+# the bundle's frames, keyed by the child frame it moves, so a `ros2 bag` carrying only a
+# transform tree places geometry and draws.
+version = "0.1.27"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

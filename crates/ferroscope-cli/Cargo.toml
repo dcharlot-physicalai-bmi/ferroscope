@@ -50,7 +50,8 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # 0.1.31: `diff` uses all three documented exit codes. A pair with no receipt whose values agree
 # now exits 2 (could not answer) rather than 1, which it shared with a real divergence -- so a
 # script could not tell a clean comparison from a failure. A divergence still exits 1.
-version = "0.1.31"
+# 0.1.32: a `/tf` recording exports frames, so a real robot log places and draws.
+version = "0.1.32"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

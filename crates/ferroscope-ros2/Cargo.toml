@@ -4,7 +4,12 @@ description = "Read ROS 2 message definitions and decode CDR payloads, with no d
 # 0.1.0: ros2msg / ros2idl definition parsing and CDR decoding, enough to pull the numeric
 # fields out of a real `ros2 bag` MCAP. MCAP carries the full message definition inline, so a
 # recording is self-describing and none of this needs ROS on the machine.
-version = "0.1.0"
+# 0.1.1 adds `Value` and `decode`: a decoded message as a TREE, keeping its structure and its
+# strings. The numeric views are now walks over that tree rather than a second decoder, so
+# `decode_numbers` and `decode_labeled` answer exactly as before. `tf2_msgs/TFMessage` is why:
+# it says which frame moved in a `child_frame_id` string, and a flat row of numbers has thrown
+# that away.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
