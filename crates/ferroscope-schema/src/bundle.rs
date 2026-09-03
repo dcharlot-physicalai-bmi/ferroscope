@@ -694,6 +694,16 @@ impl Lanes {
                         .entry(format!("{ch_topic}:{child}"))
                         .or_default()
                         .push(row);
+                    // The frames place the scene; these make the trajectory PLOTTABLE. Without
+                    // them a `/tf` recording opens with an empty plot panel, because this arm
+                    // returns before the generic "numbers become lanes" fallback below -- and
+                    // where a robot went over time is the first thing anyone asks of a bag.
+                    for (i, axis) in ["x", "y", "z"].iter().enumerate() {
+                        scalars
+                            .entry(format!("{ch_topic}:{child}.{axis}"))
+                            .or_default()
+                            .push([t, row[1 + i]]);
+                    }
                 }
             }
             // A schema this build has no special knowledge of -- `sensor_msgs/msg/JointState`,

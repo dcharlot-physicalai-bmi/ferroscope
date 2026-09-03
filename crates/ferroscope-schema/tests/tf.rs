@@ -139,6 +139,17 @@ fn a_transform_tree_becomes_frames_the_viewer_can_place() {
     assert!(b.contains("\"lidar\""), "no lidar frame");
     // And the pose readout, per topic and child.
     assert!(b.contains("/tf:base_link"), "no per-topic pose lane");
+    // The frames place the scene; these make the trajectory plottable. A `/tf` bag opened with
+    // an empty plot panel until this existed, because the TF arm returns before the generic
+    // "numbers become lanes" fallback -- and where the robot went is the first question asked.
+    for lane in [
+        "/tf:base_link.x",
+        "/tf:base_link.y",
+        "/tf:base_link.z",
+        "/tf:lidar.z",
+    ] {
+        assert!(b.contains(lane), "no trajectory lane {lane}");
+    }
 }
 
 #[test]

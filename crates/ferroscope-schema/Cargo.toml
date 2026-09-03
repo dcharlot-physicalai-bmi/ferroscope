@@ -52,7 +52,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.27 acts on `tf2_msgs/TFMessage` rather than plotting it: each stamped transform lands in
 # the bundle's frames, keyed by the child frame it moves, so a `ros2 bag` carrying only a
 # transform tree places geometry and draws.
-version = "0.1.27"
+# 0.1.28: a `/tf` recording is PLOTTABLE as well as placeable. The TF arm returns before the
+# generic "numbers become lanes" fallback, so a transform tree opened with an empty plot panel --
+# and where the robot went over time is the first question anyone asks of a bag.
+version = "0.1.28"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
