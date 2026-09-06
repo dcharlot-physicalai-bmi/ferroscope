@@ -173,3 +173,82 @@ fn both_trace_readers_agree_on_ros2() {
     );
     assert_eq!(slice.samples, streamed.samples);
 }
+
+/// A `sensor_msgs/JointState` names its joints beside its numbers, so nothing should be plotted
+/// or reported as an array slot.
+#[test]
+fn joint_states_are_named_after_their_joints() {
+    // Two joints, so a slot index and a name are never the same string.
+    const DEF: &str = "\
+string[] name
+float64[] position
+float64[] velocity
+float64[] effort
+";
+    let mut w = Writer::new(Vec::new(), WriterOptions::new("ros2", "joint-test"));
+    let s = w
+        .add_schema("sensor_msgs/msg/JointState", "ros2msg", DEF.as_bytes())
+        .unwrap();
+    let c = w.add_channel("/joint_states", s, "cdr", &[]).unwrap();
+    for i in 0..40u32 {
+        let mut p: Vec<u8> = vec![0x00, 0x01, 0x00, 0x00];
+        let align = |p: &mut Vec<u8>, n: usize| {
+            while !(p.len() - 4).is_multiple_of(n) {
+                p.push(0)
+            }
+        };
+        let u32v = |p: &mut Vec<u8>, v: u32| {
+            align(p, 4);
+            p.extend_from_slice(&v.to_le_bytes())
+        };
+        let strv = |p: &mut Vec<u8>, t: &str| {
+            align(p, 4);
+            p.extend_from_slice(&(t.len() as u32 + 1).to_le_bytes());
+            p.extend_from_slice(t.as_bytes());
+            p.push(0);
+        };
+        let f64v = |p: &mut Vec<u8>, v: f64| {
+            align(p, 8);
+            p.extend_from_slice(&v.to_le_bytes())
+        };
+        u32v(&mut p, 2);
+        strv(&mut p, "shoulder");
+        strv(&mut p, "elbow");
+        u32v(&mut p, 2);
+        f64v(&mut p, f64::from(i) * 0.1);
+        f64v(&mut p, f64::from(i) * -0.2);
+        u32v(&mut p, 0); // velocity: empty
+        u32v(&mut p, 0); // effort: empty
+        let t = u64::from(i) * 1_000_000;
+        w.write_message(c, i, t, t, &p).unwrap();
+    }
+    let bytes = w.finish().unwrap();
+
+    let b = ferroscope_schema::bundle(&bytes).expect("bundle");
+    assert!(
+        b.contains("/joint_states:shoulder"),
+        "no lane named for the shoulder joint"
+    );
+    assert!(
+        b.contains("/joint_states:elbow"),
+        "no lane named for the elbow joint"
+    );
+    assert!(
+        !b.contains("/joint_states:position[0]"),
+        "a joint was still plotted as an array slot"
+    );
+
+    // And the comparator's component names, which is where `[4]` used to be printed.
+    let labels = ferroscope_schema::channel_labels(&bytes);
+    let l = labels.get("/joint_states").expect("labels for the topic");
+    assert!(
+        l.contains(&"position[shoulder]".to_string()),
+        "components are not named by joint: {l:?}"
+    );
+    // The twins must agree about that too.
+    let streamed = ferroscope_schema::channel_labels_streaming(std::io::Cursor::new(&bytes));
+    assert_eq!(
+        labels, streamed,
+        "the label readers disagree about joint names"
+    );
+}

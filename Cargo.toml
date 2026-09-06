@@ -35,7 +35,7 @@ categories = ["science::robotics", "visualization", "wasm"]
 # The binaries read real-world recordings, so they take the codecs; a library user
 # depending on ferroscope-mcap directly still gets the zero-dependency default.
 ferroscope-mcap = { version = "0.1.9", path = "crates/ferroscope-mcap", features = ["compression"] }
-ferroscope-schema = { version = "0.1.28", path = "crates/ferroscope-schema" }
+ferroscope-schema = { version = "0.1.29", path = "crates/ferroscope-schema" }
 ferroscope-ledger = { version = "0.1.1", path = "crates/ferroscope-ledger" }
 ferroscope-receipt = { version = "0.1.10", path = "crates/ferroscope-receipt" }
 ferroscope-run = { version = "0.1.5", path = "crates/ferroscope-run" }

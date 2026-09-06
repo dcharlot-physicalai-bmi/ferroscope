@@ -1382,8 +1382,14 @@ $ jq -r '.scalars | keys[]' bundle.json
 ...
 ```
 
-Eleven lanes out of `sensor_msgs/JointState`, each named by the path that reaches it, because the
-field names are right there in the file and `channel[4]` tells a reader nothing.
+Lanes out of `sensor_msgs/JointState` named after the **joints** — `shoulder`, `elbow`, `wrist` —
+because the message carries the joint names beside the numbers. Those are the same lane names a
+native Ferroscope recording of the same robot produces, so the two can be read side by side. Any
+other message gets one lane per numeric field, named by the path that reaches it, because the field
+names are right there in the file and `channel[4]` tells a reader nothing.
+
+The comparator uses the same names. A divergence in a `ros2 bag` is reported as
+`position[shoulder]`, not `position[2]`: which joint moved, not which array slot.
 
 **The detail that decides whether this produces numbers or garbage:** CDR aligns each primitive to
 its own width, measured from the end of the four-byte encapsulation header — not from the start of

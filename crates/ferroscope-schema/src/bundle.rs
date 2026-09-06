@@ -653,6 +653,38 @@ impl Lanes {
                         .push([t, p]);
                 }
             }
+            // ROS 2's joint states. The message carries the joint NAMES beside the numbers, so
+            // there is no reason to plot `position[0]`: a lane called `shoulder` is the same lane
+            // a native Ferroscope recording of the same robot would produce, which is what lets
+            // the two be read side by side. Velocity and effort take an explicit suffix because,
+            // unlike position, they have no unnamed convention to match.
+            "sensor_msgs/msg/JointState" | "sensor_msgs/JointState" => {
+                let names: Vec<String> = val
+                    .get("name")
+                    .and_then(|x| x.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .map(|e| e.as_str().unwrap_or("?").to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let named =
+                    |i: usize| -> String { names.get(i).cloned().unwrap_or_else(|| i.to_string()) };
+                for (i, p) in arr("position").into_iter().enumerate() {
+                    scalars
+                        .entry(format!("{ch_topic}:{}", named(i)))
+                        .or_default()
+                        .push([t, p]);
+                }
+                for (field, vals) in [("velocity", arr("velocity")), ("effort", arr("effort"))] {
+                    for (i, x) in vals.into_iter().enumerate() {
+                        scalars
+                            .entry(format!("{ch_topic}:{}.{field}", named(i)))
+                            .or_default()
+                            .push([t, x]);
+                    }
+                }
+            }
             // ROS 2's transform tree. `tf2_msgs/TFMessage` carries a LIST of stamped
             // transforms, each naming the frame it moves in a string -- which is why the decoder
             // returns a tree rather than a flat row of numbers. Landing them in `frames` is what

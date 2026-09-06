@@ -1111,6 +1111,54 @@ pub(crate) fn payload_value(
     crate::json::parse(std::str::from_utf8(data).ok()?)
 }
 
+/// Component labels for one ROS 2 message, with joint names substituted where the message
+/// carries them.
+///
+/// `decode_labeled` answers `position[0]`, which is the honest generic answer. But
+/// `sensor_msgs/JointState` puts the joint NAMES beside the numbers, so a comparator that reports
+/// `position[shoulder]` is telling the reader which joint moved instead of which array slot --
+/// exactly what `component_labels` already does for the native schema.
+///
+/// One definition, used by BOTH label readers. They are twins, and twins that each grow their own
+/// version of this is how the other pairs came to disagree.
+pub(crate) fn ros2_labels(
+    def: &ferroscope_ros2::MessageDef,
+    payload: &[u8],
+) -> Option<Vec<String>> {
+    let v = def.decode(payload).ok()?;
+    let mut pairs = Vec::new();
+    v.labeled("", &mut pairs);
+    let joints: Vec<String> = v
+        .get("name")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|e| e.as_str().unwrap_or("?").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(
+        pairs
+            .into_iter()
+            .map(|(name, _)| {
+                if joints.is_empty() {
+                    return name;
+                }
+                for field in ["position", "velocity", "effort"] {
+                    if let Some(rest) = name.strip_prefix(field)
+                        && let Some(idx) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']'))
+                        && let Ok(i) = idx.parse::<usize>()
+                        && let Some(j) = joints.get(i)
+                    {
+                        return format!("{field}[{j}]");
+                    }
+                }
+                name
+            })
+            .collect(),
+    )
+}
+
 /// A decoded ROS 2 message as the value the rest of this crate already understands.
 ///
 /// Structure is kept rather than flattened. The numbers and their paths come out the same either
@@ -1235,7 +1283,7 @@ pub fn channel_labels_streaming<R: std::io::Read>(r: R) -> BTreeMap<String, Vec<
                 if cdr.get(&m.channel_id).copied().unwrap_or(false)
                     && let Some(def) = defs.get(schema_id)
                     && !ros2.contains_key(topic)
-                    && let Ok((_, labels)) = def.decode_labeled(m.data)
+                    && let Some(labels) = crate::ros2_labels(def, m.data)
                 {
                     ros2.insert(topic.clone(), labels);
                     return Ok(Flow::Continue);
@@ -1411,7 +1459,7 @@ pub fn channel_labels(bytes: &[u8]) -> BTreeMap<String, Vec<String>> {
         if ch.message_encoding == "cdr"
             && let Some(def) = defs.get(&ch.schema_id)
             && let Some(m) = log.messages_on(&ch.topic).next()
-            && let Ok((_, labels)) = def.decode_labeled(&m.data)
+            && let Some(labels) = crate::ros2_labels(def, &m.data)
         {
             out.insert(ch.topic.clone(), labels);
             continue;

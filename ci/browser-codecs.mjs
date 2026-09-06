@@ -122,10 +122,12 @@ try {
       } catch (e) { return { ok: false, err: String(e) }; }
     });
     if (!out.ok) fail(`the browser could not open a ROS 2 bag: ${out.err}`);
-    else if (out.scalars.length !== 11) {
-      fail(`expected 11 lanes from JointState in the browser, got ${out.scalars.length}: ${out.scalars}`);
-    } else if (!out.scalars.includes('/joint_states:position[1]')) {
-      fail(`lanes are not named from the definition: ${out.scalars}`);
+    // Nine, not eleven: the message carries the joint NAMES, so lanes are named after the joints
+    // rather than after array slots, and the header stamp stops becoming two lanes of its own.
+    else if (out.scalars.length !== 9) {
+      fail(`expected 9 named lanes from JointState in the browser, got ${out.scalars.length}: ${out.scalars}`);
+    } else if (!out.scalars.includes('/joint_states:elbow')) {
+      fail(`lanes are not named after the joints the message declares: ${out.scalars}`);
     } else {
       console.log(`  ok  a ROS 2 bag opened in the browser: ${out.messages} messages, ${out.scalars.length} named lanes`);
     }

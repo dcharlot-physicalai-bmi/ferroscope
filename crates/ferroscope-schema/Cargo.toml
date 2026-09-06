@@ -55,7 +55,10 @@ description = "The Ferroscope recording model: three-clock timestamps, entity pa
 # 0.1.28: a `/tf` recording is PLOTTABLE as well as placeable. The TF arm returns before the
 # generic "numbers become lanes" fallback, so a transform tree opened with an empty plot panel --
 # and where the robot went over time is the first question anyone asks of a bag.
-version = "0.1.28"
+# 0.1.29 names ROS 2 joint lanes and comparator components after the JOINTS the message declares
+# -- `shoulder`, and `position[shoulder]` -- rather than after array slots. The names were always
+# in the payload; they only became reachable when the decoder stopped discarding strings.
+version = "0.1.29"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

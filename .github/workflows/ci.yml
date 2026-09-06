@@ -1549,18 +1549,21 @@ jobs:
           import json, math, sys
           b = json.load(open("ros2-bundle.json"))
           sc = b.get("scalars", {})
-          if len(sc) != 11:
-              print(f"expected 11 lanes from JointState, got {len(sc)}: {sorted(sc)}"); sys.exit(1)
-          for want in ("/joint_states:position[1]", "/joint_states:header.stamp.sec",
-                       "/joint_states:effort[0]"):
+          # Nine, not eleven: the message carries the joint NAMES, so the lanes are named after
+          # the joints rather than after array slots -- and the header stamp stops becoming two
+          # lanes of its own, which was noise from the generic fallback.
+          if len(sc) != 9:
+              print(f"expected 9 named lanes from JointState, got {len(sc)}: {sorted(sc)}"); sys.exit(1)
+          for want in ("/joint_states:shoulder", "/joint_states:elbow",
+                       "/joint_states:wrist.effort", "/joint_states:shoulder.velocity"):
               if want not in sc:
                   print(f"missing lane {want}; got {sorted(sc)}"); sys.exit(1)
           # The VALUES must be the ones recorded, not merely present. The bundle rounds lanes to
           # six decimals on purpose, so compare at exactly that precision.
           bad = 0
-          for lane, f in [("position[0]", lambda i: math.sin(i*0.01)*1.2),
-                          ("position[1]", lambda i: math.cos(i*0.013)*0.8),
-                          ("effort[0]",   lambda i: 1.5)]:
+          for lane, f in [("shoulder", lambda i: math.sin(i*0.01)*1.2),
+                          ("elbow",    lambda i: math.cos(i*0.013)*0.8),
+                          ("shoulder.effort", lambda i: 1.5)]:
               pts = sc["/joint_states:" + lane]
               if len(pts) != 1500:
                   print(f"{lane}: {len(pts)} points, expected 1500"); sys.exit(1)
@@ -1588,8 +1591,9 @@ jobs:
           grep -q 'bit-exact' drift.txt && { echo "a diverging pair was called bit-exact"; cat drift.txt; exit 1; }
           grep -q 'step 900' drift.txt || { echo "the onset was not located at step 900:"; cat drift.txt; exit 1; }
           # Named from the definition the file carries, not by array index.
-          grep -q 'position\[0\]' drift.txt || { echo "the divergence was not named:"; cat drift.txt; exit 1; }
-          echo "  identical runs compare bit-exact; a 1e-9 drift is located at step 900 on position[0]"
+          # Named by the JOINT the message declares, not by an array slot.
+          grep -q 'position\[shoulder\]' drift.txt || { echo "the divergence was not named by joint:"; cat drift.txt; exit 1; }
+          echo "  identical runs compare bit-exact; a 1e-9 drift is located at step 900 on position[shoulder]"
       - name: a recording that stops mid-record is readable, and says that it did
         # A robot log is very often incomplete -- the recorder was killed, the disk filled --
         # and that file is frequently the most interesting one on the machine. Refusing all of
