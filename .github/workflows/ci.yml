@@ -1572,7 +1572,7 @@ jobs:
                       bad += 1
           if bad:
               print(f"{bad} decoded values do not match what was recorded"); sys.exit(1)
-          print("  11 named lanes, 4500 values decoded exactly from CDR")
+          print(f"  {len(sc)} lanes named after the joints, 4500 values decoded exactly from CDR")
           EOF
           # And the verdict. This is the one that was WRONG: the comparator could not decode CDR,
           # so it compared zero values across two recordings differing in 600 messages and said
