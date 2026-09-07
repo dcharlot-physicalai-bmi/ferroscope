@@ -551,7 +551,22 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<Answer, String>
     // When the specs differ these are not two runs of the same experiment, and saying which
     // field moved is the whole answer — the fields are already parsed.
     let mut specs_differ = false;
+    // Two specs that declare NOTHING have the same digest, so `spec_differences` finds no
+    // difference and the comparison proceeds as though these were two runs of one experiment.
+    // They are not: a matching digest of nothing is not evidence of a shared experiment. Measured
+    // before this existed -- two recordings sealed with a default `RunSpec`, differing only in
+    // content, were reported as "diverged ... sensitivity, so no tolerance makes this
+    // reproducible", which diagnoses a run that was never declared to be the same run.
+    let mut undeclared = false;
     if let (Some(a), Some(b)) = (&ra, &rb) {
+        // `scenario` is the identity field: a seed or a dt without one names no experiment.
+        if a.spec.scenario.is_empty() && b.spec.scenario.is_empty() {
+            undeclared = true;
+            println!("  neither recording names an experiment, so nothing here establishes that");
+            println!("  these are two runs of the SAME one. What follows is still a fact about");
+            println!("  the numbers; the reproduction question has no answer without one.");
+            println!();
+        }
         let diffs = ferroscope_receipt::spec_differences(&a.spec, &b.spec);
         if !diffs.is_empty() {
             specs_differ = true;
@@ -782,18 +797,27 @@ fn cmd_diff(a_path: &str, b_path: &str, rest: &[&str]) -> Result<Answer, String>
     // Three outcomes, because there are three. A divergence is an answer: the runs differ, and
     // that is true whether or not either file carries a receipt. Everything else that falls
     // short of yes is an absence of evidence, and saying "no" to that claims more than is known.
-    Ok(if p.verdict.reproduced() && trustworthy && !specs_differ {
-        Answer::Yes
-    } else if !p.verdict.reproduced() {
-        Answer::No
-    } else if specs_differ {
-        Answer::NoEvidence("the two runs did not declare the same experiment")
-    } else {
-        Answer::NoEvidence(
-            "neither recording stands behind its own receipt, so the values agreeing is not \
+    Ok(
+        if p.verdict.reproduced() && trustworthy && !specs_differ && !undeclared {
+            Answer::Yes
+        } else if undeclared {
+            // Neither agreement nor divergence answers "did this reproduce" when neither file says
+            // what run it is. The numbers are reported either way; the verdict is withheld.
+            Answer::NoEvidence(
+                "neither recording names an experiment, so there is no claim that these are two runs \
+             of the same one",
+            )
+        } else if !p.verdict.reproduced() {
+            Answer::No
+        } else if specs_differ {
+            Answer::NoEvidence("the two runs did not declare the same experiment")
+        } else {
+            Answer::NoEvidence(
+                "neither recording stands behind its own receipt, so the values agreeing is not \
              evidence that the run reproduced",
-        )
-    })
+            )
+        },
+    )
 }
 
 /// Report what the two runs cost, per rail, and refuse the comparison when either quote is not

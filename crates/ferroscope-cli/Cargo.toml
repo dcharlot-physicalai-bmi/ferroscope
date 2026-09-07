@@ -51,7 +51,11 @@ description = "The Ferroscope CLI: inspect, verify and compare robot recordings.
 # now exits 2 (could not answer) rather than 1, which it shared with a real divergence -- so a
 # script could not tell a clean comparison from a failure. A divergence still exits 1.
 # 0.1.32: a `/tf` recording exports frames, so a real robot log places and draws.
-version = "0.1.32"
+# 0.1.33: two recordings that DECLARE NOTHING are no longer compared as two runs of the same
+# experiment. Their spec digests match because both are empty, and a matching digest of nothing
+# is not evidence of a shared experiment -- so the reproduction question is withheld (exit 2)
+# while the value comparison is still reported.
+version = "0.1.33"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

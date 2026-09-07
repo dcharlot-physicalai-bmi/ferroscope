@@ -1504,6 +1504,18 @@ jobs:
           EOF
           check "no receipt, values agree"   2 $B diff n-a.mcap n-b.mcap
           check "no receipt, values differ"  1 $B diff n-a.mcap n-c.mcap
+          # Two recordings that DECLARE NOTHING have the same spec digest, so a comparator that
+          # only asks "do the digests match" treats them as two runs of one experiment. Measured
+          # before this check existed: two such files were reported as "diverged ... sensitivity,
+          # so no tolerance makes this reproducible" -- diagnosing a run never declared to be the
+          # same run. Neither agreement nor divergence answers the question, so both are 2.
+          cargo run --release --quiet --example undeclared_pair -p ferroscope-schema -- .
+          check "undeclared runs"            2 $B diff undeclared-a.mcap undeclared-b.mcap
+          $B diff undeclared-a.mcap undeclared-b.mcap > und.txt 2>&1 || true
+          grep -q 'names an experiment' und.txt \
+            || { echo "the undeclared pair was compared without saying so:"; cat und.txt; exit 1; }
+          grep -q 'diverged' und.txt \
+            || { echo "the value comparison should still be reported:"; cat und.txt; exit 1; }
           echo "0 yes / 1 no / 2 could-not-answer, as documented — and diff uses all three"
       - name: diff recomputes both receipts instead of trusting metadata
         # The hole this closes: diff used to compare two STORED digest strings read out of
